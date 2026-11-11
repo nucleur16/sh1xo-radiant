@@ -231,7 +231,7 @@ namespace codol::view
 					for (int index = r.begin; index < r.end; index++)
 					{
 						const world_surface& surface = surfaces[static_cast<std::size_t>(index)];
-						if (surface.brush_model || (surface.radius > 0.0f && !sphere_visible(planes, surface.center, surface.radius)))
+						if (surface.brush_model || surface.hidden || (surface.radius > 0.0f && !sphere_visible(planes, surface.center, surface.radius)))
 						{
 							continue;
 						}
@@ -246,12 +246,13 @@ namespace codol::view
 					}
 				}
 			}
-			for (const static_model_instance& instance : static_models)
+			const auto draw_caster = [&](const static_model_instance& instance)
 			{
-				if (!instance.draw || (instance.is_entity ? !frame->draw_entity_models : !frame->draw_static_models)
+				if (!instance.draw || instance.hidden
+					|| (instance.handle > 0 ? !frame->draw_placed_models : instance.is_entity ? !frame->draw_entity_models : !frame->draw_static_models)
 					|| !sphere_visible(planes, instance.center, instance.radius))
 				{
-					continue;
+					return;
 				}
 				// SpotShadow.cs:248-279 ( DrawCasterModel )
 				const model_lod_draw& lod = instance.draw->lods[0];
@@ -276,6 +277,18 @@ namespace codol::view
 					}
 					draw_model_surface({}, instance, lod, surface, *material, rt::BUILD_SHADOWMAP_COLOR, triangles, span);
 				}
+			};
+			for (const static_model_instance& instance : static_models)
+			{
+				draw_caster(instance);
+			}
+			for (const auto& placed : placed_models)
+			{
+				draw_caster(*placed.second);
+			}
+			if (frame->draw_meshes && !meshes.empty())
+			{
+				draw_mesh_shadow_casters(planes);
 			}
 		}
 		const int draws = frame_stat.draw_calls - before.draw_calls;

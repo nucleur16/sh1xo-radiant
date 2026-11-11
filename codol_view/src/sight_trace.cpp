@@ -463,6 +463,22 @@ namespace codol::view
 		return static_cast<int>(std::count_if(brush_contents_.begin(), brush_contents_.end(), [](const int c) { return c != 0; }));
 	}
 
+	std::size_t world_sight_trace::bytes() const
+	{
+		std::size_t total = (brush_mid_.capacity() + brush_half_.capacity() + vertices_.capacity()) * sizeof(float3)
+			+ (brush_contents_.capacity() + triangle_contents_.capacity() + large_brushes_.capacity() + large_triangles_.capacity() + brush_stamp_.capacity()
+				+ triangle_stamp_.capacity()) * sizeof(int)
+			+ brush_first_side_.capacity() * sizeof(std::uint32_t) + sides_.capacity() * sizeof(side_plane) + triangles_.capacity() * sizeof(std::uint16_t);
+		for (const cell_map* cells : { &brush_cells_, &triangle_cells_ })
+		{
+			for (const auto& cell : *cells)
+			{
+				total += 48 + cell.second.capacity() * sizeof(int);		// node + bucket share, roughly
+			}
+		}
+		return total;
+	}
+
 	// WorldSightTrace.cs:75 TriangleCount
 	int world_sight_trace::triangle_count() const
 	{

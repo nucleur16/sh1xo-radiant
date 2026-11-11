@@ -36,6 +36,7 @@ namespace codol::view
 		int blocked_traces() const { return blocked_traces_; }	// WorldSightTrace.cs:79
 		int brush_count() const;								// WorldSightTrace.cs:73: brushes that can block
 		int triangle_count() const;								// WorldSightTrace.cs:75: triangles that can block
+		std::size_t bytes() const;								// system memory held ( estimate; not in the C# )
 
 	private:
 		struct side_plane

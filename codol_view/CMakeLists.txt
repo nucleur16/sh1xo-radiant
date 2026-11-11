@@ -65,6 +65,11 @@ add_library(codol_view STATIC
 	src/renderer_load.cpp
 	src/renderer_draw.cpp
 	src/renderer_shadow.cpp
+	src/pick_bvh.hpp
+	src/pick_bvh.cpp
+	src/renderer_edit.cpp
+	src/renderer_pick.cpp
+	src/renderer_mesh.cpp
 	src/map_renderer.cpp
 )
 target_include_directories(codol_view PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

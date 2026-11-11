@@ -97,6 +97,9 @@ namespace codol::view
 		// LightGrid.cs:354-382 InfluencesPoint
 		static bool influences_point(const map_light& light, float3 point);
 
+		// system memory of the grid ( not in the C#: the renderer reports what it keeps for the editor )
+		std::size_t bytes() const { return row_data_start_.capacity() * 2 + rows_.capacity() + entries_.capacity() + colors_.capacity(); }
+
 	private:
 		light_grid() = default;
 
@@ -141,6 +144,13 @@ namespace codol::view
 
 		// block: 64 texels as light_grid::write_block writes them. A handle outside the volume is ignored.
 		void set_block(int handle, std::span<const std::uint32_t> block);
+
+		// ---- not in the C#: the editor places models after the volume was made --------------------------
+		int capacity() const { return 64 * (height_ / 4); }			// handles the volume has room for
+		// makes room for `handles` handles; the blocks stay. True when the height changed ( new texture, new scales ).
+		bool grow(int handles);
+		// the 64 texels of a handle, in the order of set_block; zeros for a handle outside the volume
+		void get_block(int handle, std::span<std::uint32_t, 64> block) const;
 
 	private:
 		int height_ = 4;

@@ -726,4 +726,46 @@ namespace codol::view
 			}
 		}
 	}
+
+	bool model_lighting_volume::grow(const int handles)
+	{
+		if (handles <= capacity())
+		{
+			return false;
+		}
+		const model_lighting_volume larger(handles);
+		std::vector<std::uint32_t> texels = larger.texels_;
+		for (int z = 0; z < DEPTH; z++)
+		{
+			for (int y = 0; y < height_; y++)
+			{
+				std::copy_n(texels_.begin() + static_cast<std::ptrdiff_t>((z * height_ + y) * WIDTH), WIDTH,
+					texels.begin() + static_cast<std::ptrdiff_t>((z * larger.height_ + y) * WIDTH));
+			}
+		}
+		height_ = larger.height_;
+		texels_ = std::move(texels);
+		return true;
+	}
+
+	void model_lighting_volume::get_block(const int handle, const std::span<std::uint32_t, 64> block) const
+	{
+		const int slot = handle - 1;
+		std::fill(block.begin(), block.end(), 0u);
+		if (slot < 0 || 4 * (slot >> 6) + 4 > height_)
+		{
+			return;
+		}
+		const int x0 = 4 * (slot & 63), y0 = 4 * (slot >> 6);
+		for (int z = 0; z < 4; z++)
+		{
+			for (int y = 0; y < 4; y++)
+			{
+				for (int x = 0; x < 4; x++)
+				{
+					block[static_cast<std::size_t>(x + 4 * y + 16 * z)] = texels_[static_cast<std::size_t>((z * height_ + y0 + y) * WIDTH + x0 + x)];
+				}
+			}
+		}
+	}
 }

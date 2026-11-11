@@ -9,6 +9,7 @@
 #include "light_grid.hpp"
 #include "map_types.hpp"
 #include "model_surfaces.hpp"
+#include "pick_bvh.hpp"
 #include "sight_trace.hpp"
 #include "world_visibility.hpp"
 #include "zone_library.hpp"
@@ -25,6 +26,7 @@
 
 #include <array>
 #include <map>
+#include <optional>
 #include <set>
 
 namespace codol::view
@@ -86,6 +88,8 @@ namespace codol::view
 		std::uint64_t slot_mask = 0;
 		std::vector<gpu_texture*> textures;			// per material texture def; nullptr: not loaded / failed
 		std::vector<std::uint8_t> texture_resolved;
+		int cull = -1;								// picking: -1 not looked up yet, else the cull bits ( 0 / 1 none, 2 back, 3 front )
+		bool sky = false;							// picking: a sky box material ( valid once cull is )
 
 		const render::material& asset() const { return material->asset; }
 		const render::render_technique_set& set() const { return techset->set; }
@@ -112,6 +116,7 @@ namespace codol::view
 		bool emissive = false;
 		int absolute_index = 0;
 		bool brush_model = false;		// not part of the static world: drawn through a brush model instance
+		bool hidden = false;			// map_renderer::set_hidden
 	};
 
 	// GameMapRenderer.cs:220-231 ( ModelSurfaceDraw )
@@ -142,6 +147,7 @@ namespace codol::view
 		float3 min;
 		float3 max;
 		std::vector<std::string> bone_names;
+		std::unique_ptr<pick_mesh> pick;		// LOD 0 in model space ( options::keep_pick_geometry )
 
 		const std::vector<model_surface_draw>& surfaces() const { return lods[0].surfaces; }
 	};
@@ -167,6 +173,9 @@ namespace codol::view
 		std::vector<std::uint8_t> hidden_surfaces;		// empty: none hidden
 		float scale = 1.0f;
 		bool drawn = false;
+		bool hidden = false;			// map_renderer::set_hidden
+		bool moved = false;				// has a transform override: no cell culling
+		int handle = 0;					// > 0: placed with map_renderer::add_model
 	};
 
 	// a "*N" sub model placed by an entity ( not drawn by the C# renderer )
@@ -182,6 +191,68 @@ namespace codol::view
 		int surface_count = 0;
 		bool special_ops = false;		// "script_specialops" "1"
 		bool drawn = false;
+		bool hidden = false;
+		bool moved = false;
+		float scale = 1.0f;
+		float3 local_min, local_max;	// GfxBrushModel::bounds, the model's own space
+	};
+
+	// what reset_transform puts back
+	struct instance_backup
+	{
+		mat4 placement;
+		float3 center, half;
+		float radius = 0;
+		float scale = 1.0f;
+		float3 lighting_origin;
+		int reflection_probe = 0;
+		int primary_light = 0;
+		std::uint32_t ground_lighting = 0;
+		std::array<std::uint32_t, 64> block{};		// the model's texels of the lighting volume
+	};
+
+	// map_renderer::create_mesh
+	struct dynamic_mesh
+	{
+		int handle = 0;
+		std::vector<mesh_vertex> vertices;			// the host's data ( triangles re-wound by their normals )
+		std::vector<std::uint32_t> indices;
+		std::string material_name;
+		std::uint32_t fallback_color = 0xFFB0B0B0;
+		bool two_sided = false;
+		bool hidden = false;
+		bool drawn = false;
+		mesh_shading shading = mesh_shading::flat_color;
+		material_draw* material = nullptr;			// game_material
+		gpu_texture* color_map = nullptr;			// color_map
+		int format = 0;								// vertex format of the game material path
+		com_ptr<IDirect3DVertexBuffer9> vertex_buffer, layer_buffer;
+		com_ptr<IDirect3DIndexBuffer9> index_buffer;
+		int vertex_capacity = 0, index_capacity = 0, layer_capacity = 0;
+		int vertex_stride = 0;
+		float3 center, half;
+		float radius = 0;
+		// lighting of where the mesh is
+		int primary_light = 0;
+		int reflection_probe = 0;
+		int lighting_handle = 0;
+		std::uint32_t ground_lighting = 0;
+		gpu_texture ambient;						// 1 x 1: stands in for the secondary lightmap
+		std::uint32_t ambient_argb = 0;
+		pick_mesh pick;
+	};
+
+	// the edits of a map, to put them back after the map was loaded again ( default pool device reset )
+	struct edit_snapshot
+	{
+		std::vector<object_ref> hidden;
+		std::vector<std::pair<object_ref, transform>> moved;
+		struct placed { int handle; std::string name; transform placement; };
+		std::vector<placed> models;
+		struct mesh { int handle; std::vector<mesh_vertex> vertices; std::vector<std::uint32_t> indices; std::string material; std::uint32_t color; bool two_sided; };
+		std::vector<mesh> meshes;
+		int next_handle = 0;
+		bool valid = false;
 	};
 
 	struct lightmap_pair
@@ -243,6 +314,7 @@ namespace codol::view
 		IDirect3DVertexBuffer9* layer_buffer = nullptr;
 		int layer_offset = 0;
 		int layer_stride = 0;
+		bool two_sided = false;			// a dynamic mesh that is drawn without culling
 	};
 
 	// GameMapRenderer.cs:1168 ( ModelSurfaceInstance )
@@ -260,6 +332,12 @@ namespace codol::view
 		brush_model_instance* instance = nullptr;
 		world_surface* surface = nullptr;
 		material_draw* material = nullptr;
+		int technique = 0;
+	};
+
+	struct mesh_draw_instance
+	{
+		dynamic_mesh* mesh = nullptr;
 		int technique = 0;
 	};
 
@@ -329,6 +407,41 @@ namespace codol::view
 		gpu_texture model_lighting;
 		std::unique_ptr<world_visibility> visibility;
 
+		// ---- per map: what the editor functions need after load_map ------------------------------------
+		std::shared_ptr<const zone::Zone> held_map_zone;		// only while load_map runs
+		std::shared_ptr<const zone::Zone> held_zone;			// the last other zone read ( released when idle )
+		int zone_idle_frames = 0;
+		std::map<const library_material*, material_draw*> material_by_asset;
+		std::map<const material_draw*, bool> lighting_by_material;
+		name_map<model_draw*> resolved_models;					// by name: nullptr = not found
+		int static_count = 0;									// static_models[ 0 .. static_count ) are the GfxStaticModelDrawInsts
+		std::map<int, int> entity_models;						// entity index -> index into static_models
+		std::map<int, int> entity_brushes;						// entity index -> index into brush_models
+		std::map<int, instance_backup> model_backups;			// index into static_models -> the map's placement
+		std::map<int, instance_backup> brush_backups;			// index into brush_models
+		std::map<int, std::unique_ptr<static_model_instance>> placed_models;		// by handle
+		std::map<int, std::unique_ptr<dynamic_mesh>> meshes;	// by handle
+		int next_handle = 0;
+		int hidden_count = 0;
+		std::optional<light_grid> grid;							// options::keep_light_grid
+		std::unique_ptr<world_sight_trace> trace;
+		std::uint64_t light_grid_bytes = 0;
+		int lighting_handles = 0;								// handles of the lighting volume in use
+		std::vector<int> free_lighting_handles;
+		com_ptr<IDirect3DVolumeTexture9> lighting_fill;			// managed / system memory copy that is locked
+		int lighting_texture_height = 0;
+		std::vector<float3> world_positions;					// options::keep_pick_geometry: every GfxWorldVertex
+		pick_mesh world_pick;									// the static world ( surface = surface index )
+		std::map<int, std::unique_ptr<pick_mesh>> brush_pick;	// by index into brush_models, model space
+		std::uint64_t pick_bytes = 0;
+		std::int64_t pick_triangles = 0;
+		double pick_build_ms = 0;
+		std::vector<std::string> model_name_list, material_name_list;
+		bool model_names_built = false, material_names_built = false;
+		name_map<std::pair<int, int>> image_sizes;
+		name_map<com_ptr<IDirect3DTexture9>> thumbnails;		// null: failed
+		edit_snapshot pending_edits;							// between on_device_lost and on_device_reset
+
 		// ---- per map: device state that depends on the default pool ------------------------------------
 		com_ptr<IDirect3DTexture9> target_texture;
 		com_ptr<IDirect3DSurface9> target_surface, depth_surface;
@@ -352,6 +465,8 @@ namespace codol::view
 		std::vector<std::uint8_t> surface_visible;
 		std::vector<model_surface_instance> opaque_models, transparent_models;
 		std::vector<brush_surface_instance> opaque_brushes, transparent_brushes;
+		std::vector<mesh_draw_instance> opaque_meshes, transparent_meshes;
+		std::vector<dynamic_mesh*> fixed_meshes;				// drawn through the fixed function pipeline
 		const map_light* sun = nullptr;
 		bool sun_shadows_active = false;
 		std::unique_ptr<sun_shadow> current_sun_shadow;
@@ -399,6 +514,70 @@ namespace codol::view
 		int choose_technique(const material_draw& material, int primary_light_index, bool emissive) const;
 		static bool blends(const material_draw& material, int technique_type);
 		const map_light* primary_light(int index) const;
+		std::shared_ptr<const zone::Zone> acquire_zone(const std::string& zone_name);
+		material_draw* make_material(const std::shared_ptr<const library_material>& asset, const zone::Zone* defining_zone);
+		bool reads_model_lighting(const material_draw& material);
+		model_draw* build_model(const zone::Zone& from, zaddr header, const std::string& model_name);
+		model_draw* resolve_model(const std::string& model_name);
+		int nearest_probe(const float3& point) const;
+		bool upload_model_lighting();
+		void build_world_pick(std::span<const std::uint8_t> vertex_bytes, std::span<const std::uint8_t> index_bytes);
+
+		// ---- renderer_edit.cpp -----------------------------------------------------------------------------
+		static mat4 placement_of(const transform& t);
+		static transform transform_of(const mat4& placement, float scale);
+		static void placed_box(const float3& min, const float3& max, const mat4& placement, float3& center, float3& half);
+		static float3 to_local(const float3& v, const mat4& placement, bool point);
+		static_model_instance* find_model(const object_ref& ref);
+		const static_model_instance* find_model(const object_ref& ref) const { return const_cast<impl*>(this)->find_model(ref); }
+		brush_model_instance* find_brush(const object_ref& ref);
+		const brush_model_instance* find_brush(const object_ref& ref) const { return const_cast<impl*>(this)->find_brush(ref); }
+		dynamic_mesh* find_mesh(int handle);
+		const dynamic_mesh* find_mesh(const int handle) const { return const_cast<impl*>(this)->find_mesh(handle); }
+		bool* hidden_flag(const object_ref& ref);
+		bool set_hidden(const object_ref& ref, bool hidden);
+		void place_model(static_model_instance& instance, const mat4& placement, float scale);
+		void light_instance(static_model_instance& instance, int model_light);
+		int allocate_lighting_handle();
+		void release_lighting_handle(int handle);
+		void set_lighting_block(int handle, std::span<const std::uint32_t> block);
+		std::uint32_t sample_ground_lighting(const float3& point, int model_light, int* primary_light, std::array<std::uint32_t, 64>* block);
+		bool set_transform(const object_ref& ref, const transform& placement);
+		bool get_transform(const object_ref& ref, transform& out) const;
+		bool reset_transform(const object_ref& ref);
+		int add_model(const std::string& name, const transform& placement, int handle, std::string* error);
+		bool remove_model(int handle);
+		void fill_object(const world_surface& s, scene_object& o) const;
+		void fill_object(const static_model_instance& m, scene_object& o) const;
+		void fill_object(const brush_model_instance& b, scene_object& o) const;
+		void fill_object(const dynamic_mesh& m, scene_object& o) const;
+		bool object(const object_ref& ref, scene_object& out) const;
+		void build_name_lists();
+		bool material_details(const std::string& name, material_info& out);
+		IDirect3DTexture9* material_thumbnail(const std::string& name, int max_size);
+		edit_snapshot capture_edits() const;
+		void apply_edits(const edit_snapshot& edits);
+		void copy_edit_stats(statistics& to) const;
+		void release_idle_zone();
+
+		// ---- renderer_pick.cpp -----------------------------------------------------------------------------
+		int cull_of(material_draw* material) const;
+		bool pick_ray(const float3& origin, const float3& direction, pick_result& out, const pick_options& options) const;
+		bool object_box(const object_ref& ref, oriented_box& out) const;
+		bool object_triangles(const object_ref& ref, std::vector<float3>& out) const;
+
+		// ---- renderer_mesh.cpp -----------------------------------------------------------------------------
+		int create_mesh(const mesh_data& data, int handle, std::string* error);
+		bool fill_mesh(dynamic_mesh& mesh, const mesh_data& data, std::string* error);
+		bool upload_mesh(dynamic_mesh& mesh);
+		void light_mesh(dynamic_mesh& mesh);
+		bool destroy_mesh(int handle);
+		void collect_meshes(const camera& cam, std::span<const float4> frustum);
+		void draw_meshes(const float3& eye, const std::vector<mesh_draw_instance>& draws, int forced_technique = -1);
+		void draw_fixed_meshes(const camera& cam, int width, int height);
+		void draw_mesh_shadow_casters(std::span<const float4> planes);
+		void set_fixed_function_state(const camera& cam, int width, int height);
+		void run_overlay(const camera& cam, int width, int height);
 
 		// ---- renderer_draw.cpp -----------------------------------------------------------------------------
 		IDirect3DTexture9* render(const camera& cam, int width, int height, const frame_options& options);
@@ -406,6 +585,7 @@ namespace codol::view
 		void reset_frame_caches();
 		void cull_surfaces(const camera& cam, std::span<const float4> frustum);
 		void collect_models(const camera& cam, std::span<const float4> frustum);
+		void collect_model(static_model_instance& instance, const camera& cam, std::span<const float4> frustum, const std::vector<std::uint8_t>* cells);
 		void collect_brush_models(const camera& cam, std::span<const float4> frustum);
 		void draw_world_surfaces(int begin, int end, bool emissive, int forced_technique = -1);
 		bool resolve_surface(const world_surface& surface, bool emissive, int forced_technique, material_draw*& material, int& technique_type);
@@ -429,6 +609,9 @@ namespace codol::view
 		void draw_sun_shadows(const camera& cam, float aspect);
 		void release_shadow_targets();
 	};
+
+	// r_picmip: leaves out the `skip` largest levels of a texture that has more of them ( renderer_load.cpp )
+	void drop_top_mips(render::texture_upload& upload, int skip);
 
 	// GameMapRenderer.cs:1363-1377 ( Frustum ): left, right, bottom, top, near - eye relative, normalised
 	std::array<float4, 5> build_frustum(const camera& cam, float aspect);

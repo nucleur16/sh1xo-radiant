@@ -22,14 +22,6 @@ namespace codol::view
 
 		float3 vec3(const float* f) { return { f[0], f[1], f[2] }; }
 
-		// what load_map needs only while it runs
-		struct load_context
-		{
-			std::shared_ptr<const zone::Zone> map_zone;
-			std::shared_ptr<const zone::Zone> foreign_zone;		// at most one other zone at a time
-			std::uint64_t peak_bytes = 0;
-		};
-
 		std::uint64_t upload_bytes(const render::texture_upload& upload)
 		{
 			std::uint64_t bytes = 0;
@@ -38,32 +30,6 @@ namespace codol::view
 				bytes += surface.data.size();
 			}
 			return bytes;
-		}
-
-		void drop_top_mips(render::texture_upload& upload, const int skip)
-		{
-			// r_picmip: leave out the largest levels of a texture that has more of them
-			const int drop = std::min(skip, upload.levels - 1);
-			if (drop <= 0)
-			{
-				return;
-			}
-			std::vector<render::texture_surface> kept;
-			for (auto& surface : upload.surfaces)
-			{
-				if (surface.level >= drop)
-				{
-					surface.level -= drop;
-					kept.push_back(std::move(surface));
-				}
-			}
-			upload.surfaces = std::move(kept);
-			upload.levels -= drop;
-			if (const auto* top = upload.surface(0, 0))
-			{
-				upload.width = top->width;
-				upload.height = top->height;
-			}
 		}
 
 		template <typename Lock, typename Unlock>
@@ -81,6 +47,32 @@ namespace codol::view
 			}
 			unlock();
 			return true;
+		}
+	}
+
+	void drop_top_mips(render::texture_upload& upload, const int skip)
+	{
+		// r_picmip: leave out the largest levels of a texture that has more of them
+		const int drop = std::min(skip, upload.levels - 1);
+		if (drop <= 0)
+		{
+			return;
+		}
+		std::vector<render::texture_surface> kept;
+		for (auto& surface : upload.surfaces)
+		{
+			if (surface.level >= drop)
+			{
+				surface.level -= drop;
+				kept.push_back(std::move(surface));
+			}
+		}
+		upload.surfaces = std::move(kept);
+		upload.levels -= drop;
+		if (const auto* top = upload.surface(0, 0))
+		{
+			upload.width = top->width;
+			upload.height = top->height;
 		}
 	}
 
@@ -514,6 +506,468 @@ namespace codol::view
 	}
 
 	// ---------------------------------------------------------------------------------------------------
+	// zones, materials and models by name. load_map uses these while the map zone is in memory; add_model,
+	// create_mesh and material_thumbnail use them afterwards, reading the zone they need again.
+
+	std::shared_ptr<const zone::Zone> map_renderer::impl::acquire_zone(const std::string& zone_name)
+	{
+		// zones other than the map zone, one at a time ( RenderAssetLibrary.FindModelFile + GameReader.Load )
+		zone_idle_frames = 0;
+		if (held_map_zone && equals_ignore_case(zone_name, held_map_zone->name()))
+		{
+			return held_map_zone;
+		}
+		if (!held_zone || !equals_ignore_case(held_zone->name(), zone_name))
+		{
+			held_zone.reset();
+			std::string load_error;
+			held_zone = library.load_zone(zone_name, &load_error);
+			if (!held_zone)
+			{
+				warn("zone " + zone_name + ": " + load_error);
+				return nullptr;
+			}
+			stat.zone_bytes_peak = std::max<std::uint64_t>(stat.zone_bytes_peak, (held_map_zone ? held_map_zone->stream_size() : 0) + held_zone->stream_size());
+		}
+		return held_zone;
+	}
+
+	material_draw* map_renderer::impl::make_material(const std::shared_ptr<const library_material>& asset, const zone::Zone* defining_zone)
+	{
+		// GameMapRenderer.cs:492-531 ( GetMaterial )
+		if (const auto it = material_by_asset.find(asset.get()); it != material_by_asset.end())
+		{
+			return it->second;
+		}
+		material_draw* result = nullptr;
+		std::shared_ptr<const library_techset> techset = asset->techset;
+		if (!techset && !asset->asset.technique_set_name.empty())
+		{
+			techset = scope.find_techset(asset->asset.technique_set_name);
+		}
+		if (!techset)
+		{
+			warn("material " + asset->asset.name + ": technique set " + asset->asset.technique_set_name + " not found");
+		}
+		else
+		{
+			auto draw = std::make_unique<material_draw>();
+			draw->material = asset;
+			draw->techset = techset;
+			draw->id = ++next_material_id;
+			draw->slot_mask = techset->set.slot_mask();
+			draw->textures.assign(asset->asset.textures.size(), nullptr);
+			draw->texture_resolved.assign(asset->asset.textures.size(), 0);
+			// inline pixels can only be read while the defining zone is in memory
+			std::shared_ptr<const zone::Zone> holder;
+			for (std::size_t t = 0; t < asset->asset.textures.size(); t++)
+			{
+				const auto& def = asset->asset.textures[t];
+				if (!def.embedded || !def.has_image)
+				{
+					continue;
+				}
+				if (!defining_zone)
+				{
+					holder = acquire_zone(asset->zone_name);
+					defining_zone = holder.get();
+				}
+				draw->textures[t] = defining_zone ? get_embedded_texture(def.image_name, *def.embedded, *defining_zone) : nullptr;
+				draw->texture_resolved[t] = 1;
+			}
+			result = draw.get();
+			materials.emplace(std::to_string(draw->id), std::move(draw));
+		}
+		material_by_asset.emplace(asset.get(), result);
+		return result;
+	}
+
+	material_draw* map_renderer::impl::get_material(const zone::Zone& from, const zaddr address)
+	{
+		if (!address || from.bytes(address, 4).empty())
+		{
+			return nullptr;
+		}
+		const std::string material_name(from.asset_name(c1::ASSET_TYPE_MATERIAL, address));
+		const std::string_view stored = from.c_string(from.get<zaddr>(address));
+		const bool reference = from.reference(address) != nullptr || (!stored.empty() && stored[0] == ',');
+		std::shared_ptr<const library_material> asset;
+		const zone::Zone* defining = nullptr;
+		if (!reference)
+		{
+			// defined in the zone the pointer is from
+			const bool map_zone = !scope.zones.empty() && equals_ignore_case(from.name(), scope.zones[0]->name);
+			std::shared_ptr<const library_zone> own = map_zone ? scope.zones[0] : library.frozen(from.name(), nullptr);
+			if (own)
+			{
+				if (const auto it = own->materials.find(material_name); it != own->materials.end())
+				{
+					asset = it->second;
+					defining = &from;
+				}
+			}
+		}
+		if (!asset)
+		{
+			asset = scope.find_material(material_name);
+			if (asset && equals_ignore_case(asset->zone_name, from.name()))
+			{
+				defining = &from;
+			}
+		}
+		if (!asset)
+		{
+			warn("material " + material_name + " is defined in a zone that is not loaded");
+			return nullptr;
+		}
+		return make_material(asset, defining);
+	}
+
+	bool map_renderer::impl::reads_model_lighting(const material_draw& material)
+	{
+		// GameMapRenderer.cs:680-682: a vertex shader of the set reads "baseLightingCoords"
+		if (const auto known = lighting_by_material.find(&material); known != lighting_by_material.end())
+		{
+			return known->second;
+		}
+		const auto reads = [&]
+		{
+			const auto& set = material.set();
+			for (std::size_t t = 0; t < set.techniques.size(); t++)
+			{
+				for (std::size_t p = 0; p < set.techniques[t].passes.size(); p++)
+				{
+					const auto& pass = set.techniques[t].passes[p];
+					std::shared_ptr<const shader_blob> vs = material.techset->passes[t][p].vertex_shader;
+					if (!vs && pass.vertex_shader)
+					{
+						vs = scope.find_shader(pass.vertex_shader->name, false);
+					}
+					if (!vs)
+					{
+						continue;
+					}
+					auto it = programs.find(vs.get());
+					if (it == programs.end())
+					{
+						render::shader_program program;
+						render::parse_shader_program(vs->code, program);
+						it = programs.emplace(vs.get(), std::move(program)).first;
+					}
+					for (const auto& arg : pass.arguments)
+					{
+						if (arg.type != render::shader_argument_type::code_vertex_const)
+						{
+							continue;
+						}
+						const render::shader_constant* constant = it->second.find_constant(render::register_set::float4, arg.dest);
+						if (constant && constant->name == "baseLightingCoords")
+						{
+							return true;
+						}
+					}
+				}
+			}
+			return false;
+		};
+		const bool result = reads();
+		lighting_by_material.emplace(&material, result);
+		return result;
+	}
+
+	model_draw* map_renderer::impl::build_model(const zone::Zone& from, const zaddr header, const std::string& model_name)
+	{
+		auto draw = std::make_unique<model_draw>();
+		draw->name = model_name;
+		c1::XModel raw;
+		from.get(header, raw);
+		const int lod_count = std::clamp(static_cast<int>(static_cast<std::int8_t>(raw.numLods)), 0, 4);
+		float3 min{ FLT_MAX, FLT_MAX, FLT_MAX }, max{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
+		for (int lod = 0; lod < (opts.load_model_lods ? std::max(lod_count, 1) : 1); lod++)
+		{
+			std::vector<std::string> model_warnings;
+			bool streamed = false;
+			const auto read = read_render_surfaces(from, header, lod, model_archives.get(), model_warnings, &streamed);
+			for (const std::string& warning : model_warnings)
+			{
+				warn(model_name + ": " + warning);
+			}
+			if (lod == 0 && streamed)
+			{
+				stat.streamed_models++;
+			}
+			if (lod > 0 && read.empty())
+			{
+				break;
+			}
+			model_lod_draw out;
+			out.dist = lod < 4 ? raw.lodInfo[lod].dist : 0;
+			std::size_t vertices = 0, index_count = 0;
+			for (const auto& surface : read)
+			{
+				vertices += static_cast<std::size_t>(surface.vertex_count);
+				index_count += 3u * static_cast<std::size_t>(surface.triangle_count);
+			}
+			std::vector<std::uint8_t> vertex_data(32 * vertices);
+			std::vector<std::uint32_t> index_data(index_count);
+			std::size_t vertex_at = 0, index_at = 0;
+			for (const auto& surface : read)
+			{
+				std::memcpy(vertex_data.data() + 32 * vertex_at, surface.vertices.data(), 32u * static_cast<std::size_t>(surface.vertex_count));
+				for (std::size_t k = 0; k < 3u * static_cast<std::size_t>(surface.triangle_count); k++)
+				{
+					index_data[index_at + k] = static_cast<std::uint32_t>(vertex_at) + render::rd_u16(surface.indices.data() + 2 * k);
+				}
+				model_surface_draw s;
+				s.material = get_material(from, surface.material);
+				s.rigid_bones = surface.rigid_bones;
+				s.vertex_count = surface.vertex_count;
+				s.triangle_count = surface.triangle_count;
+				s.first_vertex = static_cast<int>(vertex_at);
+				s.base_index = static_cast<int>(index_at);
+				if (lod == 0)
+				{
+					for (int v = 0; v < surface.vertex_count; v++)
+					{
+						const std::uint8_t* p = surface.vertices.data() + 32 * static_cast<std::size_t>(v);
+						const float3 position{ render::rd_f32(p), render::rd_f32(p + 4), render::rd_f32(p + 8) };
+						min = { std::min(min.x, position.x), std::min(min.y, position.y), std::min(min.z, position.z) };
+						max = { std::max(max.x, position.x), std::max(max.y, position.y), std::max(max.z, position.z) };
+					}
+					if (s.material)
+					{
+						draw->uses_lighting_volume |= reads_model_lighting(*s.material);
+					}
+				}
+				out.surfaces.push_back(std::move(s));
+				vertex_at += static_cast<std::size_t>(surface.vertex_count);
+				index_at += 3u * static_cast<std::size_t>(surface.triangle_count);
+			}
+			if (vertices > 0)
+			{
+				out.vertex_buffer = create_vertex_buffer(vertex_data);
+				out.index_buffer = create_index_buffer({ reinterpret_cast<const std::uint8_t*>(index_data.data()), index_data.size() * 4 }, true);
+			}
+			if (lod == 0 && opts.keep_pick_geometry && vertices > 0)
+			{
+				// the same triangles on the CPU side, for pick()
+				const auto pick_started = clock::now();
+				std::vector<float3> positions(vertices);
+				for (std::size_t v = 0; v < vertices; v++)
+				{
+					const std::uint8_t* p = vertex_data.data() + 32 * v;
+					positions[v] = { render::rd_f32(p), render::rd_f32(p + 4), render::rd_f32(p + 8) };
+				}
+				draw->pick = std::make_unique<pick_mesh>();
+				draw->pick->own_positions(std::move(positions));
+				draw->pick->reserve(index_count / 3);
+				for (std::size_t surface = 0; surface < out.surfaces.size(); surface++)
+				{
+					const model_surface_draw& s = out.surfaces[surface];
+					for (int t = 0; t < s.triangle_count; t++)
+					{
+						const std::uint32_t* i = index_data.data() + static_cast<std::size_t>(s.base_index) + 3u * static_cast<std::size_t>(t);
+						draw->pick->add_triangle(i[0], i[1], i[2], static_cast<std::uint32_t>(surface));
+					}
+				}
+				draw->pick->build();
+				pick_bytes += draw->pick->bytes();
+				pick_triangles += static_cast<std::int64_t>(draw->pick->triangle_count());
+				pick_build_ms += ms_since(pick_started);
+			}
+			draw->lods.push_back(std::move(out));
+		}
+		if (draw->lods.empty())
+		{
+			draw->lods.emplace_back();
+		}
+		if (!draw->lods[0].surfaces.empty())
+		{
+			draw->min = min;
+			draw->max = max;
+		}
+		zone::ModelView view;
+		if (zone::read_model(from, header, view, false))
+		{
+			for (const auto& bone : view.bones)
+			{
+				draw->bone_names.emplace_back(bone.name);
+			}
+		}
+		model_draw* result = draw.get();
+		models.emplace(model_name, std::move(draw));
+		return result;
+	}
+
+	model_draw* map_renderer::impl::resolve_model(const std::string& model_name)
+	{
+		// GameMapRenderer.cs:533-678 ( ResolveModel / FindForeignModel / GetModel )
+		if (const auto it = resolved_models.find(model_name); it != resolved_models.end())
+		{
+			return it->second;
+		}
+		model_draw* result = nullptr;
+		std::string stored_name = model_name;		// Zone::find_asset compares exactly, entity keys do not
+		const std::string zone_name = scope.find_model_zone(model_name, &stored_name);
+		if (!zone_name.empty())
+		{
+			if (const auto holder = acquire_zone(zone_name))
+			{
+				if (const zaddr header = holder->find_asset(c1::ASSET_TYPE_XMODEL, stored_name))
+				{
+					result = build_model(*holder, header, model_name);
+					if (scope.zones.empty() || !equals_ignore_case(zone_name, scope.zones[0]->name))
+					{
+						stat.foreign_models++;
+					}
+				}
+			}
+		}
+		resolved_models.emplace(model_name, result);
+		return result;
+	}
+
+	int map_renderer::impl::nearest_probe(const float3& point) const
+	{
+		// GameMapRenderer.cs:459-473
+		int best = 0;
+		float best_distance = FLT_MAX;
+		for (std::size_t i = probes.size() > 1 ? 1 : 0; i < probes.size(); i++)
+		{
+			const float3 d = probes[i].origin - point;
+			const float distance = dot(d, d);
+			if (distance < best_distance)
+			{
+				best_distance = distance;
+				best = static_cast<int>(i);
+			}
+		}
+		return best;
+	}
+
+	bool map_renderer::impl::upload_model_lighting()
+	{
+		// GameMapRenderer.cs:1120-1124: the $modellighting volume texture. Made again when the volume grew
+		// ( models placed by the editor ), else filled again.
+		if (!lighting_volume)
+		{
+			return false;
+		}
+		const int height = lighting_volume->height();
+		if (!lighting_fill || lighting_texture_height != height)
+		{
+			lighting_fill.reset();
+			model_lighting.handle.reset();
+			const D3DPOOL fill_pool = managed ? D3DPOOL_MANAGED : D3DPOOL_SYSTEMMEM;
+			if (FAILED(device->CreateVolumeTexture(model_lighting_volume::WIDTH, static_cast<UINT>(height), model_lighting_volume::DEPTH, 1, 0, D3DFMT_A8R8G8B8,
+				fill_pool, lighting_fill.put(), nullptr)))
+			{
+				return false;
+			}
+			com_ptr<IDirect3DVolumeTexture9> final_texture = lighting_fill;
+			if (!managed)
+			{
+				com_ptr<IDirect3DVolumeTexture9> target;
+				if (FAILED(device->CreateVolumeTexture(model_lighting_volume::WIDTH, static_cast<UINT>(height), model_lighting_volume::DEPTH, 1, 0,
+					D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, target.put(), nullptr)))
+				{
+					lighting_fill.reset();
+					return false;
+				}
+				final_texture = target;
+			}
+			*model_lighting.handle.put() = final_texture.get();
+			final_texture.get()->AddRef();
+			model_lighting.name = "$modellighting";
+			lighting_texture_height = height;
+		}
+		D3DLOCKED_BOX box{};
+		if (FAILED(lighting_fill->LockBox(0, &box, nullptr, 0)))
+		{
+			return false;
+		}
+		const auto& texels = lighting_volume->texels();
+		for (int z = 0; z < model_lighting_volume::DEPTH; z++)
+		{
+			for (int y = 0; y < height; y++)
+			{
+				std::memcpy(static_cast<std::uint8_t*>(box.pBits) + static_cast<std::size_t>(z) * static_cast<std::size_t>(box.SlicePitch)
+					+ static_cast<std::size_t>(y) * static_cast<std::size_t>(box.RowPitch),
+					texels.data() + (static_cast<std::size_t>(z) * static_cast<std::size_t>(height) + static_cast<std::size_t>(y)) * model_lighting_volume::WIDTH,
+					4u * model_lighting_volume::WIDTH);
+			}
+		}
+		lighting_fill->UnlockBox(0);
+		if (!managed && FAILED(device->UpdateTexture(lighting_fill.get(), model_lighting.handle.get())))
+		{
+			return false;
+		}
+		constants->set("lightingLookupScale", lighting_volume->lookup_scale());
+		return true;
+	}
+
+	void map_renderer::impl::build_world_pick(const std::span<const std::uint8_t> vertex_bytes, const std::span<const std::uint8_t> index_bytes)
+	{
+		// CPU side triangles of what render() draws of the GfxWorld: the three static ranges, and each brush model
+		// in its own space ( both index the same vertices )
+		const auto started = clock::now();
+		const std::size_t vertex_count = vertex_bytes.size() / sizeof(c1::GfxWorldVertex);
+		world_positions.resize(vertex_count);
+		for (std::size_t v = 0; v < vertex_count; v++)
+		{
+			const std::uint8_t* p = vertex_bytes.data() + v * sizeof(c1::GfxWorldVertex);
+			world_positions[v] = { render::rd_f32(p), render::rd_f32(p + 4), render::rd_f32(p + 8) };
+		}
+		const auto add_surface = [&](pick_mesh& mesh, const world_surface& s)
+		{
+			if (!s.material || s.material->not_drawn())
+			{
+				return;
+			}
+			for (int t = 0; t < s.triangle_count; t++)
+			{
+				const std::size_t source = 2 * (static_cast<std::size_t>(s.base_index) + 3u * static_cast<std::size_t>(t));
+				if (source + 6 > index_bytes.size())
+				{
+					break;
+				}
+				const std::uint32_t base = static_cast<std::uint32_t>(s.first_vertex);
+				mesh.add_triangle(base + render::rd_u16(index_bytes.data() + source), base + render::rd_u16(index_bytes.data() + source + 2),
+					base + render::rd_u16(index_bytes.data() + source + 4), static_cast<std::uint32_t>(s.index));
+			}
+		};
+		world_pick.set_positions(world_positions);
+		for (const range& r : ranges)
+		{
+			for (int i = r.begin; i < r.end; i++)
+			{
+				if (!surfaces[static_cast<std::size_t>(i)].brush_model)
+				{
+					add_surface(world_pick, surfaces[static_cast<std::size_t>(i)]);
+				}
+			}
+		}
+		world_pick.build();
+		pick_bytes += world_positions.capacity() * sizeof(float3) + world_pick.bytes();
+		pick_triangles += static_cast<std::int64_t>(world_pick.triangle_count());
+		for (std::size_t b = 0; b < brush_models.size(); b++)
+		{
+			const brush_model_instance& instance = brush_models[b];
+			auto mesh = std::make_unique<pick_mesh>();
+			mesh->set_positions(world_positions);
+			for (int i = 0; i < instance.surface_count; i++)
+			{
+				add_surface(*mesh, surfaces[static_cast<std::size_t>(instance.first_surface + i)]);
+			}
+			mesh->build();
+			pick_bytes += mesh->bytes();
+			pick_triangles += static_cast<std::int64_t>(mesh->triangle_count());
+			brush_pick.emplace(static_cast<int>(b), std::move(mesh));
+		}
+		pick_build_ms += ms_since(started);
+	}
+
+	// ---------------------------------------------------------------------------------------------------
 	// load_map
 
 	bool map_renderer::impl::load_map(const std::string& name, std::string* error)
@@ -530,7 +984,6 @@ namespace codol::view
 			library.clear();
 		}
 		stat = {};
-		load_context ctx;
 		const auto fail = [&](std::string text)
 		{
 			last_error = text;
@@ -558,16 +1011,30 @@ namespace codol::view
 				}
 			}
 		}
+		// zones the host wants to take materials and models from as well ( after everything the map itself uses )
+		for (const std::string& zone_name : opts.extra_zones)
+		{
+			std::string zone_error;
+			auto frozen = library.frozen(zone_name, &zone_error);
+			if (!frozen)
+			{
+				warn("extra zone " + zone_name + ": " + (zone_error.empty() ? std::string("not found") : zone_error));
+			}
+			else if (std::find(layers.begin(), layers.end(), frozen) == layers.end())
+			{
+				layers.push_back(std::move(frozen));
+			}
+		}
 
 		// ---- the map zone
 		std::string zone_error;
-		ctx.map_zone = library.load_zone(name, &zone_error);
-		if (!ctx.map_zone)
+		held_map_zone = library.load_zone(name, &zone_error);
+		if (!held_map_zone)
 		{
 			return fail(zone_error);
 		}
-		const zone::Zone& zone = *ctx.map_zone;
-		ctx.peak_bytes = zone.stream_size();
+		const zone::Zone& zone = *held_map_zone;
+		stat.zone_bytes_peak = zone.stream_size();
 		for (const std::string& warning : zone.warnings())
 		{
 			warn(name + ": " + warning);
@@ -601,118 +1068,6 @@ namespace codol::view
 		{
 			return fail("cannot create the stand-in textures: " + last_error);
 		}
-
-		// zones other than the map zone, one at a time ( RenderAssetLibrary.FindModelFile + GameReader.Load )
-		const auto acquire_zone = [&](const std::string& zone_name) -> std::shared_ptr<const zone::Zone>
-		{
-			if (equals_ignore_case(zone_name, zone.name()))
-			{
-				return ctx.map_zone;
-			}
-			if (!ctx.foreign_zone || !equals_ignore_case(ctx.foreign_zone->name(), zone_name))
-			{
-				ctx.foreign_zone.reset();
-				std::string load_error;
-				ctx.foreign_zone = library.load_zone(zone_name, &load_error);
-				if (!ctx.foreign_zone)
-				{
-					warn("zone " + zone_name + ": " + load_error);
-					return nullptr;
-				}
-				ctx.peak_bytes = std::max<std::uint64_t>(ctx.peak_bytes, zone.stream_size() + ctx.foreign_zone->stream_size());
-			}
-			return ctx.foreign_zone;
-		};
-
-		// ---- materials ( GameMapRenderer.cs:492-531 GetMaterial )
-		std::map<const library_material*, material_draw*> material_by_asset;
-		const auto make_material = [&](const std::shared_ptr<const library_material>& asset, const zone::Zone* defining_zone) -> material_draw*
-		{
-			if (const auto it = material_by_asset.find(asset.get()); it != material_by_asset.end())
-			{
-				return it->second;
-			}
-			material_draw* result = nullptr;
-			std::shared_ptr<const library_techset> techset = asset->techset;
-			if (!techset && !asset->asset.technique_set_name.empty())
-			{
-				techset = scope.find_techset(asset->asset.technique_set_name);
-			}
-			if (!techset)
-			{
-				warn("material " + asset->asset.name + ": technique set " + asset->asset.technique_set_name + " not found");
-			}
-			else
-			{
-				auto draw = std::make_unique<material_draw>();
-				draw->material = asset;
-				draw->techset = techset;
-				draw->id = ++next_material_id;
-				draw->slot_mask = techset->set.slot_mask();
-				draw->textures.assign(asset->asset.textures.size(), nullptr);
-				draw->texture_resolved.assign(asset->asset.textures.size(), 0);
-				// inline pixels can only be read while the defining zone is in memory
-				std::shared_ptr<const zone::Zone> holder;
-				for (std::size_t t = 0; t < asset->asset.textures.size(); t++)
-				{
-					const auto& def = asset->asset.textures[t];
-					if (!def.embedded || !def.has_image)
-					{
-						continue;
-					}
-					if (!defining_zone)
-					{
-						holder = acquire_zone(asset->zone_name);
-						defining_zone = holder.get();
-					}
-					draw->textures[t] = defining_zone ? get_embedded_texture(def.image_name, *def.embedded, *defining_zone) : nullptr;
-					draw->texture_resolved[t] = 1;
-				}
-				result = draw.get();
-				materials.emplace(std::to_string(draw->id), std::move(draw));
-			}
-			material_by_asset.emplace(asset.get(), result);
-			return result;
-		};
-		const auto get_material = [&](const zone::Zone& from, const zaddr address) -> material_draw*
-		{
-			if (!address || from.bytes(address, 4).empty())
-			{
-				return nullptr;
-			}
-			const std::string material_name(from.asset_name(c1::ASSET_TYPE_MATERIAL, address));
-			const std::string_view stored = from.c_string(from.get<zaddr>(address));
-			const bool reference = from.reference(address) != nullptr || (!stored.empty() && stored[0] == ',');
-			std::shared_ptr<const library_material> asset;
-			const zone::Zone* defining = nullptr;
-			if (!reference)
-			{
-				// defined in the zone the pointer is from
-				std::shared_ptr<const library_zone> own = &from == &zone ? scope.zones[0] : library.frozen(from.name(), nullptr);
-				if (own)
-				{
-					if (const auto it = own->materials.find(material_name); it != own->materials.end())
-					{
-						asset = it->second;
-						defining = &from;
-					}
-				}
-			}
-			if (!asset)
-			{
-				asset = scope.find_material(material_name);
-				if (asset && equals_ignore_case(asset->zone_name, from.name()))
-				{
-					defining = &from;
-				}
-			}
-			if (!asset)
-			{
-				warn("material " + material_name + " is defined in a zone that is not loaded");
-				return nullptr;
-			}
-			return make_material(asset, defining);
-		};
 
 		// ---- world geometry ( GameMapRenderer.cs:244-323 BuildWorld / BuildWorldIndices )
 		vertex_buffer = create_vertex_buffer(world.vertexBytes);
@@ -866,178 +1221,6 @@ namespace codol::view
 		}
 
 		// ---- models ( GameMapRenderer.cs:533-678 ResolveModel / FindForeignModel / GetModel )
-		const auto reads_model_lighting = [&](const material_draw& material)
-		{
-			// GameMapRenderer.cs:680-682: a vertex shader of the set reads "baseLightingCoords"
-			const auto& set = material.set();
-			for (std::size_t t = 0; t < set.techniques.size(); t++)
-			{
-				for (std::size_t p = 0; p < set.techniques[t].passes.size(); p++)
-				{
-					const auto& pass = set.techniques[t].passes[p];
-					std::shared_ptr<const shader_blob> vs = material.techset->passes[t][p].vertex_shader;
-					if (!vs && pass.vertex_shader)
-					{
-						vs = scope.find_shader(pass.vertex_shader->name, false);
-					}
-					if (!vs)
-					{
-						continue;
-					}
-					auto it = programs.find(vs.get());
-					if (it == programs.end())
-					{
-						render::shader_program program;
-						render::parse_shader_program(vs->code, program);
-						it = programs.emplace(vs.get(), std::move(program)).first;
-					}
-					for (const auto& arg : pass.arguments)
-					{
-						if (arg.type != render::shader_argument_type::code_vertex_const)
-						{
-							continue;
-						}
-						const render::shader_constant* constant = it->second.find_constant(render::register_set::float4, arg.dest);
-						if (constant && constant->name == "baseLightingCoords")
-						{
-							return true;
-						}
-					}
-				}
-			}
-			return false;
-		};
-		std::map<const material_draw*, bool> lighting_by_material;
-		name_map<bool> streamed_names;
-
-		const auto build_model = [&](const zone::Zone& from, const zaddr header, const std::string& model_name) -> model_draw*
-		{
-			auto draw = std::make_unique<model_draw>();
-			draw->name = model_name;
-			c1::XModel raw;
-			from.get(header, raw);
-			const int lod_count = std::clamp(static_cast<int>(static_cast<std::int8_t>(raw.numLods)), 0, 4);
-			float3 min{ FLT_MAX, FLT_MAX, FLT_MAX }, max{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
-			for (int lod = 0; lod < (opts.load_model_lods ? std::max(lod_count, 1) : 1); lod++)
-			{
-				std::vector<std::string> model_warnings;
-				bool streamed = false;
-				const auto read = read_render_surfaces(from, header, lod, model_archives.get(), model_warnings, &streamed);
-				for (const std::string& warning : model_warnings)
-				{
-					warn(model_name + ": " + warning);
-				}
-				if (lod == 0 && streamed)
-				{
-					stat.streamed_models++;
-				}
-				if (lod > 0 && read.empty())
-				{
-					break;
-				}
-				model_lod_draw out;
-				out.dist = lod < 4 ? raw.lodInfo[lod].dist : 0;
-				std::size_t vertices = 0, index_count = 0;
-				for (const auto& surface : read)
-				{
-					vertices += static_cast<std::size_t>(surface.vertex_count);
-					index_count += 3u * static_cast<std::size_t>(surface.triangle_count);
-				}
-				std::vector<std::uint8_t> vertex_data(32 * vertices);
-				std::vector<std::uint32_t> index_data(index_count);
-				std::size_t vertex_at = 0, index_at = 0;
-				for (const auto& surface : read)
-				{
-					std::memcpy(vertex_data.data() + 32 * vertex_at, surface.vertices.data(), 32u * static_cast<std::size_t>(surface.vertex_count));
-					for (std::size_t k = 0; k < 3u * static_cast<std::size_t>(surface.triangle_count); k++)
-					{
-						index_data[index_at + k] = static_cast<std::uint32_t>(vertex_at) + render::rd_u16(surface.indices.data() + 2 * k);
-					}
-					model_surface_draw s;
-					s.material = get_material(from, surface.material);
-					s.rigid_bones = surface.rigid_bones;
-					s.vertex_count = surface.vertex_count;
-					s.triangle_count = surface.triangle_count;
-					s.first_vertex = static_cast<int>(vertex_at);
-					s.base_index = static_cast<int>(index_at);
-					if (lod == 0)
-					{
-						for (int v = 0; v < surface.vertex_count; v++)
-						{
-							const std::uint8_t* p = surface.vertices.data() + 32 * static_cast<std::size_t>(v);
-							const float3 position{ render::rd_f32(p), render::rd_f32(p + 4), render::rd_f32(p + 8) };
-							min = { std::min(min.x, position.x), std::min(min.y, position.y), std::min(min.z, position.z) };
-							max = { std::max(max.x, position.x), std::max(max.y, position.y), std::max(max.z, position.z) };
-						}
-						if (s.material)
-						{
-							auto it = lighting_by_material.find(s.material);
-							if (it == lighting_by_material.end())
-							{
-								it = lighting_by_material.emplace(s.material, reads_model_lighting(*s.material)).first;
-							}
-							draw->uses_lighting_volume |= it->second;
-						}
-					}
-					out.surfaces.push_back(std::move(s));
-					vertex_at += static_cast<std::size_t>(surface.vertex_count);
-					index_at += 3u * static_cast<std::size_t>(surface.triangle_count);
-				}
-				if (vertices > 0)
-				{
-					out.vertex_buffer = create_vertex_buffer(vertex_data);
-					out.index_buffer = create_index_buffer({ reinterpret_cast<const std::uint8_t*>(index_data.data()), index_data.size() * 4 }, true);
-				}
-				draw->lods.push_back(std::move(out));
-			}
-			if (draw->lods.empty())
-			{
-				draw->lods.emplace_back();
-			}
-			if (!draw->lods[0].surfaces.empty())
-			{
-				draw->min = min;
-				draw->max = max;
-			}
-			zone::ModelView view;
-			if (zone::read_model(from, header, view, false))
-			{
-				for (const auto& bone : view.bones)
-				{
-					draw->bone_names.emplace_back(bone.name);
-				}
-			}
-			model_draw* result = draw.get();
-			models.emplace(model_name, std::move(draw));
-			return result;
-		};
-		name_map<model_draw*> resolved_models;		// by name: nullptr = not found
-		const auto resolve_model = [&](const std::string& model_name) -> model_draw*
-		{
-			if (const auto it = resolved_models.find(model_name); it != resolved_models.end())
-			{
-				return it->second;
-			}
-			model_draw* result = nullptr;
-			std::string stored_name = model_name;		// Zone::find_asset compares exactly, entity keys do not
-			const std::string zone_name = scope.find_model_zone(model_name, &stored_name);
-			if (!zone_name.empty())
-			{
-				if (const auto holder = acquire_zone(zone_name))
-				{
-					if (const zaddr header = holder->find_asset(c1::ASSET_TYPE_XMODEL, stored_name))
-					{
-						result = build_model(*holder, header, model_name);
-						if (holder != ctx.map_zone)
-						{
-							stat.foreign_models++;
-						}
-					}
-				}
-			}
-			resolved_models.emplace(model_name, result);
-			return result;
-		};
 		const auto get_model = [&](const zaddr header) -> model_draw*
 		{
 			// a model pointer of the map zone
@@ -1062,7 +1245,7 @@ namespace codol::view
 		// ---- static models ( GameMapRenderer.cs:325-365 ReadStaticModels ). Models of other zones are resolved
 		// zone by zone so that only one of those zones is in memory at a time.
 		const auto insts = zone.get_array<c1::GfxStaticModelInst>(dpvs.smodelInsts, world.staticModels.size());
-		int static_count = 0;
+		static_count = 0;
 		if (!world.staticModels.empty() && insts.size() == world.staticModels.size())
 		{
 			static_count = static_cast<int>(world.staticModels.size());
@@ -1118,47 +1301,9 @@ namespace codol::view
 			}
 		}
 		entities = parse_entities(entity_string);
-		const auto nearest_probe = [&](const float3& point)
-		{
-			// GameMapRenderer.cs:459-473
-			int best = 0;
-			float best_distance = FLT_MAX;
-			for (std::size_t i = probes.size() > 1 ? 1 : 0; i < probes.size(); i++)
-			{
-				const float3 d = probes[i].origin - point;
-				const float distance = dot(d, d);
-				if (distance < best_distance)
-				{
-					best_distance = distance;
-					best = static_cast<int>(i);
-				}
-			}
-			return best;
-		};
 		const auto entity_placement = [](const float3& origin, const float3& angles, const float scale)
 		{
-			camera orientation;
-			orientation.pitch = angles.x;
-			orientation.yaw = angles.y;
-			orientation.roll = angles.z;
-			const auto axes = orientation.axes();
-			return mat4::from_rows(
-				{ axes.forward.x * scale, axes.forward.y * scale, axes.forward.z * scale, 0 },
-				{ axes.left.x * scale, axes.left.y * scale, axes.left.z * scale, 0 },
-				{ axes.up.x * scale, axes.up.y * scale, axes.up.z * scale, 0 },
-				{ origin.x, origin.y, origin.z, 1 });
-		};
-		const auto placed_box = [](const float3& min, const float3& max, const mat4& placement, float3& center, float3& half)
-		{
-			float3 box_min{ FLT_MAX, FLT_MAX, FLT_MAX }, box_max{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
-			for (int corner = 0; corner < 8; corner++)
-			{
-				const float3 p = transform_point({ (corner & 1) ? max.x : min.x, (corner & 2) ? max.y : min.y, (corner & 4) ? max.z : min.z }, placement);
-				box_min = { std::min(box_min.x, p.x), std::min(box_min.y, p.y), std::min(box_min.z, p.z) };
-				box_max = { std::max(box_max.x, p.x), std::max(box_max.y, p.y), std::max(box_max.z, p.z) };
-			}
-			center = (box_min + box_max) * 0.5f;
-			half = (box_max - box_min) * 0.5f;
+			return placement_of({ origin, angles, scale });
 		};
 		for (const map_entity& entity : entities)
 		{
@@ -1188,6 +1333,8 @@ namespace codol::view
 				instance.entity_index = entity.index;
 				instance.placement = entity_placement(origin, angles, 1.0f);
 				const float3 mid = vec3(brush.bounds.midPoint), half = vec3(brush.bounds.halfSize);
+				instance.local_min = mid - half;
+				instance.local_max = mid + half;
 				placed_box(mid - half, mid + half, instance.placement, instance.center, instance.half);
 				instance.radius = length(instance.half);
 				instance.first_surface = brush.startSurfIndex;
@@ -1198,6 +1345,7 @@ namespace codol::view
 				{
 					surfaces[static_cast<std::size_t>(instance.first_surface + s)].brush_model = true;
 				}
+				entity_brushes.emplace(entity.index, static_cast<int>(brush_models.size()));
 				brush_models.push_back(instance);
 				continue;
 			}
@@ -1267,11 +1415,16 @@ namespace codol::view
 					instance.hidden_surfaces = std::move(hidden);
 				}
 			}
+			entity_models.emplace(entity.index, static_cast<int>(static_models.size()));
 			static_models.push_back(std::move(instance));
 			stat.entity_model_count++;
 		}
 		stat.brush_model_count = static_cast<int>(brush_models.size());
-		ctx.foreign_zone.reset();
+		held_zone.reset();
+		if (opts.keep_pick_geometry)
+		{
+			build_world_pick(world.vertexBytes, world.indexBytes);
+		}
 
 		// ---- Prepare ( GameMapRenderer.cs:964-1020 ): shaders, declarations and textures of what will be drawn
 		update_sun_shadow_state();
@@ -1320,16 +1473,16 @@ namespace codol::view
 		// ---- model lighting ( GameMapRenderer.cs:1057-1126 BuildModelLighting )
 		if (!static_models.empty())
 		{
-			auto grid = light_grid::read(zone, world_address);
+			grid = light_grid::read(zone, world_address);
 			if (!grid)
 			{
 				warn("the light grid could not be read; static models use their stored ground lighting");
 			}
-			std::unique_ptr<world_sight_trace> trace = grid ? std::make_unique<world_sight_trace>(zone) : nullptr;
+			trace = grid ? std::make_unique<world_sight_trace>(zone) : nullptr;
 			light_grid::blocked_fn blocked;
 			if (trace)
 			{
-				blocked = [&trace](const float3 start, const float3 end) { return trace->blocked(start, end); };
+				blocked = [this](const float3 start, const float3 end) { return trace->blocked(start, end); };
 			}
 			std::vector<static_model_instance*> lit;
 			for (auto& instance : static_models)
@@ -1381,50 +1534,11 @@ namespace codol::view
 					}
 					lighting_volume->set_block(instance->lighting_handle, block);
 				}
-				// GameMapRenderer.cs:1120-1124: the $modellighting volume texture
-				const int height = lighting_volume->height();
-				com_ptr<IDirect3DVolumeTexture9> filled;
-				const D3DPOOL fill_pool = managed ? D3DPOOL_MANAGED : D3DPOOL_SYSTEMMEM;
-				D3DLOCKED_BOX box{};
-				if (SUCCEEDED(device->CreateVolumeTexture(model_lighting_volume::WIDTH, static_cast<UINT>(height), model_lighting_volume::DEPTH, 1, 0, D3DFMT_A8R8G8B8,
-					fill_pool, filled.put(), nullptr)) && SUCCEEDED(filled->LockBox(0, &box, nullptr, 0)))
+				lighting_handles = handle;
+				if (!upload_model_lighting())
 				{
-					const auto& texels = lighting_volume->texels();
-					for (int z = 0; z < model_lighting_volume::DEPTH; z++)
-					{
-						for (int y = 0; y < height; y++)
-						{
-							std::memcpy(static_cast<std::uint8_t*>(box.pBits) + static_cast<std::size_t>(z) * static_cast<std::size_t>(box.SlicePitch)
-								+ static_cast<std::size_t>(y) * static_cast<std::size_t>(box.RowPitch),
-								texels.data() + (static_cast<std::size_t>(z) * static_cast<std::size_t>(height) + static_cast<std::size_t>(y)) * model_lighting_volume::WIDTH,
-								4u * model_lighting_volume::WIDTH);
-						}
-					}
-					filled->UnlockBox(0);
-					com_ptr<IDirect3DVolumeTexture9> final_texture = filled;
-					if (!managed)
-					{
-						com_ptr<IDirect3DVolumeTexture9> target;
-						if (SUCCEEDED(device->CreateVolumeTexture(model_lighting_volume::WIDTH, static_cast<UINT>(height), model_lighting_volume::DEPTH, 1, 0,
-							D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, target.put(), nullptr)) && SUCCEEDED(device->UpdateTexture(filled.get(), target.get())))
-						{
-							final_texture = target;
-						}
-						else
-						{
-							final_texture.reset();
-						}
-					}
-					if (final_texture)
-					{
-						*model_lighting.handle.put() = final_texture.get();
-						final_texture.get()->AddRef();
-						model_lighting.name = "$modellighting";
-						constants->set("lightingLookupScale", lighting_volume->lookup_scale());
-					}
-				}
-				if (!model_lighting.handle)
-				{
+					model_lighting = {};
+					lighting_fill.reset();
 					warn("the model lighting volume texture could not be created");
 					lighting_volume.reset();
 				}
@@ -1434,6 +1548,22 @@ namespace codol::view
 				stat.light_grid_traces = trace->traces();
 				stat.light_grid_blocked = trace->blocked_traces();
 			}
+		}
+
+		if (!grid && opts.keep_light_grid && static_models.empty())
+		{
+			// a map without models still lights what the editor places
+			grid = light_grid::read(zone, world_address);
+			trace = grid ? std::make_unique<world_sight_trace>(zone) : nullptr;
+		}
+		if (opts.keep_light_grid)
+		{
+			light_grid_bytes = (grid ? grid->bytes() : 0) + (trace ? trace->bytes() : 0);
+		}
+		else
+		{
+			grid.reset();
+			trace.reset();
 		}
 
 		// ---- visibility ( GameMapRenderer.cs:1022-1029 BuildVisibility )
@@ -1467,9 +1597,11 @@ namespace codol::view
 		stat.pixel_shaders = static_cast<int>(pixel_shaders.size());
 		stat.textures = static_cast<int>(textures.size());
 		stat.missing_textures = static_cast<int>(texture_failures.size());
-		stat.zone_bytes_peak = ctx.peak_bytes;
 		stat.load_ms = ms_since(started);
+		copy_edit_stats(stat);
+		held_map_zone.reset();		// the zones are released here
+		held_zone.reset();
 		map_loaded = true;
-		return true;		// the zones are released here: ctx goes out of scope
+		return true;
 	}
 }

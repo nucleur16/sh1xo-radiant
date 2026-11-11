@@ -112,6 +112,7 @@ namespace codol::view
 			return nullptr;
 		}
 		const auto started = std::chrono::steady_clock::now();
+		release_idle_zone();
 		if (!ensure_targets(width, height, options.target == nullptr, options.depth_stencil == nullptr, options.float_z))
 		{
 			return nullptr;
@@ -171,6 +172,10 @@ namespace codol::view
 		}
 
 		render_frame(cam, width, height, color, depth);
+		if (options.overlay)
+		{
+			run_overlay(cam, width, height);
+		}
 
 		if (end_scene)
 		{
@@ -218,6 +223,7 @@ namespace codol::view
 		merged.geometry_bytes = stat.geometry_bytes;
 		merged.zone_bytes_peak = stat.zone_bytes_peak;
 		merged.load_ms = stat.load_ms;
+		copy_edit_stats(merged);
 		merged.cpu_ms = ms_since(started);
 		stat = merged;
 		return options.target ? nullptr : target_texture.get();
@@ -243,6 +249,9 @@ namespace codol::view
 		transparent_models.clear();
 		opaque_brushes.clear();
 		transparent_brushes.clear();
+		opaque_meshes.clear();
+		transparent_meshes.clear();
+		fixed_meshes.clear();
 
 		// GameMapRenderer.cs:1138-1143 ( ApplyInitialStates )
 		for (const auto& state : render::INITIAL_RENDER_STATES)
@@ -251,13 +260,17 @@ namespace codol::view
 		}
 		update_sun_shadow_state();
 		cull_surfaces(cam, frustum);
-		if (frame->draw_static_models || frame->draw_entity_models)
+		if (frame->draw_static_models || frame->draw_entity_models || (frame->draw_placed_models && !placed_models.empty()))
 		{
 			collect_models(cam, frustum);
 		}
 		if (frame->draw_brush_models)
 		{
 			collect_brush_models(cam, frustum);
+		}
+		if (frame->draw_meshes && !meshes.empty())
+		{
+			collect_meshes(cam, frustum);
 		}
 		draw_sun_shadows(cam, aspect);
 		if (current_sun_shadow)
@@ -298,6 +311,14 @@ namespace codol::view
 		}
 		draw_model_surfaces(cam.origin, opaque_models);
 		draw_brush_surfaces(cam.origin, opaque_brushes);
+		if (!opaque_meshes.empty())
+		{
+			draw_meshes(cam.origin, opaque_meshes);
+		}
+		if (!fixed_meshes.empty())
+		{
+			draw_fixed_meshes(cam, width, height);
+		}
 		constants->set_world(world_matrix);
 		if (frame->draw_world)
 		{
@@ -306,6 +327,10 @@ namespace codol::view
 		}
 		draw_model_surfaces(cam.origin, transparent_models);
 		draw_brush_surfaces(cam.origin, transparent_brushes);
+		if (!transparent_meshes.empty())
+		{
+			draw_meshes(cam.origin, transparent_meshes);
+		}
 		constants->set_world(world_matrix);
 	}
 
@@ -321,6 +346,10 @@ namespace codol::view
 			draw_world_surfaces(ranges[0].begin, ranges[0].end, false, render::renderer_technique::BUILD_FLOAT_Z);
 		}
 		draw_model_surfaces(cam.origin, opaque_models, render::renderer_technique::BUILD_FLOAT_Z);
+		if (!opaque_meshes.empty())
+		{
+			draw_meshes(cam.origin, opaque_meshes, render::renderer_technique::BUILD_FLOAT_Z);
+		}
 		constants->set_world(world_matrix);
 		const int draws = frame_stat.draw_calls - before.draw_calls;
 		const int shadow_draws = frame_stat.sun_shadow_draws;
@@ -337,7 +366,7 @@ namespace codol::view
 		for (std::size_t i = 0; i < surfaces.size(); i++)
 		{
 			const world_surface& s = surfaces[i];
-			surface_visible[i] = !s.brush_model && (!cells || i >= cells->size() || (*cells)[i])
+			surface_visible[i] = !s.brush_model && !s.hidden && (!cells || i >= cells->size() || (*cells)[i])
 				&& (s.radius <= 0.0f || sphere_visible(frustum, s.center - cam.origin, s.radius));
 		}
 	}
@@ -377,50 +406,71 @@ namespace codol::view
 		const std::vector<std::uint8_t>* cells = frame->cell_culling && visibility ? &visibility->model_visible() : nullptr;
 		for (static_model_instance& instance : static_models)
 		{
-			instance.drawn = false;
-			if (instance.is_entity ? !frame->draw_entity_models : !frame->draw_static_models)
+			collect_model(instance, cam, frustum, cells);
+		}
+		// models the editor placed: after the map's, culled by the frustum only
+		for (const auto& placed : placed_models)
+		{
+			collect_model(*placed.second, cam, frustum, nullptr);
+		}
+	}
+
+	void map_renderer::impl::collect_model(static_model_instance& instance, const camera& cam, const std::span<const float4> frustum,
+		const std::vector<std::uint8_t>* cells)
+	{
+		instance.drawn = false;
+		if (instance.handle > 0 ? !frame->draw_placed_models : instance.is_entity ? !frame->draw_entity_models : !frame->draw_static_models)
+		{
+			return;
+		}
+		if (instance.hidden)
+		{
+			return;
+		}
+		// a model the editor moved is no longer where the cells list it
+		if (cells && !instance.moved && instance.static_index >= 0 && instance.static_index < static_cast<int>(cells->size())
+			&& !(*cells)[static_cast<std::size_t>(instance.static_index)])
+		{
+			frame_stat.culled_models++;
+			return;
+		}
+		if (!sphere_visible(frustum, instance.center - cam.origin, instance.radius)
+			|| (instance.cull_distance > 0 && length(instance.center - cam.origin) - instance.radius > instance.cull_distance))
+		{
+			frame_stat.culled_models++;
+			return;
+		}
+		if (!instance.draw)
+		{
+			return;
+		}
+		frame_stat.model_instances++;
+		if (instance.handle > 0)
+		{
+			frame_stat.placed_models++;
+		}
+		instance.drawn = true;
+		const model_lod_draw& lod = choose_lod(instance, cam);
+		const bool first_lod = &lod == &instance.draw->lods[0];
+		for (std::size_t index = 0; index < lod.surfaces.size(); index++)
+		{
+			const model_surface_draw& surface = lod.surfaces[index];
+			if (first_lod && !instance.hidden_surfaces.empty() && instance.hidden_surfaces[index])
 			{
 				continue;
 			}
-			if (cells && instance.static_index >= 0 && instance.static_index < static_cast<int>(cells->size()) && !(*cells)[static_cast<std::size_t>(instance.static_index)])
-			{
-				frame_stat.culled_models++;
-				continue;
-			}
-			if (!sphere_visible(frustum, instance.center - cam.origin, instance.radius)
-				|| (instance.cull_distance > 0 && length(instance.center - cam.origin) - instance.radius > instance.cull_distance))
-			{
-				frame_stat.culled_models++;
-				continue;
-			}
-			if (!instance.draw)
+			material_draw* material = surface.material;
+			if (!material || material->not_drawn())
 			{
 				continue;
 			}
-			frame_stat.model_instances++;
-			instance.drawn = true;
-			const model_lod_draw& lod = choose_lod(instance, cam);
-			const bool first_lod = &lod == &instance.draw->lods[0];
-			for (std::size_t index = 0; index < lod.surfaces.size(); index++)
+			const int technique_type = choose_technique(*material, instance.primary_light, false);
+			if (!material->technique(technique_type))
 			{
-				const model_surface_draw& surface = lod.surfaces[index];
-				if (first_lod && !instance.hidden_surfaces.empty() && instance.hidden_surfaces[index])
-				{
-					continue;
-				}
-				material_draw* material = surface.material;
-				if (!material || material->not_drawn())
-				{
-					continue;
-				}
-				const int technique_type = choose_technique(*material, instance.primary_light, false);
-				if (!material->technique(technique_type))
-				{
-					frame_stat.skipped_no_technique++;
-					continue;
-				}
-				(blends(*material, technique_type) ? transparent_models : opaque_models).push_back({ &instance, &lod, &surface, material, technique_type });
+				frame_stat.skipped_no_technique++;
+				continue;
 			}
+			(blends(*material, technique_type) ? transparent_models : opaque_models).push_back({ &instance, &lod, &surface, material, technique_type });
 		}
 	}
 
@@ -431,7 +481,7 @@ namespace codol::view
 		for (brush_model_instance& instance : brush_models)
 		{
 			instance.drawn = false;
-			if ((instance.special_ops && !frame->draw_special_ops_brush_models) || !sphere_visible(frustum, instance.center - cam.origin, instance.radius))
+			if (instance.hidden || (instance.special_ops && !frame->draw_special_ops_brush_models) || !sphere_visible(frustum, instance.center - cam.origin, instance.radius))
 			{
 				continue;
 			}
@@ -695,6 +745,11 @@ namespace codol::view
 			if (frame && frame->wireframe)
 			{
 				device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
+				applied_state_bits = nullptr;
+			}
+			if (draw.two_sided)
+			{
+				device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 				applied_state_bits = nullptr;
 			}
 			device->SetVertexDeclaration(declaration);
