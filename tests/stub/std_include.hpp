@@ -24,4 +24,6 @@
 #include "codol/c1_layouts.hpp"
 #include "codol/script_lex.hpp"
 #include "codol/anim_index.hpp"
+#include <rapidjson/document.h>
+#include "codol/map_geometry.hpp"
 #include "codol/map_ents.hpp"

@@ -4,6 +4,8 @@
 #undef min
 #undef max
 
+#include <cmath>
+
 namespace codol::mapents
 {
 	namespace
@@ -244,7 +246,8 @@ namespace codol::mapents
 				return false;
 			}
 
-			if (ent.has_brushes)
+			// the brushes of an entity that names a compiled brush model are that model, drawn for editing
+			if (ent.has_brushes && !is_model_reference(ent.find("model")))
 			{
 				// a brush entity drawn in radiant has no compiled hull in the zone
 				warnings.push_back(where + "brush entity '" + cls_name
@@ -268,10 +271,21 @@ namespace codol::mapents
 			const auto* cls = ent.find("classname");
 			const auto* original = ent.find(KEY_ORIG_CLASS);
 
-			if (cls && *cls == CLASS_BMODEL && original && !original->empty() && is_model_reference(ent.find("model")))
+			// maps written before the hull moved to its own key still have it in "model"
+			const auto* hull = ent.find(KEY_HULL) ? ent.find(KEY_HULL) : ent.find("model");
+
+			if (cls && *cls == CLASS_BMODEL && original && !original->empty() && is_model_reference(hull))
 			{
 				const std::string restored = *original;
 				ent.set("classname", restored);
+
+				for (auto& [k, v] : ent.pairs)
+				{
+					if (k == KEY_HULL)
+					{
+						k = "model";
+					}
+				}
 			}
 
 			ent.pairs.erase(std::remove_if(ent.pairs.begin(), ent.pairs.end(), [](const auto& p) { return is_codol_key(p.first); }), ent.pairs.end());
@@ -601,13 +615,41 @@ namespace codol::mapents
 		return true;
 	}
 
-	std::string to_radiant_map(const entity_set& set, std::string_view map_name)
+	std::string to_radiant_map(const entity_set& set, std::string_view map_name, const mapgeo::map_geometry* geometry)
 	{
 		std::string out = "iwmap 4\n";
+
+		// brushes by sub model ( 0: world )
+		std::unordered_map<int, std::vector<const mapgeo::brush*>> brushes;
+		if (geometry)
+		{
+			for (const auto& b : geometry->brushes)
+			{
+				brushes[b.sub_model].push_back(&b);
+			}
+
+			out.reserve(geometry->brushes.size() * 700 + geometry->models.size() * 160 + set.ents.size() * 200);
+		}
+
+		const auto append_brushes = [&](const int sub_model)
+		{
+			const auto it = brushes.find(sub_model);
+			if (it == brushes.end())
+			{
+				return;
+			}
+
+			int number = 0;
+			for (const auto* b : it->second)
+			{
+				mapgeo::append_brush(out, *b, number++);
+			}
+		};
 
 		for (std::size_t i = 0; i < set.ents.size(); i++)
 		{
 			entity ent = set.ents[i];
+			int sub_model = (i == 0) ? 0 : -1;
 
 			if (i == 0)
 			{
@@ -619,16 +661,36 @@ namespace codol::mapents
 					ent.set(KEY_TRIGGER_MODELS, std::to_string(set.trigger_models));
 				}
 			}
-			else if (is_model_reference(ent.find("model")))
+			else if (const auto* model = ent.find("model"); is_model_reference(model))
 			{
-				// the hull lives in the zone: show it as a point entity and remember what it was
-				if (const auto* cls = ent.find("classname"))
-				{
-					const std::string original = *cls;
-					ent.set(KEY_ORIG_CLASS, original);
-				}
+				const std::string hull = *model; // copied: the pointer does not survive ent.set()
+				const int index = std::atoi(hull.c_str() + 1);
 
-				ent.set("classname", CLASS_BMODEL);
+				if (hull[0] == '*' && brushes.contains(index))
+				{
+					// a brush model whose brushes are known: a real brush entity
+					sub_model = index;
+				}
+				else
+				{
+					// the hull lives in the zone: show it as a point entity and remember what it was
+					if (const auto* cls = ent.find("classname"))
+					{
+						const std::string original = *cls;
+						ent.set(KEY_ORIG_CLASS, original);
+					}
+
+					ent.set("classname", CLASS_BMODEL);
+
+					// renamed in place, so the key order of the entity survives the round trip
+					for (auto& [k, v] : ent.pairs)
+					{
+						if (k == "model")
+						{
+							k = KEY_HULL;
+						}
+					}
+				}
 			}
 
 			ent.set(KEY_ID, std::to_string(i));
@@ -640,7 +702,40 @@ namespace codol::mapents
 				out += "\"" + k + "\" \"" + v + "\"\n";
 			}
 
+			if (sub_model >= 0)
+			{
+				append_brushes(sub_model);
+			}
+
 			out += "}\n";
+		}
+
+		// static models: part of the zone, not of the entity string
+		if (geometry)
+		{
+			std::size_t number = set.ents.size();
+
+			for (const auto& sm : geometry->models)
+			{
+				out += "// entity " + std::to_string(number++) + "\n{\n";
+				out += "\"classname\" \"misc_model\"\n";
+				out += "\"model\" \"" + sm.model + "\"\n";
+				out += "\"origin\" \"" + mapgeo::format_number(sm.origin[0]) + " " + mapgeo::format_number(sm.origin[1]) + " "
+					+ mapgeo::format_number(sm.origin[2]) + "\"\n";
+
+				if (sm.angles[0] != 0.0 || sm.angles[1] != 0.0 || sm.angles[2] != 0.0)
+				{
+					out += "\"angles\" \"" + mapgeo::format_number(sm.angles[0]) + " " + mapgeo::format_number(sm.angles[1]) + " "
+						+ mapgeo::format_number(sm.angles[2]) + "\"\n";
+				}
+
+				if (std::fabs(sm.scale - 1.0) > 1e-4)
+				{
+					out += "\"modelscale\" \"" + mapgeo::format_number(sm.scale) + "\"\n";
+				}
+
+				out += "\"" + std::string(KEY_STATIC) + "\" \"1\"\n}\n";
+			}
 		}
 
 		return out;
@@ -664,6 +759,12 @@ namespace codol::mapents
 
 		for (std::size_t i = 0; i < ents.size(); i++)
 		{
+			if (i != 0 && ents[i].find(KEY_STATIC))
+			{
+				out.static_models++; // baked into the zone
+				continue;
+			}
+
 			entity ent = ents[i];
 			restore_game_keys(ent);
 
@@ -729,6 +830,13 @@ namespace codol::mapents
 		for (std::size_t i = 0; i < current.size(); i++)
 		{
 			const entity& cur = current[i];
+
+			if (i != 0 && cur.find(KEY_STATIC))
+			{
+				out.static_models++; // baked into the zone
+				continue;
+			}
+
 			const int id = (i == 0) ? 0 : entity_id(cur);
 
 			const entity* orig = (id >= 0 && id < static_cast<int>(original.ents.size())) ? &original.ents[id] : nullptr;
@@ -776,6 +884,16 @@ namespace codol::mapents
 							ent.pairs.emplace_back(key, orig_value);
 						}
 
+						continue;
+					}
+
+					// .. and its hull by codol_model
+					if (key == "model" && cur.find(KEY_HULL))
+					{
+						const auto* cur_hull = cur.find(KEY_HULL);
+						const auto* base_hull = base->find(KEY_HULL);
+						const bool edited = !cur_hull->empty() && (!base_hull || *cur_hull != *base_hull);
+						ent.pairs.emplace_back(key, edited ? *cur_hull : orig_value);
 						continue;
 					}
 

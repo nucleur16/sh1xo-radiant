@@ -202,7 +202,29 @@ add_executable(codol_tests
 	tests/codol_tests.cpp
 	src/codol/script_lex.cpp
 	src/codol/anim_index.cpp
-	src/codol/map_ents.cpp)
-target_include_directories(codol_tests PRIVATE tests/stub src)
+	src/codol/map_ents.cpp
+	src/codol/map_geometry.cpp)
+target_include_directories(codol_tests PRIVATE tests/stub src ${DEPS}/rapidjson/include)
 target_compile_options(codol_tests PRIVATE /std:c++latest /W4 /wd4996)
 add_test(NAME codol_tests COMMAND codol_tests)
+
+# ---------------------------------------------------------------------------
+# codol_mapconv: rebuilds an editable radiant .map from a shipped CoDOL map
+# ( entity string + the brush / static model metadata the asset tool exports ).
+# A separate process so radiant does not have to hold the ( large ) json in memory.
+
+add_executable(codol_mapconv
+	tools/codol_mapconv/main.cpp
+	src/codol/map_ents.cpp
+	src/codol/map_geometry.cpp
+	src/codol/anim_index.cpp
+	src/codol/script_lex.cpp)
+target_include_directories(codol_mapconv PRIVATE tests/stub src ${DEPS}/rapidjson/include)
+target_compile_options(codol_mapconv PRIVATE /std:c++latest /W4 /wd4996 $<$<CONFIG:Release>:/O2>)
+target_link_options(codol_mapconv PRIVATE /LARGEADDRESSAWARE)
+set_target_properties(codol_mapconv PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
+add_dependencies(iw3r codol_mapconv)
+if(RADIANT_ROOT)
+	add_custom_command(TARGET codol_mapconv POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:codol_mapconv> ${RADIANT_ROOT}/bin)
+endif()

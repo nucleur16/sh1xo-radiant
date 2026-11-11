@@ -174,46 +174,9 @@ namespace ggui
 		});
 	}
 
-	void codol_map_ents_dialog::finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin, const int trigger_models)
+	void codol_map_ents_dialog::open_imported_map(const std::string& map_name, const std::string& out_path, const std::string& entity_text, const std::string& summary)
 	{
-		mapents::entity_set set;
-		std::string error;
-
-		if (!mapents::parse_entity_string(entity_text, set, error))
-		{
-			log("import of " + origin + " failed: " + error, true);
-			return;
-		}
-
-		set.trigger_models = trigger_models;
-
-		if (!set.has_crc)
-		{
-			log("import of " + origin + " failed: the file has no \"// base_crc32\" line, so the zone it belongs to is unknown", true);
-			return;
-		}
-
-		const std::string out_path = utils::fs::get_basepath() + "\\map_source\\codol\\" + map_name + ".map";
-
-		if (!write_binary(out_path, mapents::to_radiant_map(set, map_name)))
-		{
-			log("could not write " + out_path, true);
-			return;
-		}
-
-		int bmodels = 0;
-		for (const auto& ent : set.ents)
-		{
-			const auto* model = ent.find("model");
-			bmodels += (model && !model->empty() && ((*model)[0] == '*' || (*model)[0] == '?')) ? 1 : 0;
-		}
-
-		char crc[16];
-		std::snprintf(crc, sizeof(crc), "%08x", set.base_crc);
-
-		log(map_name + ": " + std::to_string(set.ents.size()) + " entities ( " + std::to_string(bmodels)
-			+ " use a compiled brush model / trigger hull" + (trigger_models >= 0 ? ", the map has " + std::to_string(trigger_models) + " trigger hulls" : "")
-			+ " ), base_crc32 " + crc + " -> " + out_path);
+		log(summary);
 
 		// what the map was imported from: the export restores untouched values from it
 		write_binary(sidecar_original(out_path), entity_text);
@@ -242,7 +205,145 @@ namespace ggui
 			return;
 		}
 
-		ImGui::Toast(ImGuiToastType_Success, "CoDOL", ("Imported the entities of " + map_name).c_str());
+		ImGui::Toast(ImGuiToastType_Success, "CoDOL", ("Imported " + map_name).c_str());
+	}
+
+	void codol_map_ents_dialog::finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin, const int trigger_models)
+	{
+		mapents::entity_set set;
+		std::string error;
+
+		if (!mapents::parse_entity_string(entity_text, set, error))
+		{
+			log("import of " + origin + " failed: " + error, true);
+			return;
+		}
+
+		set.trigger_models = trigger_models;
+
+		if (!set.has_crc)
+		{
+			log("import of " + origin + " failed: the file has no \"// base_crc32\" line, so the zone it belongs to is unknown", true);
+			return;
+		}
+
+		// the whole map ( brushes, brush entities, static models ) needs the asset tool and the install
+		if (m_import_geometry)
+		{
+			std::error_code ec;
+			const auto tool = dvar_str(dvars::codol_asset_tool);
+
+			if (!tool.empty() && std::filesystem::exists(std::filesystem::u8path(tool), ec) && !components::codol_game::install_path().empty())
+			{
+				import_geometry(map_name, entity_text, origin, trigger_models);
+				return;
+			}
+
+			log("geometry not imported: set the asset tool and the CoDOL install folder in Script Workbench > Setup. Importing the entities only.", true);
+		}
+
+		const std::string out_path = utils::fs::get_basepath() + "\\map_source\\codol\\" + map_name + ".map";
+
+		if (!write_binary(out_path, mapents::to_radiant_map(set, map_name)))
+		{
+			log("could not write " + out_path, true);
+			return;
+		}
+
+		int bmodels = 0;
+		for (const auto& ent : set.ents)
+		{
+			const auto* model = ent.find("model");
+			bmodels += (model && !model->empty() && ((*model)[0] == '*' || (*model)[0] == '?')) ? 1 : 0;
+		}
+
+		char crc[16];
+		std::snprintf(crc, sizeof(crc), "%08x", set.base_crc);
+
+		open_imported_map(map_name, out_path, entity_text, map_name + ": " + std::to_string(set.ents.size()) + " entities ( " + std::to_string(bmodels)
+			+ " use a compiled brush model / trigger hull" + (trigger_models >= 0 ? ", the map has " + std::to_string(trigger_models) + " trigger hulls" : "")
+			+ " ), base_crc32 " + crc + " -> " + out_path);
+	}
+
+	void codol_map_ents_dialog::import_geometry(const std::string& map_name, const std::string& entity_text, const std::string& origin, const int trigger_models)
+	{
+		const auto tool = dvar_str(dvars::codol_asset_tool);
+		const auto install = components::codol_game::install_path();
+		const std::string base = utils::fs::get_basepath();
+		const std::string converter = base + "\\bin\\codol_mapconv.exe";
+		const std::string out_path = base + "\\map_source\\codol\\" + map_name + ".map";
+
+		char temp[MAX_PATH] = {};
+		GetTempPathA(sizeof(temp), temp);
+		const std::string work = std::string(temp) + "iw3xo-codol\\" + map_name;
+
+		std::error_code ec;
+		if (!std::filesystem::exists(std::filesystem::u8path(converter), ec))
+		{
+			log(converter + " is missing ( it is built together with iw3r.dll ). Importing the entities only.", true);
+
+			const bool keep = m_import_geometry;
+			m_import_geometry = false;
+			finish_import(map_name, entity_text, origin, trigger_models);
+			m_import_geometry = keep;
+			return;
+		}
+
+		std::filesystem::create_directories(std::filesystem::u8path(work), ec);
+
+		const std::string ents_file = work + "\\entities.txt";
+		if (!write_binary(ents_file, entity_text))
+		{
+			log("could not write " + ents_file, true);
+			return;
+		}
+
+		m_busy = true;
+		log("reading the brushes and static models of " + map_name + " ( the first export of a session scans every zone, give it a minute ) ...");
+
+		std::thread([this, tool, install, converter, out_path, work, ents_file, map_name, entity_text, trigger_models]
+		{
+			const std::string common = "\"" + tool + "\" export-map --game \"" + install + "\" --map " + map_name + " --out \"" + work
+				+ "\" --scale 1 --no-textures";
+
+			std::string output, summary;
+			int code = components::codol_game::run_command(common + " --scope brushes --layout separate --name brushes", "", output);
+
+			if (code == 0)
+			{
+				code = components::codol_game::run_command(common + " --scope static-models --layout instanced --name smodels", "", output);
+			}
+
+			const std::string exported = work + "\\" + map_name;
+
+			if (code == 0)
+			{
+				code = components::codol_game::run_command("\"" + converter + "\" --map " + map_name + " --ents \"" + ents_file + "\" --brushes \""
+					+ exported + "\\brushes\\brushes.map.json\" --models \"" + exported + "\\smodels\\smodels.map.json\" --trigger-models "
+					+ std::to_string(trigger_models) + " --out \"" + out_path + "\"", "", summary);
+			}
+
+			components::codol_game::post_to_gui([this, code, output, summary, map_name, out_path, entity_text]
+			{
+				m_busy = false;
+
+				if (code != 0)
+				{
+					log("could not rebuild the geometry of " + map_name + " ( exit code " + std::to_string(code) + " ), see the console", true);
+					game::printf_to_console("%s\n%s\n", output.c_str(), summary.c_str());
+					return;
+				}
+
+				std::string line = summary;
+				while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+				{
+					line.pop_back();
+				}
+
+				open_imported_map(map_name, out_path, entity_text, line);
+			});
+
+		}).detach();
 	}
 
 	void codol_map_ents_dialog::import_file(const std::string& path, const std::string& map_name)
@@ -508,6 +609,8 @@ namespace ggui
 		}
 
 		ImGui::EndChild();
+
+		ImGui::Checkbox("with geometry: brushes, brush entities and static models ( otherwise entities only )", &m_import_geometry);
 
 		ImGui::BeginDisabled(m_busy || m_selected < 0 || m_selected >= static_cast<int>(m_sources.size()));
 		if (ImGui::Button(m_busy ? "Working ..." : "Import selected map", ImVec2(200.0f, 0.0f)))

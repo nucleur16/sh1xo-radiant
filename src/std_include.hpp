@@ -136,6 +136,7 @@
 #include "codol/c1_layouts.hpp"
 #include "codol/script_lex.hpp"
 #include "codol/anim_index.hpp"
+#include "codol/map_geometry.hpp"
 #include "codol/map_ents.hpp"
 
 #include "fx_system/fx_dvars.hpp"

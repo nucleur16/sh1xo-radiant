@@ -19,6 +19,7 @@ namespace ggui
 		void export_current_map();
 
 		bool m_reload_after_export = true;
+		bool m_import_geometry = true;	// rebuild brushes and static models too ( needs the asset tool )
 
 	private:
 		enum class source_kind { zone, override_file };
@@ -34,6 +35,8 @@ namespace ggui
 		void refresh_sources();
 		void import_source(const source& src);
 		void finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin, int trigger_models = -1);
+		void import_geometry(const std::string& map_name, const std::string& entity_text, const std::string& origin, int trigger_models);
+		void open_imported_map(const std::string& map_name, const std::string& out_path, const std::string& entity_text, const std::string& summary);
 		void log(const std::string& line, bool error = false);
 
 		std::vector<source> m_sources;

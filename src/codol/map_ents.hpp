@@ -20,7 +20,9 @@ namespace codol::mapents
 	inline constexpr const char* KEY_BASE_CRC = "codol_base_crc32";
 	inline constexpr const char* KEY_MAP_NAME = "codol_map";
 	inline constexpr const char* KEY_ORIG_CLASS = "codol_classname";
+	inline constexpr const char* KEY_HULL = "codol_model";			// "*N" / "?N" of a codol_bmodel ( radiant would try to load a "model" )
 	inline constexpr const char* KEY_TRIGGER_MODELS = "codol_trigger_models";	// number of trigger hulls ( "?N" ) the zone has
+	inline constexpr const char* KEY_STATIC = "codol_static";			// on a misc_model: static model baked into the zone
 	inline constexpr const char* KEY_ID = "codol_id";			// index of the entity in the entity string it was imported from
 	inline constexpr const char* CLASS_BMODEL = "codol_bmodel";
 
@@ -69,8 +71,10 @@ namespace codol::mapents
 	// hulls of the map when the MapEnts header was found ( -1 otherwise ).
 	bool extract_from_zone(std::string_view zone_bytes, std::string& ent_text, int* trigger_models = nullptr);
 
-	// radiant .map with one point entity per game entity
-	std::string to_radiant_map(const entity_set& set, std::string_view map_name);
+	// radiant .map of the entities. With `geometry` it is the whole map: the collision brushes of the world go
+	// into the worldspawn, an entity with "model" "*N" gets the brushes of its sub model and keeps its real class,
+	// and every static model becomes a misc_model. Without it, entities with a compiled model are codol_bmodel points.
+	std::string to_radiant_map(const entity_set& set, std::string_view map_name, const mapgeo::map_geometry* geometry = nullptr);
 
 	struct export_result
 	{
@@ -78,6 +82,7 @@ namespace codol::mapents
 		std::string map_name;
 		std::uint32_t base_crc = 0;
 		int exported = 0;
+		int static_models = 0;		// misc_models that came from the zone and are not part of the entity string
 		std::vector<std::string> warnings;
 	};
 

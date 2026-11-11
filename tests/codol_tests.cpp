@@ -412,7 +412,8 @@ static void test_map_ents(const char* real_ents_file, const char* real_zone_file
 	const auto map = to_radiant_map(set, "mp_test");
 	CHECK(map.starts_with("iwmap 4\n// entity 0\n{\n\"classname\" \"worldspawn\"\n"));
 	CHECK(map.find("\"codol_base_crc32\"") != std::string::npos);
-	CHECK(map.find("\"classname\" \"codol_bmodel\"\n\"model\" \"?3\"") != std::string::npos);
+	CHECK(map.find("\"classname\" \"codol_bmodel\"\n\"codol_model\" \"?3\"\n\"targetname\" \"flag\"\n\"codol_classname\" \"trigger_multiple\"") != std::string::npos);
+	CHECK(map.find("\"model\" \"?3\"") == std::string::npos); // radiant would try to load it as an xmodel
 	CHECK(map.find("\"codol_classname\" \"trigger_multiple\"") != std::string::npos);
 	CHECK(map.find("\"classname\" \"script_model\"\n\"model\" \"com_barrel\"") != std::string::npos); // xmodels stay as they are
 
@@ -470,8 +471,8 @@ static void test_map_ents(const char* real_ents_file, const char* real_zone_file
 		baseline = replace_all(baseline, "\"origin\" \"10 20 30\"", "\"origin\" \"10.0 20.0 30.0\"");	// reformatted
 		baseline = replace_all(baseline, "\"origin\" \"1 2 3\"", "\"origin\" \"1.0 2.0 3.0\"");
 		baseline = replace_all(baseline, "\"model\" \"com_barrel\"", "\"model\" \"radiant_forced_model\"");	// known class
-		baseline = replace_all(baseline, "\"model\" \"?3\"\n", "\"model\" \"?3\"\n\"origin\" \"0.0 0.0 0.0\"\n");	// point entity
-		baseline = replace_all(baseline, "\"model\" \"*1\"\n", "\"model\" \"*1\"\n\"origin\" \"0.0 0.0 0.0\"\n");
+		baseline = replace_all(baseline, "\"codol_model\" \"?3\"\n", "\"codol_model\" \"?3\"\n\"origin\" \"0.0 0.0 0.0\"\n");	// point entity
+		baseline = replace_all(baseline, "\"codol_model\" \"*1\"\n", "\"codol_model\" \"*1\"\n\"origin\" \"0.0 0.0 0.0\"\n");
 		CHECK(baseline != map);
 
 		// nothing edited: the override is the zone's entity string, byte for byte
@@ -488,14 +489,14 @@ static void test_map_ents(const char* real_ents_file, const char* real_zone_file
 		// edits
 		std::string edited_map = baseline;
 		edited_map = replace_all(edited_map, "\"origin\" \"10.0 20.0 30.0\"", "\"origin\" \"64.0 64.0 8.0\"");			// moved a spawn
-		edited_map = replace_all(edited_map, "\"model\" \"?3\"\n\"origin\" \"0.0 0.0 0.0\"", "\"model\" \"?3\"\n\"origin\" \"5.0 0.0 0.0\"");	// moved a trigger hull
+		edited_map = replace_all(edited_map, "\"codol_model\" \"?3\"\n\"origin\" \"0.0 0.0 0.0\"", "\"codol_model\" \"?3\"\n\"origin\" \"5.0 0.0 0.0\"");	// moved a trigger hull
 		edited_map = replace_all(edited_map, "\"sunlight\" \"1.1\"", "\"sunlight\" \"2\"");							// worldspawn key
 		edited_map = replace_all(edited_map, "\"targetname\" \"flag\"\n", "\"targetname\" \"flag\"\n\"script_label\" \"_a\"\n");	// new key
 
 		// delete the script_model ( entity 4 ), add a spawn and a copy of the trigger hull that was moved
 		edited_map.erase(edited_map.find("// entity 4"));
 		edited_map += "// entity 4\n{\n\"classname\" \"mp_tdm_spawn\"\n\"origin\" \"7.0 7.0 7.0\"\n}\n";
-		edited_map += "// entity 5\n{\n\"classname\" \"codol_bmodel\"\n\"model\" \"?3\"\n\"origin\" \"100.0 0.0 0.0\"\n\"targetname\" \"flag\"\n"
+		edited_map += "// entity 5\n{\n\"classname\" \"codol_bmodel\"\n\"codol_model\" \"?3\"\n\"origin\" \"100.0 0.0 0.0\"\n\"targetname\" \"flag\"\n"
 			"\"codol_classname\" \"trigger_multiple\"\n\"codol_id\" \"2\"\n}\n";
 
 		CHECK(merge_radiant_map(edited_map, baseline, zone_text, merged, error));
