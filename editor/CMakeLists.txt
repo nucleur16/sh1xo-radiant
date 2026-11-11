@@ -1,0 +1,76 @@
+# CoDOL Radiant: the standalone editor ( no CoD4 radiant, no hooks ).
+#
+#   cmake -S editor -B build-editor -G "Visual Studio 17 2022" -A x64
+#   cmake --build build-editor --config Release
+#
+# -> build-editor/Release/CoDOLRadiant.exe  ( x64; -A Win32 works as well )
+#
+# The CoDOL parts of the radiant plugin ( src/codol, script workbench, game bridge ) are compiled from the same
+# source files; editor/compat/std_include.hpp stands in for the plugin's precompiled header.
+
+cmake_minimum_required(VERSION 3.20)
+project(codol-radiant LANGUAGES C CXX)
+
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
+
+set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(DEPS ${ROOT}/deps)
+
+# ---- native libraries
+set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CODOL_ZONE_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${ROOT}/codol_zone ${CMAKE_BINARY_DIR}/codol_zone)
+add_subdirectory(${ROOT}/codol_render ${CMAKE_BINARY_DIR}/codol_render)
+add_subdirectory(${ROOT}/codol_view ${CMAKE_BINARY_DIR}/codol_view)
+
+# ---- imgui ( docking )
+file(GLOB IMGUI_SRC ${DEPS}/imgui/*.cpp)
+add_library(imgui STATIC ${IMGUI_SRC}
+	${DEPS}/imgui/backends/imgui_impl_dx9.cpp
+	${DEPS}/imgui/backends/imgui_impl_win32.cpp
+	${DEPS}/imgui/misc/cpp/imgui_stdlib.cpp)
+target_include_directories(imgui PUBLIC ${DEPS}/imgui)
+target_compile_options(imgui PRIVATE /W0 /MP /std:c++latest)
+target_compile_definitions(imgui PRIVATE UNICODE _UNICODE $<$<CONFIG:Release>:NDEBUG>)
+
+# ---- the editor
+add_executable(CoDOLRadiant WIN32
+	src/main.cpp
+	src/compat.cpp
+	src/host.hpp
+	src/maps_dialog.cpp
+	compat/std_include.hpp
+	compat/editor_map.hpp
+
+	# shared with the radiant plugin
+	${ROOT}/src/codol/script_lex.cpp
+	${ROOT}/src/codol/anim_index.cpp
+	${ROOT}/src/codol/map_ents.cpp
+	${ROOT}/src/codol/map_geometry.cpp
+	${ROOT}/src/codol/map_zone.cpp
+	${ROOT}/src/components/fonts.cpp
+	${ROOT}/src/components/modules/codol_game.cpp
+	${ROOT}/src/ggui/script_workbench.cpp
+	${ROOT}/src/ggui/codol_viewport.cpp
+
+	${ROOT}/codol_view/tools/png_wic.cpp)
+
+# compat first: its std_include.hpp replaces the plugin's
+target_include_directories(CoDOLRadiant PRIVATE
+	${CMAKE_CURRENT_SOURCE_DIR}/compat
+	${CMAKE_CURRENT_SOURCE_DIR}/src
+	${ROOT}/src
+	${ROOT}/codol_view/tools
+	${DEPS}/rapidjson/include)
+
+target_compile_definitions(CoDOLRadiant PRIVATE CODOL_STANDALONE=1 _WINDOWS UNICODE _UNICODE
+	_SILENCE_ALL_CXX17_DEPRECATION_WARNINGS _CRT_SECURE_NO_WARNINGS
+	$<$<CONFIG:Debug>:DEBUG _DEBUG> $<$<CONFIG:Release>:NDEBUG>)
+
+target_compile_options(CoDOLRadiant PRIVATE /std:c++latest /W3 /MP /wd4996 /wd4267 /wd4244 $<$<CONFIG:Release>:/O2 /Zi>)
+target_link_options(CoDOLRadiant PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
+target_precompile_headers(CoDOLRadiant PRIVATE compat/std_include.hpp)
+
+target_link_libraries(CoDOLRadiant PRIVATE imgui codol_zone codol_render codol_view
+	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm)

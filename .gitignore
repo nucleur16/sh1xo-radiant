@@ -85,3 +85,5 @@ user*.bat
 
 # agent worktrees
 /.claude/
+
+build-editor/

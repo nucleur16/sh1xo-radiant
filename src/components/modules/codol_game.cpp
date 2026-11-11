@@ -6,6 +6,10 @@
 
 #include <psapi.h>
 
+#ifdef CODOL_STANDALONE
+#include "host.hpp"
+#endif
+
 namespace components
 {
 	namespace
@@ -723,6 +727,14 @@ namespace components
 
 		next = ImGui::GetTime() + 2.0;
 
+#ifdef CODOL_STANDALONE
+		// write to a temp name first so a reader never sees a half written file
+		const std::string tmp = path + ".tmp";
+		if (editor::save_backbuffer_png(tmp))
+		{
+			MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+		}
+#else
 		IDirect3DSurface9* target = nullptr;
 		if (SUCCEEDED(game::glob::d3d9_device->GetRenderTarget(0, &target)) && target)
 		{
@@ -735,6 +747,7 @@ namespace components
 
 			target->Release();
 		}
+#endif
 	}
 
 	void codol_game::frame()

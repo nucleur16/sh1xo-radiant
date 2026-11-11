@@ -277,6 +277,7 @@ namespace ggui
 			}
 		}
 
+#ifndef CODOL_STANDALONE
 		if ((m->follow_radiant || m->goto_radiant) && cmainframe::activewnd && cmainframe::activewnd->m_pCamWnd)
 		{
 			const auto& rc = cmainframe::activewnd->m_pCamWnd->camera;
@@ -287,6 +288,7 @@ namespace ggui
 			cam.yaw = rc.angles[1];
 			cam.roll = 0.0f;
 		}
+#endif
 
 		m->goto_radiant = false;
 
