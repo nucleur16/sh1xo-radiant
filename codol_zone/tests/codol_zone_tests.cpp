@@ -973,10 +973,11 @@ namespace
 			// ---- typed editing: data ids, pointers as targets, an array that changes its length
 			{
 				std::printf("  typed editing: mp_killhouse_sh\n");
+				const zaddr clipAddress = first_asset(editor.zone(), c1::ASSET_TYPE_CLIPMAP_MP);		// the same in every load of this zone
+				{
 				ZoneEditor typed;
 				CHECK(typed.load(original, "mp_killhouse_sh"));
 				const Zone& z = typed.zone();
-				const zaddr clipAddress = first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP);
 				ClipMapView typedClip;
 				CHECK(read_clip_map(z, clipAddress, typedClip));
 				const ZoneDataId header = typed.header_data(clipAddress);
@@ -1036,8 +1037,13 @@ namespace
 				std::vector<std::uint8_t> refused;
 				CHECK(!typed.write(refused) && refused.empty());
 
-				// data the loaders do not ask for is refused too; taken out again, the zone is the original
+				}
+
+				// data the loaders do not ask for is refused too; taken out again, the zone is the original. ( The editors
+				// above are gone by now: three of them with their zones do not fit a 32 bit process. )
 				ZoneEditor third;
+				ZoneDataInfo dataInfo;
+				std::vector<std::uint8_t> refused;
 				CHECK(third.load(original, "mp_killhouse_sh"));
 				ZoneDataId extra = 0;
 				const std::uint8_t four[4] = { 1, 2, 3, 4 };

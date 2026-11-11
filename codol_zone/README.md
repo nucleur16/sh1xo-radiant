@@ -357,7 +357,7 @@ on, plus 7 more ( 5 in backup sub folders of `chinese`, 2 in `temp` ). 89 are si
 | an xmodel taken from mp_dome into mp_killhouse_sh ( script strings translated ) | same fingerprint as in the donor, same bone names, same `codol_zonetool model` output; all assets of the base unchanged |
 | a zone from nothing ( 2 rawfiles, 1 string table ) | loads, contents equal, `--verify` identical |
 | the string table hash against the 120 tables of common_gametype_mp | every cell equal |
-| unit tests ( `ctest` ): deflate against the inflater at 5 levels, editor on a synthetic zone, the cases above, typed editing ( the entity string replaced with `set_data` + `patch_value` gives the bytes `set_map_ents` gives; refused edits; insert + remove gives the original ) | 969 checks, 0 failed ( x64; the typed editing was added later and not run as Win32 ) |
+| unit tests ( `ctest` ): deflate against the inflater at 5 levels, editor on a synthetic zone, the cases above, typed editing ( the entity string replaced with `set_data` + `patch_value` gives the bytes `set_map_ents` gives; refused edits; insert + remove gives the original ) | 969 checks, 0 failed, Win32 and x64 |
 | `codol_mapc` ( static models, brushes, surfaces of mp_rust and mp_killhouse_sh edited through the typed editing ) | see `codol_mapc/README.md` |
 
 Time for `--roundtrip-all`: 133 s for everything ( load, capture, write, deflate, file write, read back ).
