@@ -5,6 +5,7 @@
 #undef max
 
 #include "host.hpp"
+#include "ui.hpp"
 #include "png_wic.hpp"
 
 // CoDOL Radiant: the standalone host. A plain Win32 window with a Direct3D 9 device and a docking ImGui on it.
@@ -24,7 +25,9 @@ namespace editor
 		bool g_reset_pending = false;
 		bool g_device_lost = false;
 		bool g_exit = false;
+		bool g_close_requested = false;
 		bool g_minimized = false;
+		std::string g_title;
 
 		struct log_line
 		{
@@ -125,7 +128,8 @@ namespace editor
 				break;
 
 			case WM_CLOSE:
-				g_exit = true;
+				// asked in the next frame: a map with unsaved changes gets a question first
+				g_close_requested = true;
 				return 0;
 
 			case WM_DESTROY:
@@ -294,27 +298,26 @@ namespace editor
 				return;
 			}
 
+			auto& st = ui::get();
+
 			if (ImGui::BeginMenu("File"))
 			{
-				if (ImGui::MenuItem("Open map ..", "Ctrl+O"))
-				{
-					GET_GUI(ggui::codol_map_ents_dialog)->open();
-				}
-
-				if (ImGui::MenuItem("Export entities to the server"))
-				{
-					GET_GUI(ggui::codol_map_ents_dialog)->export_current_map();
-				}
-
+				ui::draw_file_menu_items();
 				ImGui::Separator();
 				ImGui::MenuItem("Settings ..", nullptr, &g_show_settings);
 				ImGui::Separator();
 
 				if (ImGui::MenuItem("Exit"))
 				{
-					g_exit = true;
+					ui::exit_editor();
 				}
 
+				ImGui::EndMenu();
+			}
+
+			if (ImGui::BeginMenu("Edit"))
+			{
+				ui::draw_edit_menu();
 				ImGui::EndMenu();
 			}
 
@@ -329,7 +332,16 @@ namespace editor
 					}
 				};
 
-				item("Viewport", GET_GUI(ggui::codol_viewport_dialog));
+				item("3D View", GET_GUI(ggui::codol_viewport_dialog));
+				ui::draw_grid_view_menu_items();
+				ImGui::Separator();
+				ImGui::MenuItem("Entity", nullptr, &st.show_entity);
+				ImGui::MenuItem("Selection", nullptr, &st.show_selection);
+				ImGui::MenuItem("Layers", nullptr, &st.show_layers);
+				ImGui::MenuItem("Models", nullptr, &st.show_models);
+				ImGui::MenuItem("Materials", nullptr, &st.show_materials);
+				ImGui::MenuItem("Surface inspector", "S", &st.show_surface);
+				ImGui::Separator();
 				item("Maps", GET_GUI(ggui::codol_map_ents_dialog));
 				item("Script Workbench", GET_GUI(ggui::script_workbench_dialog));
 				item("Game", GET_GUI(ggui::game_view_dialog));
@@ -485,18 +497,27 @@ namespace editor
 			ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
 			ImGui::DockBuilderSetNodeSize(dockspace, ImGui::GetMainViewport()->WorkSize);
 
+			// the classic arrangement: the 3D view next to a 2D view, lists on the left, what is selected on the right
 			ImGuiID center = dockspace;
-			const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.22f, nullptr, &center);
-			const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
-			const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.2f, nullptr, &center);
+			const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.2f, nullptr, &center);
+			const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.16f, nullptr, &center);
+			ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.22f, nullptr, &center);
+			const ImGuiID right_bottom = ImGui::DockBuilderSplitNode(right, ImGuiDir_Down, 0.42f, nullptr, &right);
+			const ImGuiID grid = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.45f, nullptr, &center);
 
-			ImGui::DockBuilderDockWindow("CoDOL Viewport##window", center);
 			ImGui::DockBuilderDockWindow("Script Workbench##codol_window", center);
 			ImGui::DockBuilderDockWindow("Game##codol_window", center);
-			ImGui::DockBuilderDockWindow("Maps##window", left);
+			ImGui::DockBuilderDockWindow("CoDOL Viewport##window", center);
+			ImGui::DockBuilderDockWindow("2D View##grid0", grid);
+			ImGui::DockBuilderDockWindow("2D View 2##grid1", grid);
+			ImGui::DockBuilderDockWindow("2D View 3##grid2", grid);
 			ImGui::DockBuilderDockWindow("Models##window", left);
 			ImGui::DockBuilderDockWindow("Materials##window", left);
-			ImGui::DockBuilderDockWindow("Selection##window", right);
+			ImGui::DockBuilderDockWindow("Layers##window", left);
+			ImGui::DockBuilderDockWindow("Maps##window", left);
+			ImGui::DockBuilderDockWindow("Entity##window", right);
+			ImGui::DockBuilderDockWindow("Selection##window", right_bottom);
+			ImGui::DockBuilderDockWindow("Surface##window", right_bottom);
 			ImGui::DockBuilderDockWindow("Console##window", bottom);
 			ImGui::DockBuilderFinish(dockspace);
 		}
@@ -507,21 +528,43 @@ namespace editor
 			ImGui_ImplWin32_NewFrame();
 			ImGui::NewFrame();
 
+			const auto frame_start = std::chrono::steady_clock::now();
+
+			if (g_close_requested)
+			{
+				g_close_requested = false;
+				ui::exit_editor();
+			}
+
+			ui::process_shortcuts();
 			draw_menu();
 
 			const ImGuiID dockspace = ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
 			first_layout(dockspace);
 
-			if (!ImGui::GetIO().WantTextInput && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O, false))
-			{
-				GET_GUI(ggui::codol_map_ents_dialog)->open();
-			}
-
 			components::codol_game::frame();
+
+			// the renderer follows the document, before any view draws
+			get_scene().sync();
 
 			for (const auto& module_ : ggui::loader::get_modules())
 			{
 				module_->frame();
+			}
+
+			ui::draw_grid_views();
+			ui::draw_entity_window();
+			ui::draw_layers_window();
+			ui::draw_surface_window();
+			ui::draw_create_entity_popup();
+			ui::draw_modals();
+
+			// map name and the modified mark in the title bar
+			if (std::string title = get_scene().title(); title != g_title)
+			{
+				g_title = std::move(title);
+				const std::string text = g_title.empty() ? "CoDOL Radiant - Call of Duty Online 1.1.1.13" : g_title + " - CoDOL Radiant";
+				SetWindowTextW(g_hwnd, std::filesystem::u8path(text).wstring().c_str());
 			}
 
 			draw_console();
@@ -549,6 +592,14 @@ namespace editor
 				g_device->EndScene();
 			}
 
+			// the editor's own work per frame ( Present waits for the display )
+			{
+				auto& st = ui::get();
+				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_start).count();
+				st.frame_ms = st.frame_ms * 0.9 + ms * 0.1;
+				st.frame_ms_max = std::max(st.frame_ms_max, ms);
+			}
+
 			if (g_device->Present(nullptr, nullptr, nullptr, nullptr) == D3DERR_DEVICELOST)
 			{
 				g_device_lost = true;
@@ -561,6 +612,32 @@ namespace editor
 	void log(const std::string& text)
 	{
 		std::lock_guard lock(g_log_mutex);
+
+		// development aid, like CODOL_AUTOSHOT: CODOL_LOG = <file> gets every console line ( unattended tests read it )
+		{
+			static int state = 0; // 0: unchecked, 1: active, 2: off
+			static std::string path;
+
+			if (state == 0)
+			{
+				char env[MAX_PATH] = {};
+				state = GetEnvironmentVariableA("CODOL_LOG", env, sizeof(env)) ? 1 : 2;
+				path = env;
+			}
+
+			if (state == 1)
+			{
+				if (std::ofstream out(path, std::ios::app | std::ios::binary); out)
+				{
+					out << text;
+
+					if (text.empty() || text.back() != '\n')
+					{
+						out << '\n';
+					}
+				}
+			}
+		}
 
 		std::size_t start = 0;
 		while (start <= text.size())
