@@ -27,7 +27,8 @@ option(CODOL_MAPC_BUILD_VIEWTOOL "also build codol_viewtool ( renders a compiled
 set(CODOL_MAPC_GAME_DIR "D:/CoD/CODOL Builds/Call of Duty Online 1.1.1.13" CACHE PATH "CoDOL 1.1.1.13 install ( read only ) for the tests")
 
 if(NOT TARGET codol_zone)
-	set(CODOL_ZONE_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+	# codol_zonetool ( decrypt ) and codol_linker ( --verify ) are what tests/run_e2e.ps1 checks the output with
+	set(CODOL_ZONE_BUILD_TOOLS ${CODOL_MAPC_BUILD_TOOLS} CACHE BOOL "" FORCE)
 	set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 	add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../codol_zone ${CMAKE_CURRENT_BINARY_DIR}/codol_zone)
 endif()

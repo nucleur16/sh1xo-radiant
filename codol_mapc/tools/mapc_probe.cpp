@@ -2,9 +2,11 @@
 // codol_mapc rebuilds hold in the shipped maps. The layout statements in codol_mapc ( which array is read where,
 // which lists are runs of which, how the leaf brush tree is shaped ) were established with it.
 //
-//   codol_mapc_probe graph <map.ff> <C1.exe> <gfx_map|col_map_mp|..> [max pieces]
-//   codol_mapc_probe gfx   <map.ff> <C1.exe>
-//   codol_mapc_probe clip  <map.ff> <C1.exe>
+//   codol_mapc_probe graph   <map.ff> <C1.exe> <gfx_map|col_map_mp|..> [max pieces]   stream order of an asset's data
+//   codol_mapc_probe fields  <map.ff> <C1.exe> <gfx_map|col_map_mp|..>                where the header's pointers lead
+//   codol_mapc_probe gfx     <map.ff> <C1.exe>                                        cells, AABB trees, surfaces
+//   codol_mapc_probe smodels <map.ff> <C1.exe>                                        static models, shadow lists, BSP
+//   codol_mapc_probe clip    <map.ff> <C1.exe>                                        leafs, leaf brush trees, brushes
 
 #include "codol_zone/assets.hpp"
 #include "codol_zone/zone_editor.hpp"
@@ -979,7 +981,7 @@ int main(const int argc, char** argv)
 {
 	if (argc < 4)
 	{
-		std::fprintf(stderr, "codol_mapc_probe graph|gfx|clip <map.ff> <C1.exe> [asset type] [max pieces]\n");
+		std::fprintf(stderr, "codol_mapc_probe graph|fields|gfx|smodels|clip <map.ff> <C1.exe> [asset type] [max pieces]\n");
 		return 2;
 	}
 	ClientKey key;

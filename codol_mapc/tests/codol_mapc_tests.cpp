@@ -325,7 +325,7 @@ namespace
 		std::set<std::string> changed;		// assets whose fingerprint differs from the base zone, "+" in front of new ones
 	};
 
-	void compile_case(const fixture& f, const std::string& stage, const edit::document& edited, compiled& out, const bool reimport = true)
+	void compile_case(const fixture& f, const std::string& stage, const edit::document& edited, compiled& out, const bool reimport = true, const mapc::options& opts = {})
 	{
 		out.folder = f.out / stage;
 		std::error_code ec;
@@ -339,8 +339,10 @@ namespace
 		CHECK_MSG(baseline.load_map_text(f.baseline_text, error), error);
 		std::vector<std::uint8_t> copy = f.base_zone;
 		CHECK(out.editor.load(std::move(copy), f.map));
-		mapc::options opts;
-		out.ok = mapc::compile_zone(out.editor, baseline, edited, opts, f.key, out.zone_bytes, out.report, error);
+		// compiled from the file, as the tool does ( a saved map holds its numbers with eight digits )
+		edit::document saved;
+		CHECK_MSG(saved.load_map_file(out.folder / "edited.map", error), error);
+		out.ok = mapc::compile_zone(out.editor, baseline, saved, opts, f.key, out.zone_bytes, out.report, error);
 		CHECK_MSG(out.ok, error);
 		if (!out.ok)
 		{
@@ -782,6 +784,55 @@ namespace
 			CHECK(brush_sets(c.imported) == brush_sets(edited));
 		}
 		std::printf("    %s", r.text().c_str());
+	}
+
+	// a static model the map does not have, taken from another zone
+	void test_donor(const fixture& f, const std::filesystem::path& donor, const std::string& model)
+	{
+		std::printf("  static model from a donor zone\n");
+		edit::document edited;
+		std::string error;
+		CHECK_MSG(edited.load_map_text(f.baseline_text, error), error);
+		const edit::vec3 at = spawn_origin(edited);
+		const std::pair<std::string, std::string> pairs[] = { { "model", model }, { "codol_static", "1" } };
+		CHECK(edited.create_point_entity("misc_model", at, pairs) != edit::no_object);
+		// without the donor the instance is left out, and said so
+		{
+			compiled c;
+			compile_case(f, "donor_missing", edited, c, false);
+			CHECK(c.ok && c.report.models_added == 0 && !c.report.warnings.empty() && c.changed.empty());
+			CHECK(c.zone_bytes == f.base_zone);
+		}
+		mapc::options opts;
+		opts.donors.push_back(donor);
+		compiled c;
+		compile_case(f, "donor", edited, c, true, opts);
+		std::ofstream(f.out / "donor" / "views.txt", std::ios::binary) << camera_line("a", at + edit::vec3(0, 0, 150), at + edit::vec3(-600, -550, 380));
+		if (!c.ok)
+		{
+			return;
+		}
+		CHECK(c.report.models_added == 1 && c.report.model_assets_added >= 1);
+		CHECK(c.editor.find_asset(c1::ASSET_TYPE_XMODEL, model) != zone::ZoneEditor::npos);
+		CHECK(c.editor.find_asset(c1::ASSET_TYPE_XMODEL, model) < c.editor.find_asset(c1::ASSET_TYPE_GFXWORLD, "maps/mp/" + f.map + ".d3dbsp"));
+		zone::GfxWorldView gfx;
+		CHECK(zone::read_gfx_world(c.editor.zone(), zone::first_asset(c.editor.zone(), c1::ASSET_TYPE_GFXWORLD), gfx));
+		CHECK(!gfx.staticModels.empty() && gfx.staticModels.back().modelName == model);
+		// the model's own data came along: its surfaces are in the compiled zone
+		zone::ModelView view;
+		CHECK(zone::read_model(c.editor.zone(), c.editor.zone().find_asset(c1::ASSET_TYPE_XMODEL, model), view) && !view.lods.empty());
+		int added = 0;
+		for (const std::string& key : c.changed)
+		{
+			added += key[0] == '+';
+			CHECK_MSG(key[0] == '+' || key.rfind("gfx_map:", 0) == 0 || key.rfind("col_map_mp:", 0) == 0, key);
+		}
+		CHECK(added == c.report.model_assets_added);
+		if (c.imported_ok)
+		{
+			CHECK(unmatched(static_models(edited), static_models(c.imported)) == 0);
+			CHECK(static_models(edited).size() == static_models(c.imported).size());
+		}
 	}
 
 	// ---- stages 3 and 4 -----------------------------------------------------------------------------------------
@@ -1337,6 +1388,10 @@ int main(const int argc, char** argv)
 		if (only == "all" || only == "entities") { test_entities(f); }
 		if (only == "all" || only == "models") { test_models(f); }
 		if (only == "all" || only == "brushes") { test_brushes(f); }
+		if ((only == "all" || only == "donor") && map == "mp_rust" && std::filesystem::exists(game / "client_shipRetail" / "chinese" / "mp_dome.ff", ec))
+		{
+			test_donor(f, game / "client_shipRetail" / "chinese" / "mp_dome.ff", "machinery_windmill");
+		}
 	}
 	std::printf("%d checks, %d failed\n", g_checks, g_failed);
 	return g_failed ? 1 : 0;
