@@ -526,6 +526,7 @@ namespace editor
 		{
 			ImGui_ImplDX9_NewFrame();
 			ImGui_ImplWin32_NewFrame();
+			ui::apply_injected_input();
 			ImGui::NewFrame();
 
 			const auto frame_start = std::chrono::steady_clock::now();

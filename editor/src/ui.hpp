@@ -116,6 +116,11 @@ namespace editor::ui
 
 	void register_commands();
 
+	// Development aid ( like CODOL_STARTUP_CMDS ): the console commands ui_mouse / ui_key / ui_text feed mouse and
+	// keyboard input to the gui, so that unattended runs go through the same code as a hand on the mouse. Called
+	// between the platform backend's new frame and ImGui::NewFrame().
+	void apply_injected_input();
+
 	// the 2D views ( grid_view.cpp )
 	void grid_view_command(const std::vector<std::string>& args);
 	void draw_grid_views();

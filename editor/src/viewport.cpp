@@ -153,6 +153,7 @@ namespace ggui
 		float gizmo_matrix[16] = {};
 		float gizmo_start[16] = {};
 		bool gizmo_active = false;
+		bool gizmo_hover = false;		// the mouse was on the gizmo in the last frame
 		edit::vec3 gizmo_pivot;
 
 		// ---- line buffers of the overlay, world space
@@ -787,6 +788,7 @@ namespace ggui
 		ImGuizmo::SetOrthographic(false);
 		ImGuizmo::SetDrawlist(dl);
 		ImGuizmo::SetRect(origin.x, origin.y, static_cast<float>(width), static_cast<float>(height));
+		ImGuizmo::SetGizmoSizeClipSpace(0.13f);
 
 		const ImGuizmo::OPERATION op = st.gizmo == ui::gizmo_tool::rotate ? ImGuizmo::ROTATE : (st.gizmo == ui::gizmo_tool::scale ? ImGuizmo::SCALE : ImGuizmo::TRANSLATE);
 
@@ -1731,9 +1733,19 @@ namespace ggui
 		dl->PopClipRect();
 
 		// ---- input area
+		// ImGuizmo only takes a click while no item is hovered or active. So while the mouse is on the gizmo the
+		// view is not a button ( which would take the click and drive the camera ) but a plain rectangle.
 		ImGui::SetCursorScreenPos(image_pos);
-		ImGui::InvisibleButton("##vp_nav", ImVec2(static_cast<float>(width), static_cast<float>(height)),
-			ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+
+		if (m->gizmo_hover || m->gizmo_active)
+		{
+			ImGui::Dummy(ImVec2(static_cast<float>(width), static_cast<float>(height)));
+		}
+		else
+		{
+			ImGui::InvisibleButton("##vp_nav", ImVec2(static_cast<float>(width), static_cast<float>(height)),
+				ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+		}
 
 		const bool hovered = ImGui::IsItemHovered();
 		const bool active = ImGui::IsItemActive();
@@ -1746,6 +1758,7 @@ namespace ggui
 
 		// ---- gizmo on the selection of the document: it wins over driving the camera
 		const bool gizmo_busy = m->draw_gizmo(dl, image_pos, width, height);
+		m->gizmo_hover = gizmo_busy;
 
 		// ---- navigation and picking
 		{

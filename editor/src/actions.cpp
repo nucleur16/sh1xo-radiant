@@ -139,6 +139,43 @@ namespace editor::ui
 		}
 	}
 
+	// ---- injected input ( development aid ) ----------------------------------------------------------------
+
+	namespace
+	{
+		bool g_inject_mouse = false;
+		ImVec2 g_inject_pos = {};
+
+		ImGuiKey key_by_name(const std::string& name)
+		{
+			if (name.size() == 1 && name[0] >= 'a' && name[0] <= 'z') { return static_cast<ImGuiKey>(ImGuiKey_A + (name[0] - 'a')); }
+			if (name.size() == 1 && name[0] >= '0' && name[0] <= '9') { return static_cast<ImGuiKey>(ImGuiKey_0 + (name[0] - '0')); }
+
+			static const std::pair<const char*, ImGuiKey> names[] = {
+				{ "space", ImGuiKey_Space }, { "enter", ImGuiKey_Enter }, { "escape", ImGuiKey_Escape }, { "delete", ImGuiKey_Delete },
+				{ "backspace", ImGuiKey_Backspace }, { "tab", ImGuiKey_Tab }, { "left", ImGuiKey_LeftArrow }, { "right", ImGuiKey_RightArrow },
+				{ "up", ImGuiKey_UpArrow }, { "down", ImGuiKey_DownArrow }, { "pageup", ImGuiKey_PageUp }, { "pagedown", ImGuiKey_PageDown },
+				{ "home", ImGuiKey_Home }, { "[", ImGuiKey_LeftBracket }, { "]", ImGuiKey_RightBracket },
+				{ "ctrl", ImGuiKey_ModCtrl }, { "shift", ImGuiKey_ModShift }, { "alt", ImGuiKey_ModAlt } };
+
+			for (const auto& [text, key] : names)
+			{
+				if (name == text) { return key; }
+			}
+
+			return ImGuiKey_None;
+		}
+	}
+
+	void apply_injected_input()
+	{
+		// the backend reports the real cursor every frame: the injected position comes after it and wins
+		if (g_inject_mouse)
+		{
+			ImGui::GetIO().AddMousePosEvent(g_inject_pos.x, g_inject_pos.y);
+		}
+	}
+
 	bool report(const bool ok, const char* action)
 	{
 		if (!ok)
@@ -636,6 +673,12 @@ namespace editor::ui
 			return;
 		}
 
+		// the script workbench and the game window have their own keys
+		if (const auto* focused = ImGui::GetCurrentContext()->NavWindow; focused && std::strstr(focused->Name, "##codol_window"))
+		{
+			return;
+		}
+
 		const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
 		const auto pressed = [](const ImGuiKey key, const bool repeat = false) { return ImGui::IsKeyPressed(key, repeat); };
 
@@ -670,6 +713,13 @@ namespace editor::ui
 		if (ctrl && alt)
 		{
 			if (pressed(ImGuiKey_E)) { select_whole_entities(); }
+			return;
+		}
+
+		// Keys without Ctrl belong to the view the mouse is over: Space or Delete typed anywhere else ( a list, a
+		// button that has the focus ) must not change the map.
+		if (!st.hovered_3d && st.hovered_2d < 0)
+		{
 			return;
 		}
 
@@ -1233,6 +1283,54 @@ namespace editor::ui
 
 		// view2d <axis|center|zoom|fit|new|click|drag|rect> ..: the 2D views ( grid_view.cpp )
 		command::register_command("view2d", [](args_t args) { grid_view_command(args); });
+
+		// ---- injected input: ui_mouse <x> <y> | down [button] | up [button] | wheel <d> | off;  ui_key <name> [down|up];
+		// ui_text <characters>. Positions are pixels of the window. Without "down" / "up" a key is pressed and released.
+		command::register_command("ui_mouse", [](args_t args)
+		{
+			auto& io = ImGui::GetIO();
+			const std::string what = args.size() > 1 ? args[1] : "";
+
+			if (what == "down" || what == "up")
+			{
+				io.AddMouseButtonEvent(args.size() > 2 ? std::atoi(args[2].c_str()) : 0, what == "down");
+			}
+			else if (what == "wheel")
+			{
+				io.AddMouseWheelEvent(0.0f, static_cast<float>(number(args, 2, 1.0)));
+			}
+			else if (what == "off")
+			{
+				g_inject_mouse = false;
+			}
+			else if (args.size() > 2)
+			{
+				g_inject_mouse = true;
+				g_inject_pos = ImVec2(static_cast<float>(number(args, 1)), static_cast<float>(number(args, 2)));
+				io.AddMousePosEvent(g_inject_pos.x, g_inject_pos.y);
+			}
+		});
+
+		command::register_command("ui_key", [](args_t args)
+		{
+			const ImGuiKey key = args.size() > 1 ? key_by_name(args[1]) : ImGuiKey_None;
+			if (key == ImGuiKey_None)
+			{
+				game::printf_to_console("usage: ui_key <a..z | 0..9 | space enter escape delete backspace tab left right up down pageup pagedown home [ ] ctrl shift alt> [down|up]\n");
+				return;
+			}
+
+			auto& io = ImGui::GetIO();
+			const std::string state = args.size() > 2 ? args[2] : "";
+
+			if (state != "up") { io.AddKeyEvent(key, true); }
+			if (state != "down") { io.AddKeyEvent(key, false); }
+		});
+
+		command::register_command("ui_text", [](args_t args)
+		{
+			if (args.size() > 1) { ImGui::GetIO().AddInputCharactersUTF8(args[1].c_str()); }
+		});
 
 		command::register_command("help", [](args_t)
 		{

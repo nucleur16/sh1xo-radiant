@@ -129,7 +129,9 @@ namespace editor
 		{
 			const auto model = e.value("model");
 
-			if (const auto it = links_.find(e.id); it != links_.end() && it->second.has_box && model == it->second.base_model)
+			// the box of the object in the zone, as long as the entity is turned and scaled as it is there
+			if (const auto it = links_.find(e.id); it != links_.end() && it->second.has_box && model == it->second.base_model
+				&& (it->second.brush_model || (same_vec(e.angles(), it->second.base_angles) && std::fabs(model_scale(e) - it->second.base_scale) < 1e-6)))
 			{
 				box = it->second.local_box;
 				return true;
@@ -856,6 +858,7 @@ namespace editor
 		// ---- links
 		int mismatched = 0;
 		std::size_t static_cursor = 0;
+		std::unordered_set<int> used_statics, used_entities;
 
 		for (const object_id id : doc.entities())
 		{
@@ -876,6 +879,7 @@ namespace editor
 					{
 						link.refs.push_back({ view::object_kind::static_model, k });
 						link.is_static = true;
+						used_statics.insert(k);
 					}
 					else
 					{
@@ -895,6 +899,7 @@ namespace editor
 				if (const auto it = by_entity.find(index); it != by_entity.end() && base)
 				{
 					link.refs = it->second;
+					used_entities.insert(index);
 				}
 			}
 
@@ -947,6 +952,37 @@ namespace editor
 						import_revision_.emplace(child, doc.revision(child));
 					}
 				}
+			}
+		}
+
+		// What the zone has and the document does not: deleted before the map was saved. No entity will ever show
+		// these objects again, so they are hidden here.
+		if (!fresh_import)
+		{
+			int gone = 0;
+
+			for (std::size_t k = 0; k < static_names.size(); k++)
+			{
+				if (!used_statics.contains(static_cast<int>(k)) && k < base_statics.size())
+				{
+					gone += renderer.set_hidden({ view::object_kind::static_model, static_cast<int>(k) }, true);
+				}
+			}
+
+			for (const auto& [index, refs] : by_entity)
+			{
+				if (!used_entities.contains(index))
+				{
+					for (const auto& ref : refs)
+					{
+						gone += renderer.set_hidden(ref, true);
+					}
+				}
+			}
+
+			if (gone)
+			{
+				game::printf_to_console("[CoDOL] %d object(s) of the zone have no entity in the map any more ( deleted ): hidden\n", gone);
 			}
 		}
 

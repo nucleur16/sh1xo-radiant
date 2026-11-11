@@ -202,7 +202,8 @@ namespace editor::ui
 			ImGui::OpenPopup("##create_entity");
 		}
 
-		ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f));
+		// a fixed size: the popup is placed where it fits on the screen
+		ImGui::SetNextWindowSize(ImVec2(380.0f, 420.0f));
 
 		if (!ImGui::BeginPopup("##create_entity"))
 		{
@@ -226,7 +227,7 @@ namespace editor::ui
 		ImGui::SetNextItemWidth(-1.0f);
 		ImGui::InputTextWithHint("##create_filter", "class name", &st.create_filter);
 
-		if (const auto* info = class_picker(st.create_filter, 360.0f, has_brush))
+		if (const auto* info = class_picker(st.create_filter, 0.0f, has_brush))
 		{
 			const object_id id = s.create_entity(info->name, st.create_position);
 			report(id != edit::no_object, "Create entity");
