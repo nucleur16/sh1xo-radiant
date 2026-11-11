@@ -22,7 +22,9 @@ and adds a **CoDOL** menu.
 | Player animations | Structured view of `mp/playeranim.script` (defines, states, movement types, conditions, events) with jump-to-line, checked against `animtrees/multiplayer.atr`. |
 | Scripted animations | Per-script tables of `level.scr_anim[..]` / `scr_model` / `scr_animtree` entries and `anim_*` calls, the governing `#using_animtree` for the cursor line, and an animtree browser. |
 | Validation | A `%anim` that is not in its animtree is an error (the server would append it and shift every later index: T-pose / wrong clips). Optional: animations the game does not ship are warnings. |
-| Map entities | Import the entities of a shipped map zone into radiant, edit them, export a server-side override (`<scripts>/maps/mp/<map>.d3dbsp.ents`). Unedited entities export byte-identical to the zone. |
+| Map import | One click turns a shipped map into an editable radiant map: every collision brush with the material of each side, brush entities with their real brushes, every static model as a `misc_model`, and all entities. `mp_killhouse_sh`: 27,032 world brushes, 640 brushes in 280 brush entities, 16,335 static models, 1,967 entities. |
+| Materials | The materials and textures of an imported map are converted for radiant (CoD4 raw materials + DXT `.iwi`), so brush sides show the game's textures. Stock CoD4 materials of the same name are kept. |
+| Map entities | Edited entities are exported as a server-side override (`<scripts>/maps/mp/<map>.d3dbsp.ents`). Unedited entities export byte-identical to the zone. |
 | Hot reload | rcon to the local dedicated server: reload the level when a script is saved, load a map after an entity export. Optional pre-check command. |
 | Game window | The window of the running game client can be docked inside radiant (CoDOL > Game Window) and handed back. |
 | Asset layouts | `src/codol/c1_layouts.hpp`: the 1.1.1.13 zone layouts (XModel, XSurface, Material, techset, GfxImage, XAnimParts, clipMap, GfxWorld, MapEnts, ...) as C++ structs, every size and named offset checked at compile time. |
@@ -31,16 +33,22 @@ and adds a **CoDOL** menu.
 
 Be aware of these before planning work around this branch:
 
-- **No CoDOL bsp compiler.** Nothing compiles a `.map` into a 1.1.1.13 map zone. `cod4map` / `cod4rad`
-  / `linker_pc` still produce CoD4 output. World geometry, static models and lighting of a CoDOL map
-  can therefore not be changed from radiant; only its entities can (see [Map Entities](#map-entities)).
-- **No CoDOL asset loading.** Radiant itself is still the CoD4 radiant process: it loads CoD4 xmodels,
-  materials and images from `raw/` and `main/`. CoDOL models and textures do not show up; a
-  `script_model` whose model only exists in CoDOL is drawn as a placeholder box. The layouts in
-  `c1_layouts.hpp` are the foundation for an importer but no zone reader uses them yet apart from
-  the `MapEnts` asset.
-- **No world preview of CoDOL maps.** Imported entities float in empty space. The d3dbsp viewer
-  only understands CoD4 d3dbsp files.
+- **No way back into the game for geometry.** A shipped map can be opened and edited, but nothing
+  compiles a `.map` into a 1.1.1.13 map zone, so edits to brushes and static models stay in radiant;
+  only entity edits reach the game (see [Map Entities](#map-entities)). The chain that could do it is
+  `cod4map` / `cod4rad` -> `linker_pc` -> an IW3 to IW4 map converter -> IW4x zonebuilder ->
+  AssetExplorer `iw4-port`. Everything except the IW3 to IW4 converter (iw3x-port) is on this
+  machine.
+- **CoDOL models are not converted yet.** Radiant is still the CoD4 radiant process and loads
+  xmodels from `raw/`. A model that CoD4 also has under the same name is drawn (as the CoD4 model);
+  a CoDOL-only model is a placeholder box. The route is known: the asset tool writes
+  `XMODEL_EXPORT`, the mod tools' `converter.exe -single xmodel <name>` compiles it from a GDT entry.
+- **Brush texture alignment is not recovered.** Sides get the right material but a default
+  projection (`64 64 0 0 0 0`), so textures are scaled and shifted differently than in the game.
+- **Only brush geometry is imported.** Terrain, patches and decals exist in the game as render
+  surfaces without a brush; they are not in the imported map.
+- **Materials are simplified.** Each converted material uses the colour map only, with the render
+  state of a stock opaque / alpha tested / blended CoD4 material. Textures are capped at 512 pixels.
 - **Entity overrides are mp only.** The server applies `<map>.d3dbsp.ents` in mp matches; co-op and
   zombies compose their own entities.
 
@@ -117,8 +125,16 @@ radiant today.
 
 1. **Import** a map: pick a zone of the install or an override that already exists in the script
    folder, or give a file (`.ff`, a decrypted `.zone`, a `.d3dbsp.ents`, plain entity text).
-   A `.ff` is decrypted with the asset tool. The entities are written to
+   A `.ff` is decrypted with the asset tool. The map is written to
    `<root>/map_source/codol/<map>.map` and opened.
+   - *with geometry* (default, needs the asset tool and the install folder): the asset tool exports
+     the brushes and static model placements of the map, `bin/codol_mapconv.exe` rebuilds the map.
+     Brushes that only have tool materials (clip, hint, mantle, ...) are on the layer `codol_tools`
+     so they can be hidden. Static models are `misc_model`s marked `codol_static`.
+   - *convert materials* (default): the asset tool exports the render world with its textures and
+     `bin/codol_assetconv.exe` writes `raw/materials/<name>` and `raw/images/codol_<image>.iwi`.
+   - Without geometry only the entities are imported, as points.
+   The first import of a session takes about a minute longer (the asset tool indexes every zone).
 2. **Edit** in radiant.
 3. **Save + export override**: writes `<script folder>/maps/mp/<map>.d3dbsp.ents` and, if enabled,
    sends `map <map>` to the local server. A file that was already there is kept once as `.bak`.
@@ -126,14 +142,18 @@ radiant today.
 How entities are represented:
 
 - Point entities are what they are in the game.
-- An entity that uses a hull compiled into the zone (`"model" "*N"` brush model, `"model" "?N"`
-  trigger hull) becomes a `codol_bmodel` point entity; its real class is kept in `codol_classname`.
+- With geometry, an entity with a brush model (`"model" "*N"`) is a real brush entity with the
+  brushes of that model. Its brushes are for looking at: the exported entity still names the
+  compiled model.
+- A trigger hull (`"model" "?N"`), and any brush model without geometry, becomes a `codol_bmodel`
+  point entity; its real class is kept in `codol_classname`, the hull in `codol_model`.
   It can be moved (hull bounds are relative to the origin), re-keyed, deleted or copied. New hulls
   cannot be made. A `?N` that the zone does not have is skipped on export with a warning, because
   the server rejects the whole override otherwise.
 - The worldspawn carries `codol_map`, `codol_base_crc32` (CRC-32 of the zone's entity string; the
   server only uses an override made for the zone it has mounted) and `codol_trigger_models`.
-- Brushes drawn in radiant, `misc_model` and `misc_prefab` are not exported (a warning says so).
+- New brush entities drawn in radiant, `misc_model` and `misc_prefab` are not exported (a warning
+  says so); the static models of the import are skipped silently.
 
 Radiant rewrites entities when it saves, even untouched ones: origins are rounded to one decimal,
 classes it knows from CoD4 get their `model` replaced, point entities gain an `origin`. So right
@@ -183,6 +203,8 @@ up, `CODOL_AUTOSHOT=<file.png>` saves the rendered UI frame to that file every t
 | `src/codol/` | Engine independent code: script lexer, animation index, map entity conversion, 1.1.1.13 layouts. No radiant or imgui dependency. |
 | `src/components/modules/codol_game.*` | rcon, reload, game window, settings |
 | `src/ggui/script_workbench.*`, `src/ggui/codol_map_ents.*` | the windows |
+| `tools/codol_mapconv` | entity string + exported brush / static model metadata -> radiant `.map` |
+| `tools/codol_assetconv` | exported material list + png -> CoD4 raw materials and `.iwi` |
 | `tests/` | unit tests for `src/codol` |
 
 ```
@@ -199,13 +221,13 @@ radiant map, a `.zone` has its `MapEnts` header validated against its entity str
 
 In the order that unlocks the most:
 
-1. **Zone reader in C++.** Container (zlib + AES-CTR, key block from the client exe) and a stream
-   walker for the 44 asset types, on top of `c1_layouts.hpp`. A zone is a sequential stream, so
-   reaching one asset means walking every asset before it.
-2. **Asset import.** XModel / XModelSurfs -> CoD4 `xmodel` / `xmodelparts` / `xmodelsurfs`,
-   GfxImage (IWI 9, wavelet formats) -> IWI 6, Material -> a CoD4 material with the closest techset.
-   That makes CoDOL models and textures visible in radiant.
-3. **World preview.** GfxWorld + clipMap -> a CoD4 d3dbsp for the built-in viewer, or clipMap
-   brushes -> reference brushes in the imported entity map.
-4. **Map compile.** CoD4 d3dbsp -> 1.1.1.13 map zone. This is the piece that would allow new
-   geometry.
+1. **Models.** `export-models --format xmodel_export` + a generated GDT + `converter.exe -single xmodel`
+   for the static models of an imported map, so `misc_model`s show the CoDOL model.
+2. **Brush texture alignment.** The asset tool recovers the UVs of brush sides from the coincident
+   render surface (in its Cast export); read them and write the texture projection of each side.
+3. **Non-brush geometry.** Terrain, patches and decals from the render world as reference models.
+4. **Map compile.** Get an IW3 to IW4 map converter (iw3x-port) and wire the chain: `cod4map` /
+   `cod4rad`, `linker_pc`, IW3 to IW4, IW4x zonebuilder, AssetExplorer `iw4-port`, install as a
+   usermap, `map <name>` over rcon. This is the step that lets edited geometry reach the game.
+5. **Zone reader in C++** on top of `c1_layouts.hpp`, to drop the dependency on the external asset
+   tool.

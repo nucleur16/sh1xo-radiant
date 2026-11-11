@@ -228,3 +228,15 @@ if(RADIANT_ROOT)
 	add_custom_command(TARGET codol_mapconv POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:codol_mapconv> ${RADIANT_ROOT}/bin)
 endif()
+# codol_assetconv: CoDOL materials + textures of a map export -> CoD4 raw materials / iwi for radiant
+add_executable(codol_assetconv tools/codol_assetconv/main.cpp)
+target_include_directories(codol_assetconv PRIVATE ${DEPS}/rapidjson/include)
+target_compile_definitions(codol_assetconv PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(codol_assetconv PRIVATE /std:c++latest /W4 /wd4996 $<$<CONFIG:Release>:/O2>)
+target_link_options(codol_assetconv PRIVATE /LARGEADDRESSAWARE)
+target_link_libraries(codol_assetconv PRIVATE windowscodecs ole32)
+add_dependencies(iw3r codol_assetconv)
+if(RADIANT_ROOT)
+	add_custom_command(TARGET codol_assetconv POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:codol_assetconv> ${RADIANT_ROOT}/bin)
+endif()

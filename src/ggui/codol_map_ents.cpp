@@ -301,7 +301,10 @@ namespace ggui
 		m_busy = true;
 		log("reading the brushes and static models of " + map_name + " ( the first export of a session scans every zone, give it a minute ) ...");
 
-		std::thread([this, tool, install, converter, out_path, work, ents_file, map_name, entity_text, trigger_models]
+		const bool with_materials = m_import_materials;
+		const std::string asset_converter = base + "\\bin\\codol_assetconv.exe";
+
+		std::thread([this, tool, install, converter, out_path, work, ents_file, map_name, entity_text, trigger_models, with_materials, asset_converter, base]
 		{
 			const std::string common = "\"" + tool + "\" export-map --game \"" + install + "\" --map " + map_name + " --out \"" + work
 				+ "\" --scale 1 --no-textures";
@@ -323,7 +326,27 @@ namespace ggui
 					+ std::to_string(trigger_models) + " --out \"" + out_path + "\"", "", summary);
 			}
 
-			components::codol_game::post_to_gui([this, code, output, summary, map_name, out_path, entity_text]
+			// materials and textures of the map, so brush sides show what the game shows
+			std::string material_summary;
+			if (code == 0 && with_materials)
+			{
+				std::string material_output;
+				int material_code = components::codol_game::run_command("\"" + tool + "\" export-map --game \"" + install + "\" --map " + map_name
+					+ " --out \"" + work + "\" --scale 1 --scope world --name world", "", material_output);
+
+				if (material_code == 0)
+				{
+					material_code = components::codol_game::run_command("\"" + asset_converter + "\" --materials \"" + exported
+						+ "\\world\\world.map.json\" --root \"" + base + "\"", "", material_summary);
+				}
+
+				if (material_code != 0)
+				{
+					material_summary = "materials were not converted ( exit code " + std::to_string(material_code) + " ): " + material_summary;
+				}
+			}
+
+			components::codol_game::post_to_gui([this, code, output, summary, map_name, out_path, entity_text, material_summary]
 			{
 				m_busy = false;
 
@@ -338,6 +361,17 @@ namespace ggui
 				while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
 				{
 					line.pop_back();
+				}
+
+				if (!material_summary.empty())
+				{
+					std::string m = material_summary;
+					while (!m.empty() && (m.back() == '\n' || m.back() == '\r'))
+					{
+						m.pop_back();
+					}
+
+					log("materials: " + m);
 				}
 
 				open_imported_map(map_name, out_path, entity_text, line);
@@ -611,6 +645,10 @@ namespace ggui
 		ImGui::EndChild();
 
 		ImGui::Checkbox("with geometry: brushes, brush entities and static models ( otherwise entities only )", &m_import_geometry);
+
+		ImGui::BeginDisabled(!m_import_geometry);
+		ImGui::Checkbox("convert the map's materials and textures for radiant ( adds about a minute )", &m_import_materials);
+		ImGui::EndDisabled();
 
 		ImGui::BeginDisabled(m_busy || m_selected < 0 || m_selected >= static_cast<int>(m_sources.size()));
 		if (ImGui::Button(m_busy ? "Working ..." : "Import selected map", ImVec2(200.0f, 0.0f)))

@@ -619,6 +619,14 @@ namespace codol::mapents
 	{
 		std::string out = "iwmap 4\n";
 
+		if (geometry)
+		{
+			// layers, the way radiant writes them
+			out += "\"000_Global\" flags  active\n\"";
+			out += mapgeo::TOOL_LAYER;
+			out += "\" flags \n\"The Map\" flags \n";
+		}
+
 		// brushes by sub model ( 0: world )
 		std::unordered_map<int, std::vector<const mapgeo::brush*>> brushes;
 		if (geometry)
@@ -642,7 +650,7 @@ namespace codol::mapents
 			int number = 0;
 			for (const auto* b : it->second)
 			{
-				mapgeo::append_brush(out, *b, number++);
+				mapgeo::append_brush(out, *b, number++, (sub_model == 0 && mapgeo::is_tool_brush(*b)) ? mapgeo::TOOL_LAYER : nullptr);
 			}
 		};
 

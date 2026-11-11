@@ -53,8 +53,14 @@ namespace codol::mapgeo
 	// " ( x y z ) ( x y z ) ( x y z ) material 64 64 0 0 0 0 lightmap_gray 16384 16384 0 0 0 0" for one side
 	std::string side_to_map_line(const brush_side& side);
 
-	// "// brush N\n{\n ...sides... }\n"
-	void append_brush(std::string& out, const brush& b, int number);
+	// "// brush N\n{\n [layer] ...sides... }\n"
+	void append_brush(std::string& out, const brush& b, int number, const char* layer = nullptr);
+
+	// layer of the brushes that only have tool materials ( clip, hint, mantle, nosight .. ): they fill a map with
+	// volumes that hide everything else, so they get a layer of their own that can be hidden in one click
+	inline constexpr const char* TOOL_LAYER = "000_Global/codol_tools";
+	bool is_tool_material(std::string_view name);
+	bool is_tool_brush(const brush& b);
 
 	// format a coordinate the way radiant does: no exponent, no trailing zeros
 	std::string format_number(double value);

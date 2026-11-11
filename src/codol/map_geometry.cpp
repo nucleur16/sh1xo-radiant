@@ -356,9 +356,47 @@ namespace codol::mapgeo
 			+ " 64 64 0 0 0 0 lightmap_gray 16384 16384 0 0 0 0";
 	}
 
-	void append_brush(std::string& out, const brush& b, const int number)
+	bool is_tool_material(std::string_view name)
+	{
+		static constexpr std::string_view words[] =
+		{
+			"clip", "hint", "mantle", "nosight", "portal", "ladder", "trigger", "caulk", "nodraw", "skip", "lightgrid", "aitrig",
+		};
+
+		for (const auto& word : words)
+		{
+			if (name.find(word) != std::string_view::npos)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool is_tool_brush(const brush& b)
+	{
+		for (const auto& side : b.sides)
+		{
+			if (!is_tool_material(side.material))
+			{
+				return false;
+			}
+		}
+
+		return !b.sides.empty();
+	}
+
+	void append_brush(std::string& out, const brush& b, const int number, const char* layer)
 	{
 		out += "// brush " + std::to_string(number) + "\n{\n";
+
+		if (layer)
+		{
+			out += "layer \"";
+			out += layer;
+			out += "\"\n";
+		}
 
 		for (const auto& side : b.sides)
 		{
