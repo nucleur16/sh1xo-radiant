@@ -235,3 +235,8 @@ set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(codol_zone)
 target_link_libraries(iw3r PRIVATE codol_zone)
 target_link_libraries(codol_mapconv PRIVATE codol_zone)
+
+# codol_render: device independent core of the native CoDOL viewport ( its tests and check tool are only built
+# standalone: cmake -S codol_render -B <dir> -A Win32|x64 )
+add_subdirectory(codol_render)
+target_link_libraries(iw3r PRIVATE codol_render)
