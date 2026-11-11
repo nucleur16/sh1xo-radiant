@@ -39,6 +39,12 @@ namespace editor
 			m[15] = 1.0f;
 		}
 
+		// a value of a float field of the gui, without the noise of the float ( 350.762 stays 350.762 in a key )
+		double field_value(const float v)
+		{
+			return std::round(static_cast<double>(v) * 1e4) / 1e4;
+		}
+
 		const char* kind_name(const view::object_kind kind)
 		{
 			switch (kind)
@@ -119,8 +125,6 @@ namespace ggui
 	// state of the 3D view ( the dialog's impl; a named type so that the console commands can reach it )
 	struct viewport_state
 	{
-		std::string error;
-
 		bool world = true;
 		bool static_models = true;
 		bool entity_models = true;
@@ -990,7 +994,7 @@ namespace ggui
 
 			if (changed)
 			{
-				step("Move", [&] { s.translate({ position[0] - pivot.x, position[1] - pivot.y, position[2] - pivot.z }); });
+				step("Move", [&] { s.translate({ editor::field_value(position[0]) - pivot.x, editor::field_value(position[1]) - pivot.y, editor::field_value(position[2]) - pivot.z }); });
 			}
 		}
 
@@ -1012,7 +1016,7 @@ namespace ggui
 
 			if (changed)
 			{
-				step("Rotate", [&] { doc.set_key(id, "angles", edit::format_key_vec3({ angles[0], angles[1], angles[2] })); });
+				step("Rotate", [&] { doc.set_key(id, "angles", edit::format_key_vec3({ editor::field_value(angles[0]), editor::field_value(angles[1]), editor::field_value(angles[2]) })); });
 			}
 
 			if (!doc.find_entity(id)->value("model").empty())
@@ -1029,7 +1033,7 @@ namespace ggui
 
 				if (changed)
 				{
-					step("Scale", [&] { doc.set_key(id, "modelscale", edit::format_key_number(std::clamp(scale, 0.01f, 100.0f))); });
+					step("Scale", [&] { doc.set_key(id, "modelscale", edit::format_key_number(editor::field_value(std::clamp(scale, 0.01f, 100.0f)))); });
 				}
 			}
 		}
@@ -1879,7 +1883,8 @@ namespace ggui
 		// ---- hint
 		if (hovered && !active && !gizmo_busy)
 		{
-			const char* hint = "Click: select ( Ctrl / Shift adds, both: face )    Right click: create entity    Right drag: look + W A S D    Left drag: drive    Middle: pan    W E R: move / rotate / scale    Arrows: nudge    Space: clone";
+			const char* hint = "Click: select ( Ctrl / Shift adds, both: face )    Right click: create entity    W E R: move / rotate / scale    Arrows: nudge    Space: clone\n"
+				"Right drag: look + W A S D    Left drag: drive    Middle drag: pan    Wheel: forward / back    F: go to the selection";
 			const ImVec2 size = ImGui::CalcTextSize(hint);
 			const ImVec2 at(image_pos.x + 8.0f, image_pos.y + static_cast<float>(height) - size.y - 10.0f);
 
