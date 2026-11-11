@@ -191,3 +191,17 @@ if(RADIANT_ROOT)
 			${PHYSX_BINDIR}/PhysXCooking_32.dll ${PHYSX_BINDIR}/PhysXFoundation_32.dll
 			${RADIANT_ROOT}/bin)
 endif()
+
+# ---------------------------------------------------------------------------
+# unit tests for the engine independent CoDOL code ( no radiant needed )
+#   ctest --test-dir build-cmake -C Release
+#   build-cmake/Release/codol_tests.exe [path-to-codol_rawfiles]
+
+enable_testing()
+add_executable(codol_tests
+	tests/codol_tests.cpp
+	src/codol/script_lex.cpp
+	src/codol/anim_index.cpp)
+target_include_directories(codol_tests PRIVATE tests/stub src)
+target_compile_options(codol_tests PRIVATE /std:c++latest /W4 /wd4996)
+add_test(NAME codol_tests COMMAND codol_tests)

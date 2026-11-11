@@ -1,0 +1,397 @@
+// Unit tests for the engine independent CoDOL script code.
+// Usage: codol_tests [path-to-a-rawfiles-tree]
+// With a path, the whole tree is indexed as a smoke test and a summary is printed.
+
+#include "std_include.hpp"
+
+#include <chrono>
+#include <cstdio>
+
+using namespace codol::script;
+
+static int g_failed = 0;
+static int g_checks = 0;
+
+#define CHECK(expr) do { g_checks++; if (!(expr)) { g_failed++; std::printf("FAILED %s:%d  %s\n", __FILE__, __LINE__, #expr); } } while (0)
+
+static std::vector<span> lex(lang l, std::string_view line, std::uint8_t* state_io = nullptr)
+{
+	std::uint8_t state = state_io ? *state_io : static_cast<std::uint8_t>(LS_NONE);
+	std::vector<span> out;
+	lex_line(l, line, state, out);
+
+	if (state_io)
+	{
+		*state_io = state;
+	}
+
+	return out;
+}
+
+static bool has(const std::vector<span>& spans, std::string_view line, tok kind, std::string_view text)
+{
+	for (const auto& s : spans)
+	{
+		if (s.kind == kind && line.substr(s.start, s.len) == text)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static void test_lexer()
+{
+	{
+		const std::string_view line = "\tlevel.scr_anim[ \"foley\" ][ \"intro\" ] = %training_intro; // hi";
+		const auto s = lex(lang::gsc, line);
+		CHECK(has(s, line, tok::builtin, "level"));
+		CHECK(has(s, line, tok::string, "\"foley\""));
+		CHECK(has(s, line, tok::anim, "%training_intro"));
+		CHECK(has(s, line, tok::comment, "// hi"));
+	}
+
+	{
+		// modulo is not an anim reference
+		const std::string_view line = "x = a %b; y = ( c ) %d; z = 10 %e; return %f;";
+		const auto s = lex(lang::gsc, line);
+		CHECK(!has(s, line, tok::anim, "%b"));
+		CHECK(!has(s, line, tok::anim, "%d"));
+		CHECK(!has(s, line, tok::anim, "%e"));
+		CHECK(has(s, line, tok::anim, "%f"));
+	}
+
+	{
+		const std::string_view line = "#using_animtree( \"generic_human\" ); self thread maps\\mp\\_utility::foo( ::bar, &\"MP_STR\" );";
+		const auto s = lex(lang::gsc, line);
+		CHECK(has(s, line, tok::preproc, "#using_animtree"));
+		CHECK(has(s, line, tok::keyword, "thread"));
+		CHECK(has(s, line, tok::funcref, "maps\\mp\\_utility::foo"));
+		CHECK(has(s, line, tok::funcref, "::bar"));
+		CHECK(has(s, line, tok::localized, "&\"MP_STR\""));
+	}
+
+	{
+		// block comments span lines, "/*/" does not close itself
+		std::uint8_t state = LS_NONE;
+		auto s = lex(lang::gsc, "a = 1; /*/ still comment", &state);
+		CHECK(state & LS_BLOCK_COMMENT);
+		const std::string_view l2 = "more */ wait 0.05;";
+		s = lex(lang::gsc, l2, &state);
+		CHECK(!(state & LS_BLOCK_COMMENT));
+		CHECK(has(s, l2, tok::comment, "more */"));
+		CHECK(has(s, l2, tok::keyword, "wait"));
+		CHECK(has(s, l2, tok::number, "0.05"));
+	}
+
+	{
+		std::uint8_t state = LS_NONE;
+		lex(lang::gsc, "/#", &state);
+		CHECK(state & LS_DEV_BLOCK);
+		lex(lang::gsc, "#/", &state);
+		CHECK(state == LS_NONE);
+	}
+
+	{
+		const std::string_view line = "\tplayerAnimType pistol, movetype prone";
+		const auto s = lex(lang::playeranim, line);
+		CHECK(has(s, line, tok::keyword, "playerAnimType"));
+		CHECK(has(s, line, tok::keyword, "movetype"));
+		CHECK(has(lex(lang::playeranim, "ANIMATIONS"), "ANIMATIONS", tok::section, "ANIMATIONS"));
+	}
+
+	CHECK(lang_from_path("maps/mp/_load.GSC") == lang::gsc);
+	CHECK(lang_from_path("animtrees/multiplayer.atr") == lang::atr);
+	CHECK(lang_from_path("mp/playeranim.script") == lang::playeranim);
+	CHECK(lang_from_path("mp/statstable.csv") == lang::csv);
+	CHECK(lang_from_path("README") == lang::plain);
+}
+
+static void test_animtree()
+{
+	animtree tree;
+	const bool ok = parse_animtree(
+		"// comment\n"
+		"code\n"
+		"{\n"
+		"\tmain\n"
+		"\t{\n"
+		"\t\ttorso { pt_stand_shoot /* inline */ pt_crouch_shoot }\n"
+		"\t\tpb_stand_alert // trailing\n"
+		"\t}\n"
+		"}\n", tree);
+
+	CHECK(ok);
+	CHECK(tree.nodes.size() == 6);
+	CHECK(tree.contains("PT_STAND_SHOOT"));
+	CHECK(tree.contains("pb_stand_alert"));
+	CHECK(!tree.contains("inline"));
+	CHECK(tree.nodes[0].group && tree.nodes[0].name == "code" && tree.nodes[0].depth == 0);
+	CHECK(tree.nodes[3].name == "pt_stand_shoot" && tree.nodes[3].depth == 3 && !tree.nodes[3].group && tree.nodes[3].line == 6);
+	CHECK(tree.nodes[5].name == "pb_stand_alert" && tree.nodes[5].depth == 2 && tree.nodes[tree.nodes[5].parent].name == "main");
+
+	animtree flagged;
+	CHECK(parse_animtree("look_2 : additive\n{\n look_down\n}\nrun : complete nonloopsync { run_a }\n", flagged));
+	CHECK(flagged.nodes.size() == 4 && flagged.nodes[0].flags == "additive" && flagged.nodes[0].group && flagged.nodes[2].flags == "complete nonloopsync");
+	CHECK(!flagged.contains(":") && !flagged.contains("additive"));
+
+	animtree bad;
+	CHECK(!parse_animtree("a { b b }\n}\n", bad));
+	CHECK(bad.errors.size() == 1 && bad.warnings.size() == 1); // unmatched brace + duplicate
+}
+
+static void test_playeranim()
+{
+	playeranim pa;
+	const bool ok = parse_playeranim(
+		"DEFINES\n"
+		"set movetype crouching = idlecr AND runcr\n"
+		"\n"
+		"ANIMATIONS\n"
+		"state combat\n"
+		"{\n"
+		"\tidle\n"
+		"\t{\n"
+		"\t\tplayerAnimType pistol, movetype crouching\n"
+		"\t\t{\n"
+		"\t\t\tboth pb_crouch_alert_pistol\n"
+		"\t\t\ttorso pt_stand_shoot sound weap_fire // c\n"
+		"\t\t}\n"
+		"\t\tdefault { legs pl_stand }\n"
+		"\t}\n"
+		"}\n"
+		"EVENTS\n"
+		"fireweapon\n"
+		"{\n"
+		"\tdefault\n"
+		"\t{\n"
+		"\t\ttorso pt_stand_shoot\n"
+		"\t}\n"
+		"}\n", pa);
+
+	CHECK(ok);
+	CHECK(pa.sections.size() == 3);
+	CHECK(pa.defines.size() == 1 && pa.defines[0].type == "movetype" && pa.defines[0].name == "crouching" && pa.defines[0].value == "idlecr AND runcr");
+	CHECK(pa.blocks.size() == 6);
+	CHECK(pa.command_count == 4);
+
+	if (pa.blocks.size() == 6)
+	{
+		CHECK(pa.blocks[0].label == "state combat" && pa.blocks[0].section == "ANIMATIONS" && pa.blocks[0].line == 5);
+		CHECK(pa.blocks[2].label == "playerAnimType pistol, movetype crouching" && pa.blocks[2].depth == 2);
+		CHECK(pa.blocks[2].commands.size() == 2);
+		CHECK(pa.blocks[2].commands[0].part == "both" && pa.blocks[2].commands[0].anim == "pb_crouch_alert_pistol" && pa.blocks[2].commands[0].line == 11);
+		CHECK(pa.blocks[2].commands[1].extra == "sound weap_fire");
+		CHECK(pa.blocks[3].label == "default" && pa.blocks[3].commands.size() == 1 && pa.blocks[3].commands[0].anim == "pl_stand");
+		CHECK(pa.blocks[4].section == "EVENTS" && pa.blocks[4].label == "fireweapon");
+		CHECK(pa.block_path(2) == "ANIMATIONS > state combat > idle > playerAnimType pistol, movetype crouching");
+	}
+
+	playeranim bad;
+	CHECK(!parse_playeranim("ANIMATIONS\nstate x\n{\n idle\n {\n", bad));
+}
+
+static void test_gsc_scan()
+{
+	gsc_file f;
+	scan_gsc(
+		"#include maps\\_utility;\n"
+		"#using_animtree( \"generic_human\" );\n"
+		"main()\n"
+		"{\n"
+		"\tlevel.scr_anim[ \"foley\" ][ \"intro\" ] = %training_intro_foley; // %not_an_anim\n"
+		"\tlevel.scr_anim[ \"generic\" ][ \"idle\" ][ 0 ] = %patrol_idle;\n"
+		"\tlevel.scr_animtree[ \"foley\" ] = #animtree;\n"
+		"\tx = 10 % count; s = \"100%sure\";\n"
+		"\tif ( level.scr_anim[ \"a\" ][ \"b\" ] == %cmp_anim ) return;\n"
+		"\tnode thread anim_loop_solo( guy, \"idle\", \"stop_idle\" );\n"
+		"}\n"
+		"#using_animtree( \"vehicles\" );\n"
+		"other( a, b )\n"
+		"{\n"
+		"\tself setanim( %heli_rotors, 1 );\n"
+		"}\n", f);
+
+	CHECK(f.trees.size() == 2 && f.trees[0].first == "generic_human" && f.trees[1].first == "vehicles");
+	CHECK(f.functions.size() == 2 && f.functions[0].first == "main" && f.functions[1].first == "other" && f.functions[1].second == 13);
+	CHECK(f.refs.size() == 4);
+
+	if (f.refs.size() == 4)
+	{
+		CHECK(f.refs[0].anim == "training_intro_foley" && f.refs[0].tree == "generic_human" && f.refs[0].line == 5);
+		CHECK(f.refs[2].anim == "cmp_anim");
+		CHECK(f.refs[3].anim == "heli_rotors" && f.refs[3].tree == "vehicles" && f.refs[3].line == 15);
+	}
+
+	CHECK(f.scenes.size() == 3); // the == comparison is not an assignment
+
+	if (f.scenes.size() == 3)
+	{
+		CHECK(f.scenes[0].table == "scr_anim" && f.scenes[0].animname == "foley" && f.scenes[0].scene == "intro" && f.scenes[0].value == "%training_intro_foley");
+		CHECK(f.scenes[1].index == "0" && f.scenes[1].value == "%patrol_idle");
+		CHECK(f.scenes[2].table == "scr_animtree" && f.scenes[2].value == "#animtree");
+	}
+
+	CHECK(f.calls.size() == 2);
+
+	if (f.calls.size() == 2)
+	{
+		CHECK(f.calls[0].func == "anim_loop_solo" && f.calls[0].strings.size() == 2 && f.calls[0].strings[0] == "idle" && f.calls[0].line == 10);
+		CHECK(f.calls[1].func == "setanim");
+	}
+}
+
+static void test_index(const std::string& tmp_root)
+{
+	namespace fs = std::filesystem;
+	fs::remove_all(tmp_root);
+	fs::create_directories(tmp_root + "/animtrees");
+	fs::create_directories(tmp_root + "/maps");
+	fs::create_directories(tmp_root + "/mp");
+	fs::create_directories(tmp_root + "/.git/maps");
+
+	const auto write = [&](const std::string& rel, const std::string& text)
+	{
+		std::ofstream(tmp_root + "/" + rel, std::ios::binary) << text;
+	};
+
+	write("animtrees/generic_human.atr", "root { run_fast walk_slow }\n");
+	write("animtrees/multiplayer.atr", "code { main { pb_stand pt_shoot } }\n");
+	write("mp/playeranim.script", "ANIMATIONS\nstate combat\n{\n idle\n {\n  default\n  {\n   both pb_stand\n   torso pt_missing\n  }\n }\n}\n");
+	write("maps/level_anim.gsc", "#using_animtree( \"generic_human\" );\nmain()\n{\n a = %run_fast;\n b = %not_in_tree;\n}\n");
+	write("maps/no_tree.gsc", "main()\n{\n a = %walk_slow;\n}\n");
+	write("maps/missing_tree.gsc", "#using_animtree( \"nope\" );\nmain()\n{\n a = %x;\n b = %y;\n}\n");
+	write(".git/maps/ignored.gsc", "main()\n{\n a = %ignored;\n}\n");
+
+	anim_index index;
+	index.build({ tmp_root });
+
+	CHECK(index.trees.size() == 2);
+	CHECK(index.gsc.size() == 3);
+	CHECK(index.has_player);
+	CHECK(index.total_refs == 5);
+	CHECK(index.find_tree("GENERIC_HUMAN") != nullptr);
+
+	const auto count = [&](severity sev, std::string_view needle)
+	{
+		int n = 0;
+		for (const auto& d : index.diagnostics)
+		{
+			n += (d.sev == sev && d.message.find(needle) != std::string::npos) ? 1 : 0;
+		}
+
+		return n;
+	};
+
+	CHECK(count(severity::error, "%not_in_tree is not part of animtree 'generic_human'") == 1);
+	CHECK(count(severity::error, "%walk_slow is used before any #using_animtree") == 1);
+	CHECK(count(severity::warning, "animtree 'nope'") == 1); // reported once per file
+	CHECK(count(severity::warning, "player animation 'pt_missing'") == 1);
+	CHECK(index.diagnostics.size() == 4);
+
+	// fixing the file and updating only that file clears the error
+	write("maps/level_anim.gsc", "#using_animtree( \"generic_human\" );\nmain()\n{\n a = %run_fast;\n b = %walk_slow;\n}\n");
+	index.update_file((fs::path(tmp_root) / "maps" / "level_anim.gsc").string());
+	CHECK(count(severity::error, "not_in_tree") == 0);
+	CHECK(index.diagnostics.size() == 3);
+
+	// a second root: gsc files are shadowed by the first root, animtree names are merged
+	{
+		const auto second = tmp_root + "_ref";
+		fs::remove_all(second);
+		fs::create_directories(second + "/animtrees");
+		fs::create_directories(second + "/maps");
+		std::ofstream(second + "/animtrees/generic_human.atr", std::ios::binary) << "root { zone_only_anim }\n";
+		std::ofstream(second + "/maps/level_anim.gsc", std::ios::binary) << "main()\n{\n a = %shadowed;\n}\n";
+		std::ofstream(second + "/maps/uses_zone_anim.gsc", std::ios::binary) << "#using_animtree( \"generic_human\" );\nmain()\n{\n a = %zone_only_anim;\n}\n";
+
+		anim_index two;
+		two.build({ tmp_root, second });
+		CHECK(two.gsc.size() == 4);
+		CHECK(two.find_tree("generic_human")->contains("zone_only_anim"));
+		CHECK(two.find_tree("generic_human")->merged_paths.size() == 1);
+		CHECK(two.diagnostics.size() == 3); // same findings as before, nothing from the second root
+		fs::remove_all(second);
+	}
+
+	// known xanims: anims that only exist in the tree are reported
+	index.set_known_xanims({ "run_fast", "pb_stand", "pt_shoot" });
+	index.validate();
+	CHECK(count(severity::warning, "'walk_slow' is in animtree 'generic_human' but the game has no xanim") == 1);
+
+	fs::remove_all(tmp_root);
+}
+
+static void smoke_real_tree(const std::string& root)
+{
+	const auto t0 = std::chrono::steady_clock::now();
+
+	anim_index index;
+	index.build({ root });
+
+	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+
+	std::size_t errors = 0, warnings = 0, calls = 0, anim_files = 0, nodes = 0;
+	for (const auto& d : index.diagnostics)
+	{
+		(d.sev == severity::error ? errors : warnings)++;
+	}
+
+	for (const auto& [rel, file] : index.gsc)
+	{
+		calls += file.calls.size();
+		anim_files += file.has_anim_content() ? 1 : 0;
+	}
+
+	for (const auto& [name, tree] : index.trees)
+	{
+		nodes += tree.nodes.size();
+	}
+
+	std::printf("\n-- %s\n", root.c_str());
+	std::printf("   indexed in %lld ms\n", static_cast<long long>(ms));
+	std::printf("   animtrees: %zu ( %zu nodes )\n", index.trees.size(), nodes);
+	std::printf("   gsc files: %zu ( %zu with animation content )\n", index.gsc.size(), anim_files);
+	std::printf("   %%anim refs: %zu, scr_* table entries: %zu, anim calls: %zu\n", index.total_refs, index.total_scenes, calls);
+
+	if (index.has_player)
+	{
+		std::printf("   playeranim.script: %zu defines, %zu blocks, %zu commands, %zu parse errors\n",
+			index.player.defines.size(), index.player.blocks.size(), index.player.command_count, index.player.errors.size());
+	}
+
+	std::printf("   diagnostics: %zu errors, %zu warnings\n", errors, warnings);
+
+	int shown = 0;
+	for (const auto& d : index.diagnostics)
+	{
+		if (shown++ >= (std::getenv("CODOL_TESTS_ALL") ? 100000 : 12))
+		{
+			break;
+		}
+
+		std::printf("     [%s] %s:%d  %s\n", d.sev == severity::error ? "E" : "W",
+			relative_slash_path(root, d.path).c_str(), d.line, d.message.c_str());
+	}
+
+	CHECK(!index.trees.empty());
+	CHECK(!index.gsc.empty());
+}
+
+int main(int argc, char** argv)
+{
+	test_lexer();
+	test_animtree();
+	test_playeranim();
+	test_gsc_scan();
+	test_index((std::filesystem::temp_directory_path() / "codol_tests_tree").string());
+
+	for (int i = 1; i < argc; i++)
+	{
+		smoke_real_tree(argv[i]);
+	}
+
+	std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
+	return g_failed ? 1 : 0;
+}

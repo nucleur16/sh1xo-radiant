@@ -64,6 +64,8 @@
 #include <chrono>
 #include <future>
 #include <unordered_map>
+#include <unordered_set>
+#include <string_view>
 #include <iostream>
 #include <filesystem>
 #pragma warning(pop)
@@ -127,6 +129,10 @@
 #include "game/functions.hpp"
 #include "utils/utils.hpp"
 #include "game/dvars.hpp"
+
+// codol ( engine independent )
+#include "codol/script_lex.hpp"
+#include "codol/anim_index.hpp"
 
 #include "fx_system/fx_dvars.hpp"
 #include "fx_system/fx_structs.hpp"
