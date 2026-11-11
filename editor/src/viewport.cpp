@@ -408,8 +408,6 @@ namespace ggui
 		auto& s = editor::get_scene();
 
 		wire_cells.clear();
-		entity_boxes.clear();
-		link_lines.clear();
 
 		// by area, so that what is behind the camera or far away is not sent to the device at all
 		constexpr float cell_size = 1024.0f;
@@ -420,6 +418,8 @@ namespace ggui
 		{
 			// New and edited brushes are drawn solid. Those of a compiled brush model cannot be ( the zone draws
 			// the model as it was compiled ): they are always shown as wires, so that an edit is never invisible.
+			// ( Selected brushes are in here as well, under their outline; while one is dragged its wire stays
+			// where the drag began. )
 			const bool edited_model = object.compiled && !object.imported;
 
 			if (!(object.imported || object.compiled) || !(all || edited_model))
@@ -453,12 +453,26 @@ namespace ggui
 				cell.lines.push_back({ p.x, p.y, p.z, color });
 			}
 		}
+	}
 
+	void viewport_state::rebuild_selection_lines()
+	{
+		auto& s = editor::get_scene();
+		auto& doc = s.doc;
+
+		selection_lines.clear();
+		model_outline.clear();
+		face_fill.clear();
+		entity_boxes.clear();
+		link_lines.clear();
+
+		// boxes of the point entities without a model ( the selected ones get theirs below ), and the target lines:
+		// both move with a drag
 		if (s.show_entity_boxes)
 		{
 			for (const auto& e : s.statics.entities)
 			{
-				if (!e.has_model)
+				if (!e.has_model && !doc.is_selected(e.id))
 				{
 					add_box(entity_boxes, e.mins, e.maxs, editor::to_d3d_color(e.color));
 				}
@@ -473,16 +487,6 @@ namespace ggui
 				link_lines.push_back({ c.to.x, c.to.y, c.to.z, 0xFFFFC0FF });
 			}
 		}
-	}
-
-	void viewport_state::rebuild_selection_lines()
-	{
-		auto& s = editor::get_scene();
-		auto& doc = s.doc;
-
-		selection_lines.clear();
-		model_outline.clear();
-		face_fill.clear();
 
 		constexpr DWORD brush_color = 0xFFFF3A20;
 		constexpr DWORD model_color = 0xFFFFA020;
@@ -703,7 +707,7 @@ namespace ggui
 		{
 			for (const auto& e : *list)
 			{
-				if (e.has_model || budget <= 0)
+				if (e.has_model || budget <= 0 || (list == &s.statics.entities && s.doc.is_selected(e.id)))
 				{
 					continue;
 				}
@@ -1556,7 +1560,7 @@ namespace ggui
 
 			if (rebuild)
 			{
-				m->built_statics = ~0ull;
+				m->built_selected = ~0ull;
 			}
 
 			ImGui::Separator();
@@ -1663,6 +1667,8 @@ namespace ggui
 		}
 
 		// ---- line buffers follow the caches of the scene
+		const auto lines_start = std::chrono::steady_clock::now();
+
 		if (m->built_statics != s.statics_serial || m->built_mode != s.show_brushes)
 		{
 			m->built_statics = s.statics_serial;
@@ -1676,18 +1682,9 @@ namespace ggui
 			m->built_inspect = s.inspecting;
 			m->built_inspect_id = s.inspected.object.id;
 			m->rebuild_selection_lines();
-
-			// connection lines move with what is dragged
-			m->link_lines.clear();
-			if (s.show_connections)
-			{
-				for (const auto& c : s.connections)
-				{
-					m->link_lines.push_back({ c.from.x, c.from.y, c.from.z, 0xFFFF40FF });
-					m->link_lines.push_back({ c.to.x, c.to.y, c.to.z, 0xFFFFC0FF });
-				}
-			}
 		}
+
+		s.slowest.view_lines = std::max(s.slowest.view_lines, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lines_start).count());
 
 		// ---- draw
 		view::frame_options frame;

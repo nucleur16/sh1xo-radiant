@@ -585,18 +585,24 @@ namespace editor
 			g_device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
 			g_device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_XRGB(20, 21, 22), 1.0f, 0);
 
+			std::chrono::steady_clock::duration capture_time{};
+
 			if (SUCCEEDED(g_device->BeginScene()))
 			{
 				ImGui::Render();
 				ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+				// the frame dump of CODOL_AUTOSHOT ( reading back and encoding a frame ) is not the editor's work
+				const auto capture_start = std::chrono::steady_clock::now();
 				components::codol_game::dev_capture_frame();
+				capture_time = std::chrono::steady_clock::now() - capture_start;
+
 				g_device->EndScene();
 			}
 
 			// the editor's own work per frame ( Present waits for the display )
 			{
 				auto& st = ui::get();
-				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_start).count();
+				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frame_start - capture_time).count();
 				st.frame_ms = st.frame_ms * 0.9 + ms * 0.1;
 				st.frame_ms_max = std::max(st.frame_ms_max, ms);
 			}

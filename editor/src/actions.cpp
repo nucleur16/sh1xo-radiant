@@ -237,7 +237,7 @@ namespace editor::ui
 
 	void select_whole_entities() { get_scene().doc.select_whole_entities(); }
 	void snap_to_grid() { report(get_scene().doc.snap_to_grid(get_scene().grid), "Snap to grid"); }
-	void csg_subtract() { report(get_scene().doc.csg_subtract(), "CSG subtract"); }
+	void csg_subtract() { report(get_scene().csg_subtract(), "CSG subtract"); }
 	void csg_hollow() { report(get_scene().doc.csg_hollow(std::max(1.0, get_scene().grid)), "CSG hollow"); }
 	void set_detail(const bool detail) { report(get_scene().doc.set_detail(detail), detail ? "Make detail" : "Make structural"); }
 	void move_to_worldspawn() { report(get_scene().doc.move_selection_to_worldspawn(), "Move to worldspawn"); }
@@ -988,7 +988,7 @@ namespace editor::ui
 		command::register_command("ed_hide", [](args_t) { if (need_map()) { hide_selected(); } });
 		command::register_command("ed_showall", [](args_t) { if (need_map()) { show_all(); } });
 		command::register_command("ed_snap", [](args_t) { if (need_map()) { print_result(get_scene().doc.snap_to_grid(get_scene().grid), "snap"); } });
-		command::register_command("ed_subtract", [](args_t) { if (need_map()) { print_result(get_scene().doc.csg_subtract(), "csg subtract"); } });
+		command::register_command("ed_subtract", [](args_t) { if (need_map()) { print_result(get_scene().csg_subtract(), "csg subtract"); } });
 		command::register_command("ed_worldspawn", [](args_t) { if (need_map()) { print_result(get_scene().doc.move_selection_to_worldspawn(), "to worldspawn"); } });
 		command::register_command("ed_connect", [](args_t) { if (need_map()) { connect_selected(); } });
 
@@ -1083,6 +1083,28 @@ namespace editor::ui
 			for (const object_id id : doc.selected_entities()) { ok |= doc.set_key(id, args[1], args[2]); }
 			doc.end_transaction();
 			print_result(ok, "set key");
+		});
+
+		// ed_keys: the keys of the selected entities ( of the worldspawn when none is selected )
+		command::register_command("ed_keys", [](args_t)
+		{
+			if (!need_map()) { return; }
+			auto& doc = get_scene().doc;
+			auto ents = doc.selected_entities();
+
+			if (ents.empty()) { ents.push_back(doc.worldspawn()); }
+
+			for (std::size_t i = 0; i < ents.size() && i < 8; i++)
+			{
+				const auto* e = doc.find_entity(ents[i]);
+				std::string line = "#" + std::to_string(ents[i]) + ":";
+
+				for (const auto& [key, value] : e->pairs) { line += "  \"" + key + "\" \"" + value + "\""; }
+				game::printf_to_console("%s\n", line.c_str());
+
+				for (const object_id id : doc.targets_of(ents[i])) { game::printf_to_console("  targets #%u\n", id); }
+				for (const object_id id : doc.targeting(ents[i])) { game::printf_to_console("  targeted by #%u\n", id); }
+			}
 		});
 
 		command::register_command("ed_delkey", [](args_t args)
@@ -1278,7 +1300,11 @@ namespace editor::ui
 			game::printf_to_console("frame: %.2f ms editor work ( max %.2f since the last ed_stats ), %.1f fps shown; renderer %.2f ms, %d draws, %lld triangles; cache: %d + %d objects, %d + %d entities, %d target lines\n",
 				st.frame_ms, st.frame_ms_max, ImGui::GetIO().Framerate, stats.cpu_ms, stats.draw_calls, static_cast<long long>(stats.triangles),
 				static_cast<int>(s.statics.objects.size()), static_cast<int>(s.selected.objects.size()), static_cast<int>(s.statics.entities.size()), static_cast<int>(s.selected.entities.size()), static_cast<int>(s.connections.size()));
+			game::printf_to_console("  slowest since the last ed_stats: document -> renderer %.2f ms, cache of everything %.2f ms, cache of the selection %.2f ms, 3D line buffers %.2f ms\n",
+				s.slowest.renderer, s.slowest.statics, s.slowest.selected, s.slowest.view_lines);
+
 			st.frame_ms_max = 0.0;
+			s.slowest = {};
 		});
 
 		// view2d <axis|center|zoom|fit|new|click|drag|rect> ..: the 2D views ( grid_view.cpp )

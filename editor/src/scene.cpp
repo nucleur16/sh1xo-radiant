@@ -87,6 +87,23 @@ namespace editor
 			return 0xFF000000u | (r << 16) | (g << 8) | b;
 		}
 
+		// The item of `id` in a cache that was built in document order: at the cursor, or a few items on when
+		// something in between is gone. ( What is new, or moved far, is simply built again. )
+		template <typename T>
+		const T* find_cached(const std::vector<T>& items, std::size_t& cursor, const object_id id)
+		{
+			for (std::size_t i = cursor; i < items.size() && i < cursor + 16; i++)
+			{
+				if (items[i].id == id)
+				{
+					cursor = i + 1;
+					return &items[i];
+				}
+			}
+
+			return nullptr;
+		}
+
 		bool same_vec(const edit::vec3& a, const edit::vec3& b)
 		{
 			return std::fabs(a.x - b.x) < 1e-4 && std::fabs(a.y - b.y) < 1e-4 && std::fabs(a.z - b.z) < 1e-4;
@@ -1233,83 +1250,133 @@ namespace editor
 		}
 	}
 
-	void scene::sync_renderer()
+	// the renderer objects of one entity; returns whether the entity is a compiled brush model
+	bool scene::sync_entity(const object_id id, const edit::entity& e)
+	{
+		const bool has_children = !e.children.empty();
+		auto it = links_.find(id);
+
+		// entities without a link only get one when they have a model to show
+		if (it == links_.end() && !has_children && is_xmodel_name(e.value("model")))
+		{
+			it = links_.emplace(id, entity_link{}).first;
+		}
+
+		// A brush model ( "model" "*N" ) is compiled into the zone: the renderer draws it, or it is invisible
+		// ( clip, triggers ). Its brushes are never drawn solid.
+		bool compiled = has_children && e.value("model").rfind('*', 0) == 0;
+
+		if (it == links_.end())
+		{
+			return compiled;
+		}
+
+		auto& link = it->second;
+		link.stamp = stamp_;
+		compiled |= link.brush_model;
+
+		bool visible = doc.is_visible(id);
+
+		// a brush model is hidden with its brushes
+		if (visible && has_children && link.brush_model)
+		{
+			visible = false;
+			for (const object_id child : e.children)
+			{
+				if (doc.is_visible(child))
+				{
+					visible = true;
+					break;
+				}
+			}
+		}
+
+		if (!link.pushed || link.revision != e.revision || link.visible != visible)
+		{
+			push_entity(e, link, visible);
+		}
+
+		return compiled;
+	}
+
+	// new and edited geometry is drawn solid ( not for a compiled brush model: the caller does not ask )
+	void scene::sync_child(const object_id child)
+	{
+		const std::uint64_t revision = doc.revision(child);
+
+		if (const auto imported = import_revision_.find(child); imported != import_revision_.end() && imported->second == revision)
+		{
+			return;
+		}
+
+		if (!doc.is_visible(child))
+		{
+			return;
+		}
+
+		auto& m = meshes_[child];
+		m.stamp = stamp_;
+
+		if (m.revision != revision)
+		{
+			rebuild_mesh(child, m);
+		}
+	}
+
+	// `selection_only`: while something is dragged only the selection changes - with tens of thousands of objects
+	// a pass over all of them on every mouse move would be felt. The full pass follows when the drag is over.
+	void scene::sync_renderer(const bool selection_only)
 	{
 		if (!renderer.loaded())
 		{
 			return;
 		}
 
+		if (selection_only)
+		{
+			partial_sync_ = true;
+
+			// the stamp stays: nothing is looked at for "gone" in this pass
+			std::unordered_map<object_id, bool> compiled_owner;
+
+			for (const object_id id : doc.selection())
+			{
+				if (const auto* e = doc.find_entity(id))
+				{
+					sync_entity(id, *e);
+					continue;
+				}
+
+				const object_id owner = doc.owner_of(id);
+				auto known = compiled_owner.find(owner);
+
+				if (known == compiled_owner.end())
+				{
+					const auto* e = doc.find_entity(owner);
+					known = compiled_owner.emplace(owner, e ? sync_entity(owner, *e) : true).first;
+				}
+
+				if (!known->second)
+				{
+					sync_child(id);
+				}
+			}
+
+			return;
+		}
+
+		partial_sync_ = false;
 		stamp_++;
 
 		for (const object_id id : doc.entities())
 		{
 			const auto* e = doc.find_entity(id);
-			const bool has_children = !e->children.empty();
-			auto it = links_.find(id);
 
-			// entities without a link only get one when they have a model to show
-			if (it == links_.end() && !has_children && is_xmodel_name(e->value("model")))
-			{
-				it = links_.emplace(id, entity_link{}).first;
-			}
-
-			// A brush model ( "model" "*N" ) is compiled into the zone: the renderer draws it, or it is invisible
-			// ( clip, triggers ). Its brushes are never drawn solid.
-			bool compiled = has_children && e->value("model").rfind('*', 0) == 0;
-
-			if (it != links_.end())
-			{
-				auto& link = it->second;
-				link.stamp = stamp_;
-				compiled |= link.brush_model;
-
-				bool visible = doc.is_visible(id);
-
-				// a brush model is hidden with its brushes
-				if (visible && has_children && link.brush_model)
-				{
-					visible = false;
-					for (const object_id child : e->children)
-					{
-						if (doc.is_visible(child))
-						{
-							visible = true;
-							break;
-						}
-					}
-				}
-
-				if (!link.pushed || link.revision != e->revision || link.visible != visible)
-				{
-					push_entity(*e, link, visible);
-				}
-			}
-
-			// new and edited geometry is drawn solid, unless the zone draws the entity's brush model anyway
-			if (has_children && !compiled)
+			if (!sync_entity(id, *e))
 			{
 				for (const object_id child : e->children)
 				{
-					const std::uint64_t revision = doc.revision(child);
-
-					if (const auto imported = import_revision_.find(child); imported != import_revision_.end() && imported->second == revision)
-					{
-						continue;
-					}
-
-					if (!doc.is_visible(child))
-					{
-						continue;
-					}
-
-					auto& m = meshes_[child];
-					m.stamp = stamp_;
-
-					if (m.revision != revision)
-					{
-						rebuild_mesh(child, m);
-					}
+					sync_child(child);
 				}
 			}
 		}
@@ -1406,21 +1473,156 @@ namespace editor
 
 	// ---- caches for the views ---------------------------------------------------------------------------------
 
-	void scene::rebuild_cache(object_cache& cache, const bool want_selected)
+	void scene::cache_entity(object_cache& cache, const object_id id, const edit::entity& e)
 	{
-		cache.clear();
+		cached_entity item;
+		item.id = id;
+		item.revision = e.revision;
+
+		const auto box = doc.object_bounds(id);
+		const auto origin = e.origin();
+
+		for (int i = 0; i < 3; i++)
+		{
+			item.mins[i] = static_cast<float>(box.mins[i]);
+			item.maxs[i] = static_cast<float>(box.maxs[i]);
+			item.origin[i] = static_cast<float>(origin[i]);
+		}
+
+		item.yaw = static_cast<float>(e.angles().y);
+		item.classname = std::string(e.classname());
+		item.color = class_color(item.classname);
+		item.has_model = has_model(id);
+		cache.entities.push_back(std::move(item));
+	}
+
+	void scene::cache_child(object_cache& cache, const object_id child, const edit::entity& owner, const bool compiled, const ImU32 entity_color,
+		std::vector<edit::vec3>& scratch)
+	{
+		cached_object item;
+		item.id = child;
+		item.owner = owner.id;
+		item.revision = doc.revision(child);
+		item.owner_revision = owner.revision;
+		item.compiled = compiled;
+		item.first = static_cast<std::uint32_t>(cache.points.size());
+
+		const auto imported = import_revision_.find(child);
+		item.imported = imported != import_revision_.end() && imported->second == item.revision;
+
+		edit::bounds box;
+		bool detail = false;
+
+		if (const auto* geo = doc.geometry(child))
+		{
+			if (geo->vertices.empty())
+			{
+				return; // a block the editor does not understand
+			}
+
+			for (const auto& loop : geo->face_vertices)
+			{
+				for (std::size_t i = 0; i < loop.size(); i++)
+				{
+					const int a = loop[i], b = loop[(i + 1) % loop.size()];
+
+					// every edge is shared by two faces: once is enough
+					if (a < b || !geo->closed)
+					{
+						cache.points.push_back(to_float3(geo->vertices[static_cast<std::size_t>(a)]));
+						cache.points.push_back(to_float3(geo->vertices[static_cast<std::size_t>(b)]));
+					}
+				}
+			}
+
+			box = geo->box;
+			detail = doc.find_brush(child)->is_detail();
+		}
+		else if (const auto* p = doc.find_patch(child))
+		{
+			int columns = 0, rows = 0;
+			edit::tessellate_patch(*p, p->type == edit::patch_type::curve ? 3 : 1, scratch, columns, rows);
+
+			for (int c = 0; c < columns; c++)
+			{
+				for (int r = 0; r < rows; r++)
+				{
+					const auto& at = scratch[static_cast<std::size_t>(c) * rows + r];
+					box.add(at);
+
+					if (r + 1 < rows)
+					{
+						cache.points.push_back(to_float3(at));
+						cache.points.push_back(to_float3(scratch[static_cast<std::size_t>(c) * rows + r + 1]));
+					}
+
+					if (c + 1 < columns)
+					{
+						cache.points.push_back(to_float3(at));
+						cache.points.push_back(to_float3(scratch[static_cast<std::size_t>(c + 1) * rows + r]));
+					}
+				}
+			}
+
+			item.patch = true;
+			detail = p->is_detail();
+		}
+		else
+		{
+			return;
+		}
+
+		item.count = static_cast<std::uint32_t>(cache.points.size()) - item.first;
+
+		for (int i = 0; i < 3; i++)
+		{
+			item.mins[i] = static_cast<float>(box.mins[i]);
+			item.maxs[i] = static_cast<float>(box.maxs[i]);
+		}
+
+		// colour: brush entities by class, tool brushes of the collision map, patches, detail, new, structural
+		if (entity_color)
+		{
+			item.color = entity_color;
+		}
+		else if (doc.layer_of(child) == codol::mapgeo::TOOL_LAYER)
+		{
+			item.color = IM_COL32(150, 105, 175, 255);
+		}
+		else if (item.patch)
+		{
+			item.color = IM_COL32(200, 170, 110, 255);
+		}
+		else if (detail)
+		{
+			item.color = IM_COL32(95, 165, 215, 255);
+		}
+		else if (!item.imported)
+		{
+			item.color = IM_COL32(235, 235, 235, 255);
+		}
+		else
+		{
+			item.color = IM_COL32(150, 152, 158, 255);
+		}
+
+		cache.objects.push_back(item);
+	}
+
+	// Everything visible. Most of the time one object changed and thousands did not: the document is walked in
+	// its order next to the cache of the last time, and an item whose object ( and entity ) has the same revision
+	// is taken over as it is.
+	void scene::rebuild_statics()
+	{
+		const object_cache old = std::move(statics);
+		statics.clear();
+		statics.objects.reserve(old.objects.size() + 16);
+		statics.points.reserve(old.points.size() + 256);
+		statics.entities.reserve(old.entities.size() + 16);
 
 		const object_id world = doc.worldspawn();
-		std::vector<edit::vec3> grid_points;
-
-		const auto add_bounds = [](const edit::bounds& box, float mins[3], float maxs[3])
-		{
-			for (int i = 0; i < 3; i++)
-			{
-				mins[i] = static_cast<float>(box.mins[i]);
-				maxs[i] = static_cast<float>(box.maxs[i]);
-			}
-		};
+		std::vector<edit::vec3> scratch;
+		std::size_t object_cursor = 0, entity_cursor = 0;
 
 		for (const object_id id : doc.entities())
 		{
@@ -1428,24 +1630,22 @@ namespace editor
 
 			if (e->children.empty())
 			{
-				if (id == world || doc.is_selected(id) != want_selected || !doc.is_visible(id))
+				if (id == world || !doc.is_visible(id))
 				{
 					continue;
 				}
 
-				cached_entity item;
-				item.id = id;
-				add_bounds(doc.object_bounds(id), item.mins, item.maxs);
+				const auto* before = find_cached(old.entities, entity_cursor, id);
 
-				const auto origin = e->origin();
-				item.origin[0] = static_cast<float>(origin.x);
-				item.origin[1] = static_cast<float>(origin.y);
-				item.origin[2] = static_cast<float>(origin.z);
-				item.yaw = static_cast<float>(e->angles().y);
-				item.classname = std::string(e->classname());
-				item.color = class_color(item.classname);
-				item.has_model = has_model(id);
-				cache.entities.push_back(std::move(item));
+				if (before && before->revision == e->revision && before->has_model == has_model(id))
+				{
+					statics.entities.push_back(*before);
+				}
+				else
+				{
+					cache_entity(statics, id, *e);
+				}
+
 				continue;
 			}
 
@@ -1455,121 +1655,69 @@ namespace editor
 
 			for (const object_id child : e->children)
 			{
-				if (doc.is_selected(child) != want_selected || !doc.is_visible(child))
+				if (!doc.is_visible(child))
 				{
 					continue;
 				}
 
-				cached_object item;
-				item.id = child;
-				item.owner = id;
-				item.compiled = compiled;
-				item.first = static_cast<std::uint32_t>(cache.points.size());
+				const auto* before = find_cached(old.objects, object_cursor, child);
 
-				const auto imported = import_revision_.find(child);
-				item.imported = imported != import_revision_.end() && imported->second == doc.revision(child);
-
-				edit::bounds box;
-				bool detail = false;
-
-				if (const auto* geo = doc.geometry(child))
+				if (before && before->revision == doc.revision(child) && before->owner_revision == e->revision && before->compiled == compiled
+					&& before->imported == imported(child))
 				{
-					if (geo->vertices.empty())
-					{
-						continue; // a block the editor does not understand
-					}
-
-					for (const auto& loop : geo->face_vertices)
-					{
-						for (std::size_t i = 0; i < loop.size(); i++)
-						{
-							const int a = loop[i], b = loop[(i + 1) % loop.size()];
-
-							// every edge is shared by two faces: once is enough
-							if (a < b || !geo->closed)
-							{
-								cache.points.push_back(to_float3(geo->vertices[static_cast<std::size_t>(a)]));
-								cache.points.push_back(to_float3(geo->vertices[static_cast<std::size_t>(b)]));
-							}
-						}
-					}
-
-					box = geo->box;
-					detail = doc.find_brush(child)->is_detail();
-				}
-				else if (const auto* p = doc.find_patch(child))
-				{
-					int columns = 0, rows = 0;
-					edit::tessellate_patch(*p, p->type == edit::patch_type::curve ? 3 : 1, grid_points, columns, rows);
-
-					for (int c = 0; c < columns; c++)
-					{
-						for (int r = 0; r < rows; r++)
-						{
-							const auto& at = grid_points[static_cast<std::size_t>(c) * rows + r];
-							box.add(at);
-
-							if (r + 1 < rows)
-							{
-								cache.points.push_back(to_float3(at));
-								cache.points.push_back(to_float3(grid_points[static_cast<std::size_t>(c) * rows + r + 1]));
-							}
-
-							if (c + 1 < columns)
-							{
-								cache.points.push_back(to_float3(at));
-								cache.points.push_back(to_float3(grid_points[static_cast<std::size_t>(c + 1) * rows + r]));
-							}
-						}
-					}
-
-					item.patch = true;
-					detail = p->is_detail();
+					cached_object item = *before;
+					item.first = static_cast<std::uint32_t>(statics.points.size());
+					statics.points.insert(statics.points.end(), old.points.begin() + before->first, old.points.begin() + before->first + before->count);
+					statics.objects.push_back(item);
 				}
 				else
 				{
-					continue;
+					cache_child(statics, child, *e, compiled, entity_color, scratch);
 				}
-
-				item.count = static_cast<std::uint32_t>(cache.points.size()) - item.first;
-				add_bounds(box, item.mins, item.maxs);
-
-				// colour: brush entities by class, tool brushes of the collision map, other layers, detail, structural
-				const auto layer = doc.layer_of(child);
-
-				if (entity_color)
-				{
-					item.color = entity_color;
-				}
-				else if (layer == codol::mapgeo::TOOL_LAYER)
-				{
-					item.color = IM_COL32(150, 105, 175, 255);
-				}
-				else if (item.patch)
-				{
-					item.color = IM_COL32(200, 170, 110, 255);
-				}
-				else if (detail)
-				{
-					item.color = IM_COL32(95, 165, 215, 255);
-				}
-				else if (!item.imported)
-				{
-					item.color = IM_COL32(235, 235, 235, 255);
-				}
-				else
-				{
-					item.color = IM_COL32(150, 152, 158, 255);
-				}
-
-				cache.objects.push_back(item);
 			}
 		}
 	}
 
-	void scene::rebuild_connections()
+	// the selection: rebuilt on every step of a drag, so it only looks at what is selected
+	void scene::rebuild_selected()
 	{
-		connections.clear();
+		selected.clear();
+
+		const object_id world = doc.worldspawn();
+		std::vector<edit::vec3> scratch;
+
+		for (const object_id id : doc.selection())
+		{
+			if (!doc.is_visible(id))
+			{
+				continue;
+			}
+
+			if (const auto* e = doc.find_entity(id))
+			{
+				if (e->children.empty() && id != world)
+				{
+					cache_entity(selected, id, *e);
+				}
+
+				continue;
+			}
+
+			const object_id owner = doc.owner_of(id);
+
+			if (const auto* e = doc.find_entity(owner))
+			{
+				const auto link = links_.find(owner);
+				const bool compiled = (link != links_.end() && link->second.brush_model) || e->value("model").rfind('*', 0) == 0;
+				cache_child(selected, id, *e, compiled, owner == world ? 0 : class_color(e->classname()), scratch);
+			}
+		}
+	}
+
+	// which entity targets which ( "target" = "targetname" )
+	void scene::find_connections()
+	{
+		connected_.clear();
 
 		std::unordered_map<std::string_view, std::vector<object_id>> by_name;
 		std::vector<object_id> sources;
@@ -1591,25 +1739,35 @@ namespace editor
 
 		for (const object_id id : sources)
 		{
-			const auto it = by_name.find(*doc.find_entity(id)->find("target"));
-			if (it == by_name.end() || !doc.is_visible(id))
+			if (const auto it = by_name.find(*doc.find_entity(id)->find("target")); it != by_name.end())
 			{
-				continue;
-			}
-
-			const auto from = doc.object_bounds(id);
-			if (!from.valid())
-			{
-				continue;
-			}
-
-			for (const object_id other : it->second)
-			{
-				const auto to = doc.object_bounds(other);
-				if (other != id && to.valid() && doc.is_visible(other))
+				for (const object_id other : it->second)
 				{
-					connections.push_back({ to_float3(from.center()), to_float3(to.center()) });
+					if (other != id)
+					{
+						connected_.emplace_back(id, other);
+					}
 				}
+			}
+		}
+	}
+
+	// the lines between them, where they are now
+	void scene::place_connections()
+	{
+		connections.clear();
+
+		for (const auto& [from_id, to_id] : connected_)
+		{
+			if (!doc.is_visible(from_id) || !doc.is_visible(to_id))
+			{
+				continue;
+			}
+
+			const auto from = doc.object_bounds(from_id), to = doc.object_bounds(to_id);
+			if (from.valid() && to.valid())
+			{
+				connections.push_back({ to_float3(from.center()), to_float3(to.center()) });
 			}
 		}
 	}
@@ -1623,11 +1781,22 @@ namespace editor
 
 		const auto change = doc.change_counter(), visibility = doc.visibility_counter(), selection = doc.selection_counter();
 		const bool changed = change != seen_change_ || visibility != seen_visibility_;
+		const bool in_drag = doc.in_transaction();
 
-		if (changed)
+		auto clock = std::chrono::steady_clock::now();
+		const auto lap = [&clock](double& slowest_ms)
 		{
-			sync_renderer();
+			const auto now = std::chrono::steady_clock::now();
+			slowest_ms = std::max(slowest_ms, std::chrono::duration<double, std::milli>(now - clock).count());
+			clock = now;
+		};
+
+		if (changed || (partial_sync_ && !in_drag))
+		{
+			sync_renderer(in_drag && visibility == seen_visibility_ && !caches_dirty_);
 		}
+
+		lap(slowest.renderer);
 
 		// the counter moves on every select call ( and on every step of a drag ): only a different set matters
 		bool selection_changed = false;
@@ -1657,23 +1826,27 @@ namespace editor
 			}
 		}
 
-		// what is not selected does not change while something is dragged
-		const bool statics_stale = caches_dirty_ || selection_changed || visibility != seen_visibility_
-			|| (change != statics_change_ && !doc.in_transaction());
+		// only the selection changes while something is dragged
+		const bool statics_stale = caches_dirty_ || visibility != seen_visibility_ || (change != statics_change_ && !in_drag);
 
 		if (statics_stale)
 		{
-			rebuild_cache(statics, false);
+			rebuild_statics();
+			find_connections();
 			statics_change_ = change;
 			statics_serial++;
 		}
 
+		lap(slowest.statics);
+
 		if (statics_stale || selection_changed || changed)
 		{
-			rebuild_cache(selected, true);
-			rebuild_connections();
+			rebuild_selected();
+			place_connections();
 			selected_serial++;
 		}
+
+		lap(slowest.selected);
 
 		caches_dirty_ = false;
 		seen_change_ = change;
@@ -1862,6 +2035,47 @@ namespace editor
 		}
 
 		doc.end_transaction();
+		return ok;
+	}
+
+	bool scene::csg_subtract()
+	{
+		const auto box = doc.selection_bounds();
+		if (!box.valid())
+		{
+			return doc.csg_subtract(); // reports "nothing selected"
+		}
+
+		// The document cuts every visible brush. The collision brushes of the zone are not drawn unless asked for:
+		// cutting what cannot be seen would be a surprise, so those are set aside for the operation.
+		std::vector<object_id> aside;
+
+		if (show_brushes != brush_display::all)
+		{
+			sync();
+
+			for (const auto& o : statics.objects)
+			{
+				if ((o.imported || o.compiled) && !doc.is_selected(o.id) && o.mins[0] <= box.maxs.x && o.maxs[0] >= box.mins.x && o.mins[1] <= box.maxs.y
+					&& o.maxs[1] >= box.mins.y && o.mins[2] <= box.maxs.z && o.maxs[2] >= box.mins.z)
+				{
+					aside.push_back(o.id);
+				}
+			}
+		}
+
+		for (const object_id id : aside)
+		{
+			doc.set_hidden(id, true);
+		}
+
+		const bool ok = doc.csg_subtract();
+
+		for (const object_id id : aside)
+		{
+			doc.set_hidden(id, false);
+		}
+
 		return ok;
 	}
 

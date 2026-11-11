@@ -56,6 +56,7 @@ namespace editor::ui
 			bool drag_open = false;		// a document drag was started
 			double press[2] = {};
 			double now[2] = {};
+			edit::vec3 applied;			// the movement the document has now ( nothing is done while it stays the same )
 			int side[2] = {};
 			std::vector<corner_target> targets;
 			bool pan_moved = false;
@@ -141,7 +142,7 @@ namespace editor::ui
 
 			for (const bool with_models : { false, true })
 			{
-				for (const auto* cache : { &s.statics, &s.selected })
+				for (const auto* cache : { &s.statics })
 				{
 					for (const auto& e : cache->entities)
 					{
@@ -180,13 +181,10 @@ namespace editor::ui
 			}
 			else
 			{
-				for (const auto* cache : { &s.statics, &s.selected })
+				for (const auto& o : s.statics.objects)
 				{
-					for (const auto& o : cache->objects)
-					{
-						box.add({ o.mins[0], o.mins[1], o.mins[2] });
-						box.add({ o.maxs[0], o.maxs[1], o.maxs[2] });
-					}
+					box.add({ o.mins[0], o.mins[1], o.mins[2] });
+					box.add({ o.maxs[0], o.maxs[1], o.maxs[2] });
 				}
 			}
 
@@ -435,7 +433,15 @@ namespace editor::ui
 
 				// the whole movement since the press, on the document as it was then
 				s.restart_drag();
+				applied = delta;
 			};
+
+			// the mouse moved, the snapped movement did not: the document is where it should be
+			const bool is_edit = act == action::move || act == action::resize || act == action::vertex;
+			if (is_edit && drag_open && delta == applied)
+			{
+				return;
+			}
 
 			switch (act)
 			{
@@ -637,9 +643,17 @@ namespace editor::ui
 
 			const ImU32 selected_color = IM_COL32(255, 58, 32, 255);
 
+			const auto& doc = get_scene().doc;
+
 			for (const auto& o : cache.objects)
 			{
 				if (o.maxs[ah] < wh0 || o.mins[ah] > wh1 || o.maxs[av] < wv0 || o.mins[av] > wv1)
+				{
+					continue;
+				}
+
+				// the cache of everything also holds what is selected: that is drawn from the selection, where it is now
+				if (!is_selection && doc.is_selected(o.id))
 				{
 					continue;
 				}
@@ -686,7 +700,7 @@ namespace editor::ui
 
 			for (const auto& e : cache.entities)
 			{
-				if (e.maxs[ah] < wh0 || e.mins[ah] > wh1 || e.maxs[av] < wv0 || e.mins[av] > wv1)
+				if (e.maxs[ah] < wh0 || e.mins[ah] > wh1 || e.maxs[av] < wv0 || e.mins[av] > wv1 || (!is_selection && doc.is_selected(e.id)))
 				{
 					continue;
 				}

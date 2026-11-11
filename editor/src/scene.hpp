@@ -39,6 +39,8 @@ namespace editor
 	{
 		object_id id = edit::no_object;
 		object_id owner = edit::no_object;
+		std::uint64_t revision = 0;			// of the object and of its entity: the item is reused while both stay
+		std::uint64_t owner_revision = 0;
 		float mins[3] = {};
 		float maxs[3] = {};
 		std::uint32_t first = 0;	// object_cache::points, two per edge
@@ -52,6 +54,7 @@ namespace editor
 	struct cached_entity
 	{
 		object_id id = edit::no_object;
+		std::uint64_t revision = 0;
 		float mins[3] = {};
 		float maxs[3] = {};
 		float origin[3] = {};
@@ -146,12 +149,25 @@ namespace editor
 		// a brush / patch exactly as the zone has it ( not new, not edited )
 		[[nodiscard]] bool imported(object_id id) const;
 
-		// lines of everything visible, split in "not selected" ( rebuilt when the document changes, but not while a
-		// drag is in progress - a drag only changes the selection ) and "selected" ( rebuilt on every change )
+		// Lines of everything visible, ready to draw. `statics` holds all objects, selected or not ( a view skips
+		// the selected ones ): it is rebuilt when the document changes, but not while a drag is in progress - a
+		// drag only changes the selection - and it keeps the items of objects that did not change. `selected` is
+		// the selection as it is right now, rebuilt on every change.
 		object_cache statics, selected;
 		std::vector<connection> connections;		// target -> targetname
 		std::uint64_t statics_serial = 0;			// change when the cache was rebuilt
 		std::uint64_t selected_serial = 0;
+
+		// the longest each part of sync() took since ed_stats last asked, milliseconds
+		struct sync_times
+		{
+			double renderer = 0.0;		// document -> renderer objects, meshes
+			double statics = 0.0;		// cache of everything
+			double selected = 0.0;		// cache of the selection, target lines
+			double view_lines = 0.0;	// line buffers of the 3D view
+		};
+
+		sync_times slowest;
 
 		// ---- editing ( what takes more than one document call ) -------------------------------------------
 		// Drags apply their whole movement again on every mouse move: restart_drag() takes the document back to
@@ -166,6 +182,9 @@ namespace editor
 		bool rotate(const edit::vec3& origin, const edit::vec3& axis, double degrees);
 		bool scale(const edit::vec3& origin, const edit::vec3& factors);
 		bool clone_selection();
+		// cut the selection out of the brushes it touches; the collision brushes of the zone are only cut while
+		// they are shown ( "Brushes: all" )
+		bool csg_subtract();
 		// move the faces of the selected brushes that look along world axis `axis` ( side +1 / -1 ) by `distance`
 		// along that axis
 		bool resize_selection(int axis, int side, double distance);
@@ -222,13 +241,19 @@ namespace editor
 		void clear_view_state();
 		void place_brush_models(const edit::document* baseline);
 		void build_links(const edit::document& baseline, bool fresh_import);
-		void sync_renderer();
+		void sync_renderer(bool selection_only);
+		bool sync_entity(object_id id, const edit::entity& e);
+		void sync_child(object_id child);
 		void push_entity(const edit::entity& e, entity_link& link, bool visible);
 		void drop_placed(entity_link& link);
 		void rebuild_mesh(object_id id, brush_mesh& m);
 		void destroy_mesh(brush_mesh& m);
-		void rebuild_cache(object_cache& cache, bool want_selected);
-		void rebuild_connections();
+		void rebuild_statics();
+		void rebuild_selected();
+		void cache_entity(object_cache& cache, object_id id, const edit::entity& e);
+		void cache_child(object_cache& cache, object_id child, const edit::entity& owner, bool compiled, ImU32 entity_color, std::vector<edit::vec3>& scratch);
+		void find_connections();
+		void place_connections();
 		void ensure_origin_keys();
 		bool model_box(std::string_view model, float3& mins, float3& maxs);
 
@@ -248,6 +273,8 @@ namespace editor
 		std::uint64_t selection_hash_ = 0;
 		std::uint64_t statics_change_ = ~0ull;
 		bool caches_dirty_ = true;
+		bool partial_sync_ = false;		// the renderer was only brought up to date for the selection ( during a drag )
+		std::vector<std::pair<object_id, object_id>> connected_;	// entity -> the entity it targets
 
 		bool drag_active_ = false;
 		std::string drag_name_;
