@@ -190,6 +190,7 @@ namespace codol::render
 	{
 		std::uint32_t pointer = 0;
 		std::string name;					// without the reference comma; "shader_XXXXXXXX" when it has none
+		bool has_name = false;				// false: the name pointer is null or not loaded ( `name` is the stand-in )
 		bool is_reference = false;			// stored name was ",name": the program is in another zone
 		bool is_pixel_shader = false;
 		std::uint32_t program = 0;			// zone pointer to the byte code, 0 when absent

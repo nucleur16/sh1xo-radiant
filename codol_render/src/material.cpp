@@ -207,6 +207,8 @@ namespace codol::render
 				out.name = fallback;
 			}
 			out.game_flags = m[build::MATERIAL_GAME_FLAGS];
+			out.sort_key = m[build::MATERIAL_SORT_KEY];
+			out.camera_region = m[build::MATERIAL_CAMERA_REGION];
 			out.state_flags = m[build::MATERIAL_STATE_FLAGS];
 			out.surface_type_bits = rd_u32(m + build::MATERIAL_SURFACE_TYPE_BITS);
 

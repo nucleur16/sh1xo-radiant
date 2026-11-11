@@ -20,7 +20,7 @@
 //   Material               0x60 header | name | [technique set] | [texture table: count * 12 bytes, then per def its
 //                          GfxImage ( water_t for semantic 11: not followed )] | [constant table: count * 32]
 //                          | [state bits table: count * 8]
-//   GfxImage               0x24 header | [load def: 16 bytes + resourceSize] | name
+//   GfxImage               0x24 header | name | [load def: 16 bytes + resourceSize]
 //
 // "[x]" exists in the stream only when the pointer to it is inline ( 0xFFFFFFFF / 0xFFFFFFFE ).
 
@@ -212,7 +212,8 @@ namespace tools
 					fail("image pointer");
 					return cursor;
 				}
-				if (is_inline(load_def))
+				cursor = string_field(header + build::IMAGE_NAME, cursor, "image name");
+				if (!failed && is_inline(load_def))
 				{
 					patch(header + build::IMAGE_LOAD_DEF, cursor);
 					const std::size_t size = u32(cursor + build::LOAD_DEF_RESOURCE_SIZE);
@@ -220,10 +221,9 @@ namespace tools
 					if (cursor > src.size())
 					{
 						fail("image data runs past the end");
-						return cursor;
 					}
 				}
-				return string_field(header + build::IMAGE_NAME, cursor, "image name");
+				return cursor;
 			}
 
 			std::size_t material(const std::size_t header)
@@ -348,9 +348,17 @@ namespace tools
 			return name_like(d, o + build::TECHSET_SIZE, name) && (any || name[0] == ',');
 		}
 
+		// `name` stays empty for a material whose name is a string that was loaded earlier ( a reference )
 		bool material_shaped(const std::vector<std::uint8_t>& d, const std::size_t o, std::string& name)
 		{
-			if (o + build::MATERIAL_SIZE + 2 > d.size() || rd_u32(d.data() + o) != 0xFFFFFFFFu)
+			name.clear();
+			if (o + build::MATERIAL_SIZE + 2 > d.size())
+			{
+				return false;
+			}
+			const std::uint32_t name_pointer = rd_u32(d.data() + o);
+			const bool named = name_pointer == 0xFFFFFFFFu;
+			if (!named && (name_pointer == 0 || is_inline(name_pointer) || !plausible_pointer(name_pointer)))
 			{
 				return false;
 			}
@@ -373,18 +381,29 @@ namespace tools
 				return false;
 			}
 			// a material that is defined here has a techset and state bits; every state bits entry is an index into
-			// its table or 0xFF. A ",name" reference is a header of zeros.
-			if (!name_like(d, o + build::MATERIAL_SIZE, name))
+			// its table or 0xFF. A ",name" reference is a header of zeros followed by the name - the stub of every asset
+			// type looks like that ( effects, models .. ), so references are not collected.
+			if (named && (!name_like(d, o + build::MATERIAL_SIZE, name) || name[0] == ','))
 			{
 				return false;
-			}
-			if (name[0] == ',')
-			{
-				return techset == 0 && textures == 0 && states == 0;
 			}
 			if (techset == 0 || state_count == 0)
 			{
 				return false;
+			}
+			if (!named)
+			{
+				// without the name behind it the header alone must carry the evidence: inline tables, a sort key and a
+				// camera region in range, and at least one technique with state bits
+				bool any = false;
+				for (int t = 0; t < build::TECHNIQUE_COUNT; t++)
+				{
+					any = any || m[build::MATERIAL_STATE_BITS_ENTRY + static_cast<std::size_t>(t)] != 0xFF;
+				}
+				if (!any || !is_inline(states) || (textures != 0 && !is_inline(textures)) || m[build::MATERIAL_CAMERA_REGION] > 4)
+				{
+					return false;
+				}
 			}
 			for (int t = 0; t < build::TECHNIQUE_COUNT; t++)
 			{
@@ -397,9 +416,9 @@ namespace tools
 			return true;
 		}
 
-		void find_shaders(scanned_zone& out)
+		void find_shaders(const std::vector<std::uint8_t>& d, scanned_zone& out)
 		{
-			const auto& d = out.image;
+
 			for (std::size_t o = 0; o + 16 <= d.size(); o++)
 			{
 				// 0x0300 / 0x0200 / .. version token of a vertex ( FFFE ) or pixel ( FFFF ) shader, followed by the
@@ -470,7 +489,6 @@ namespace tools
 
 		// Technique sets first ( a material's inline techset is found here too, and again through its material ).
 		// Everything a successful walk covered is skipped: its bytes cannot hold another header.
-		std::vector<std::pair<std::size_t, std::size_t>> walked_techsets;	// [begin, end)
 		std::string name;
 		for (std::size_t o = 0; o + build::TECHSET_SIZE < source.size(); o++)
 		{
@@ -491,13 +509,12 @@ namespace tools
 			}
 			w.apply();
 			out.techsets.push_back(ZONE_BASE + static_cast<std::uint32_t>(o));
-			walked_techsets.emplace_back(o, end);
 			o = end - 1;
 		}
 
 		for (std::size_t o = 0; o + build::MATERIAL_SIZE < source.size(); o++)
 		{
-			if (source[o] != 0xFF || !material_shaped(source, o, name))
+			if (!material_shaped(source, o, name))
 			{
 				continue;
 			}
@@ -514,6 +531,10 @@ namespace tools
 			}
 			w.apply();
 			out.materials.push_back(ZONE_BASE + static_cast<std::uint32_t>(o));
+			if (name.empty())
+			{
+				out.unnamed_materials.push_back(ZONE_BASE + static_cast<std::uint32_t>(o));
+			}
 			if (w.stopped_at_water)
 			{
 				out.partial_materials.push_back(ZONE_BASE + static_cast<std::uint32_t>(o));
@@ -524,7 +545,7 @@ namespace tools
 			}
 		}
 
-		find_shaders(out);
+		find_shaders(source, out);		// on the zone as stored: the walks above patched the copy
 		return true;
 	}
 }

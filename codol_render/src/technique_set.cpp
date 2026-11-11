@@ -213,6 +213,7 @@ namespace codol::render
 			{
 				name = fallback_name("shader", pointer);
 			}
+			shader.has_name = named;
 			shader.is_reference = is_reference_name(name);
 			// RenderAssetLibrary.cs:520: TrimStart(',')
 			std::size_t commas = 0;

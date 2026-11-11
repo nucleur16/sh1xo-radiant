@@ -193,9 +193,14 @@ namespace codol::render
 		bool get(std::string_view name, float4& value) const;
 
 		// ---- what the draw loop binds ( GameCodeConstants.cs:265-317 ) -----------------------------------
-		// `name` is the name the shader's constant table gives the register ( or code_constant_name( index ) ):
-		// float4 constants are slots keyed by name unless set_by_index gave the index a value of its own.
+		// `name` is the name the shader's constant table gives the register: float4 constants are slots keyed by
+		// name unless set_by_index gave the index a value of its own ( the C# renderer's way ).
 		constant_handle resolve(int index, std::string_view name);
+		// The same with the name of code_tables.hpp ( code_constant_name( index ) ), which needs no constant table.
+		// For every float4 constant the renderer fills the two agree ( measured on the stock zones ); they differ only
+		// for the HLSL arrays, whose elements share one name in the shaders: resolve( 11 .. 18 ) are the slots
+		// "filterTap0" .. "filterTap7", which set( "filterTap3", .. ) fills without set_by_index.
+		constant_handle resolve(int index);
 		// changes whenever the value behind the handle changes ( for skipping redundant SetShaderConstantF )
 		int version_of(const constant_handle& handle) const;
 		// identifies the value independently of the register it goes to

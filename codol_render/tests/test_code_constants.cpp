@@ -386,7 +386,7 @@ void test_code_constants()
 		for (int i = 0; i < build::CODE_CONSTANT_COUNT; i++)
 		{
 			const code_name* c = code_constant(i);
-			CHECK(c && c->name && c->name[0] && c->source && c->source[0]);
+			CHECK(c && c->name && c->name[0] && c->hlsl && c->hlsl[0] && c->source && c->source[0]);
 			CHECK_EQ(code_constant_index(c ? c->name : ""), i);		// every name is unique
 		}
 		CHECK(code_constant(-1) == nullptr && code_constant(build::CODE_CONSTANT_COUNT) == nullptr);
@@ -409,15 +409,49 @@ void test_code_constants()
 		CHECK_EQ(code_constant_index("clipSpaceLookupOffset"), 67);
 		CHECK_EQ(code_constant_index("depthFromClip"), 76);
 		CHECK_EQ(code_constant_index("codeMeshArg1"), 78);
-		CHECK_EQ(code_constant_index("viewMatrix"), build::FIRST_CODE_MATRIX);
-		CHECK_EQ(code_constant_index("worldMatrix"), build::FIRST_CODE_MATRIX + 4 * code_matrix::WORLD);
-		CHECK_EQ(code_constant_index("inverseTransposeWorldViewProjectionMatrix"), build::FIRST_CODE_MATRIX + 4 * code_matrix::WORLD_VIEW_PROJECTION + 3);
+		// matrices carry the shaders' names: an HLSL matrix register holds columns, so "worldMatrix" is the TRANSPOSE variant
+		CHECK_EQ(code_constant_index("transposeViewMatrix"), build::FIRST_CODE_MATRIX);
+		CHECK_EQ(code_constant_index("viewMatrix"), build::FIRST_CODE_MATRIX + code_matrix::VARIANT_TRANSPOSE);
+		CHECK_EQ(code_constant_index("projectionMatrix"), 85);
+		CHECK_EQ(code_constant_index("viewProjectionMatrix"), 89);
+		CHECK_EQ(code_constant_index("inverseViewProjectionMatrix"), 90);
+		CHECK_EQ(code_constant_index("shadowLookupMatrix"), 93);
+		CHECK_EQ(code_constant_index("worldOutdoorLookupMatrix"), 97);
+		CHECK_EQ(code_constant_index("worldMatrix"), 101);
+		CHECK_EQ(code_constant_index("inverseTransposeWorldViewMatrix"), 104);
+		CHECK_EQ(code_constant_index("worldViewMatrix"), 105);
+		CHECK_EQ(code_constant_index("inverseWorldViewMatrix"), 106);
+		CHECK_EQ(code_constant_index("worldViewProjectionMatrix"), 109);
+		CHECK_EQ(code_constant_index("worldViewMatrix1"), 117);
+		CHECK_EQ(code_constant_index("worldViewMatrix2"), 129);
+		CHECK_EQ(code_constant_index("inverseWorldViewProjectionMatrix2"), build::CODE_CONSTANT_COUNT - 1);
+		CHECK(std::strcmp(code_constant(101)->source, "TRANSPOSE_WORLD_MATRIX0") == 0);
+		CHECK(std::strcmp(code_constant(11)->hlsl, "filterTap") == 0 && std::strcmp(code_constant(11)->name, "filterTap0") == 0);
+		CHECK(code_constant(7)->observed && !code_constant(8)->observed);
+
+		// resolve( index ) uses the table's unique names
+		code_constants c;
+		c.set("gameTime", { 1, 2, 3, 4 });
+		c.set("filterTap3", { 5, 6, 7, 8 });
+		float out[16];
+		bool known = false;
+		c.write(c.resolve(7), 0, 1, out, known);
+		CHECK(known && out[0] == 1 && out[3] == 4);
+		c.write(c.resolve(14), 0, 1, out, known);
+		CHECK(known && out[0] == 5 && out[3] == 8);
+		c.write(c.resolve(13), 0, 1, out, known);
+		CHECK(!known);
+		CHECK(c.resolve(101).is_matrix() && c.resolve(101).matrix_group == code_matrix::WORLD && c.resolve(101).variant == code_matrix::VARIANT_TRANSPOSE);
+		// what the shader calls worldMatrix: the rows of the transpose, i.e. the translation in the fourth column
+		c.set_world(mat4::translation({ 1, 2, 3 }));
+		CHECK_EQ(c.write(c.resolve(code_constant_index("worldMatrix")), 0, 4, out, known), 4);
+		CHECK(known && out[3] == 1 && out[7] == 2 && out[11] == 3 && out[12] == 0 && out[15] == 1);
 		CHECK_EQ(code_constant_index("nope"), -1);
 
 		for (int i = 0; i < build::CODE_SAMPLER_COUNT; i++)
 		{
 			const code_name* s = code_sampler(i);
-			CHECK(s && s->name && s->name[0]);
+			CHECK(s && s->name && s->name[0] && s->hlsl && s->source[0]);
 		}
 		CHECK(code_sampler(build::CODE_SAMPLER_COUNT) == nullptr);
 		CHECK(std::strcmp(code_sampler_name(code_sampler_index::SHADOWMAP_SUN), "shadowmapSamplerSun") == 0);

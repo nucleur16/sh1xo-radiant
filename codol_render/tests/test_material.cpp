@@ -186,6 +186,8 @@ void test_material()
 	CHECK(m.name == "me_wall_plaster");
 	CHECK(!m.is_reference);
 	CHECK_EQ(m.game_flags, 0x5A);
+	CHECK_EQ(m.sort_key, 4);
+	CHECK_EQ(m.camera_region, 0);
 	CHECK_EQ(m.state_flags, 0x21);
 	CHECK_EQ(m.surface_type_bits, 0x00100000u);
 	CHECK_EQ(m.technique_set, techset);

@@ -48,6 +48,7 @@ namespace tools
 		std::vector<std::uint32_t> techsets;		// zone pointers ( ZONE_BASE + offset ) of walked technique sets
 		std::vector<std::uint32_t> materials;		// zone pointers of walked materials
 		std::vector<std::uint32_t> partial_materials;	// materials whose walk stopped at a water map ( tables behind it unknown )
+		std::vector<std::uint32_t> unnamed_materials;	// materials whose name is a string loaded earlier ( found by the header alone )
 		std::vector<scanned_shader> shaders;		// every SM2+ program found by its byte code
 		int techset_candidates = 0;					// header shaped byte patterns
 		int techset_rejected = 0;					// .. that did not walk ( false positives of the pattern, or a layout the walker does not know )

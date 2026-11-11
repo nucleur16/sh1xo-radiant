@@ -18,7 +18,7 @@ namespace codol::render
 		int texture_filter_mip_mode = 0;				// 0 as authored, 1 force trilinear, 2 force bilinear, 3 no mips
 		bool texture_filter_disable = false;
 		float polygon_offset_scale = -0.5f;				// r_polygonOffsetScale
-		float polygon_offset_bias = -0.04f;				// r_polygonOffsetBias ( -0.04 exactly as the C# float literal )
+		float polygon_offset_bias = -0.04f;				// r_polygonOffsetBias
 		float shadow_map_polygon_offset_scale = 1.5f;	// sm_polygonOffsetScale
 		float shadow_map_polygon_offset_bias = 4.0f;	// sm_polygonOffsetBias
 		float diffuse_color_scale = 1.0f;

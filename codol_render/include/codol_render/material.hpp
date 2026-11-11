@@ -106,6 +106,8 @@ namespace codol::render
 		std::string name;					// without the reference comma; "material_XXXXXXXX" when it has none
 		bool is_reference = false;			// stored as ",name": defined in another zone, nothing else is valid
 		std::uint8_t game_flags = 0;
+		std::uint8_t sort_key = 0;			// also in `state`; here it is available for a material without state bits
+		std::uint8_t camera_region = 0;
 		std::uint8_t state_flags = 0;
 		std::uint32_t surface_type_bits = 0;
 		std::uint32_t technique_set = 0;	// zone pointer for read_technique_set, 0 when not loaded

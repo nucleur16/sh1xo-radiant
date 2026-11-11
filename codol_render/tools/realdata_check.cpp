@@ -2,6 +2,8 @@
 //
 //   codol_render_check survey   --game <install> [--samples <n>]
 //       every .iwi of main\iw_image_NN.iwd: counts per IWI format, and sample names per format
+//   codol_render_check sweep    --game <install>
+//       reads every image the game can load ( CRC checked ), parses it and builds its upload: no oracle, a robustness run
 //   codol_render_check iwd      --game <install> --raw <dir>
 //       extracts images/<name>.iwi for every <name>.iwi under <dir> ( the oracle's `export-textures --raw` output )
 //       and compares the bytes
@@ -256,6 +258,93 @@ namespace
 			}
 		}
 		return unreadable == 0 ? 0 : 1;
+	}
+
+	// ---------------------------------------------------------------------------------------------------
+	// sweep: every image through the whole pipeline
+
+	int sweep(const arguments& args)
+	{
+		image_archives game;
+		if (!game.open(args.get("game"), true))
+		{
+			return 2;
+		}
+		struct stats
+		{
+			int images = 0;
+			int failed = 0;
+			std::uint64_t file_bytes = 0;
+			std::uint64_t upload_bytes = 0;
+			int surfaces = 0;
+		};
+		std::map<int, stats> by_format;
+		int read_failures = 0, parse_failures = 0, upload_failures = 0, total = 0;
+		std::uint64_t bytes = 0;
+		for (const auto* set : { game.sets.images.get(), game.sets.stripped.get() })
+		{
+			if (!set)
+			{
+				continue;
+			}
+			set->for_each([&](const std::string& path, const iwd_archive_set::hit& hit)
+			{
+				if (path.size() < 4 || path.compare(path.size() - 4, 4, ".iwi") != 0)
+				{
+					return;
+				}
+				total++;
+				std::vector<std::uint8_t> data;
+				std::string error;
+				if (!hit.archive->read(*hit.entry, data, &error))		// inflates and checks the CRC32 of the zip entry
+				{
+					read_failures++;
+					std::printf("  %s\n", error.c_str());
+					return;
+				}
+				bytes += data.size();
+				iwi_file iwi;
+				if (!parse_iwi(data, iwi, &error))
+				{
+					parse_failures++;
+					std::printf("  %s:%s: %s\n", hit.archive->file_name().c_str(), path.c_str(), error.c_str());
+					return;
+				}
+				stats& s = by_format[static_cast<int>(iwi.header.format)];
+				s.images++;
+				s.file_bytes += data.size();
+				texture_upload upload;
+				if (!build_texture_upload(iwi, game.tables.get(), upload, &error)
+					|| static_cast<int>(upload.surfaces.size()) != upload.levels * upload.faces)
+				{
+					upload_failures++;
+					s.failed++;
+					std::printf("  %s:%s: %s\n", hit.archive->file_name().c_str(), path.c_str(), error.c_str());
+					return;
+				}
+				for (const auto& surface : upload.surfaces)
+				{
+					s.upload_bytes += surface.data.size();
+					if (surface.data.size() != static_cast<std::size_t>(surface.rows) * surface.row_bytes)
+					{
+						upload_failures++;
+						s.failed++;
+						std::printf("  %s: level %d has %zu bytes for %d rows of %d\n", path.c_str(), surface.level, surface.data.size(), surface.rows, surface.row_bytes);
+						return;
+					}
+				}
+				s.surfaces += static_cast<int>(upload.surfaces.size());
+			});
+		}
+		std::printf("%-4s %-18s %7s %7s %14s %14s %9s\n", "fmt", "name", "images", "failed", "file bytes", "upload bytes", "surfaces");
+		for (const auto& [format, s] : by_format)
+		{
+			std::printf("%-4d %-18s %7d %7d %14llu %14llu %9d\n", format, iwi_format_name(static_cast<iwi_format>(format)), s.images, s.failed,
+				static_cast<unsigned long long>(s.file_bytes), static_cast<unsigned long long>(s.upload_bytes), s.surfaces);
+		}
+		std::printf("sweep: %d image entries ( the copy the game loads, normal and stripped sets ), %llu bytes inflated with a matching CRC32;"
+			" unreadable %d, not parsed %d, upload failed %d\n", total, static_cast<unsigned long long>(bytes), read_failures, parse_failures, upload_failures);
+		return read_failures + parse_failures + upload_failures == 0 ? 0 : 1;
 	}
 
 	// ---------------------------------------------------------------------------------------------------
@@ -640,6 +729,7 @@ namespace
 
 		void print() const
 		{
+			int table_mismatches = 0;
 			std::printf("\ncode constant index -> name of the register in the shaders' constant tables ( uses )\n");
 			for (const auto& [index, names] : constants)
 			{
@@ -649,10 +739,13 @@ namespace
 				for (const auto& [name, uses] : names)
 				{
 					text += " " + name + "(" + std::to_string(uses) + ")";
-					match = match || (expected && name == expected->name);
+					match = match || (expected && name == expected->hlsl);
+					table_mismatches += expected && name == expected->hlsl ? 0 : 1;
 				}
-				std::printf("  %3d %-44s %s%s\n", index, expected ? expected->name : "?", match ? "=" : "!", text.c_str());
+				std::printf("  %3d %-44s %s%s%s\n", index, expected ? expected->name : "?", match ? "=" : "!", text.c_str(),
+					expected && !expected->observed ? "   ( table says: not observed )" : "");
 			}
+			std::printf("code constants: %zu indices in use, register names that differ from code_tables: %d\n", constants.size(), table_mismatches);
 			std::printf("code sampler index -> name of the sampler register ( uses )\n");
 			for (const auto& [index, names] : samplers)
 			{
@@ -743,6 +836,7 @@ namespace
 		{
 			int parsed = 0, failed = 0, constants = 0, with_header = 0, pixel = 0, vertex = 0, target_mismatch = 0, no_creator = 0, sm3 = 0;
 			std::map<std::string, int> named[2];		// [is pixel] name -> count
+			int unnamed[2] = {};
 			for (const auto& shader : zone.shaders)
 			{
 				shader_program program;
@@ -773,6 +867,10 @@ namespace
 				{
 					named[program.is_pixel_shader() ? 1 : 0][shader.name]++;
 				}
+				else
+				{
+					unnamed[program.is_pixel_shader() ? 1 : 0]++;	// its name is a string that was loaded earlier ( e.g. the vertex shader of the same name )
+				}
 			}
 			std::printf("shaders: %zu programs located ( %d pixel, %d vertex, %d shader model 3 ), %d parsed, %d failed, %d constants in their tables;"
 				" %d preceded by a MaterialShader header whose programSize matches; target string != version token: %d; without creator: %d\n",
@@ -783,6 +881,8 @@ namespace
 			{
 				// zone-assets lists "type name" of every named asset; a ",name" is a reference without a program here
 				int listed = 0, found = 0, references = 0;
+				int not_found[2] = {};
+				std::vector<std::string> not_found_names;
 				std::set<std::string> oracle_names[2];
 				for (const std::string& line : read_lines(args.get("assets")))
 				{
@@ -805,7 +905,21 @@ namespace
 					}
 					else
 					{
-						mismatches.add(std::string(is_pixel ? "pixel" : "vertex") + " shader " + name + " of the oracle's asset list was not located");
+						not_found[is_pixel ? 1 : 0]++;
+						not_found_names.push_back(std::string(is_pixel ? "pixel" : "vertex") + " shader " + name);
+					}
+				}
+				// a listed shader that was not located by name must be one of the programs whose name is a reference
+				for (int kind = 0; kind < 2; kind++)
+				{
+					if (not_found[kind] != unnamed[kind])
+					{
+						mismatches.add(std::to_string(not_found[kind]) + (kind ? " pixel" : " vertex") + " shaders of the oracle's asset list were not located by name, "
+							+ std::to_string(unnamed[kind]) + " located programs have a name by reference");
+						for (const auto& text : not_found_names)
+						{
+							mismatches.add(text + " was not located");
+						}
 					}
 				}
 				int extra = 0;
@@ -821,7 +935,8 @@ namespace
 					}
 				}
 				std::printf("shaders vs zone-assets: the oracle lists %d shaders with a program ( + %d references ); located with the same name and kind: %d;"
-					" located but not listed: %d\n", listed, references, found, extra);
+					" located with a name by reference ( = listed but not found by name ): %d vertex, %d pixel; located but not listed: %d\n",
+					listed, references, found, unnamed[0], unnamed[1], extra);
 			}
 		}
 
@@ -848,7 +963,7 @@ namespace
 			const auto oracle = parse_techset_dump(args.get("techsets"));
 			int oracle_defined = 0, oracle_references = 0, found = 0, found_references = 0;
 			int slots_equal = 0, slots_empty_equal = 0, slots_by_reference = 0, techniques = 0, passes = 0, args_compared = 0, literals = 0;
-			int shader_names = 0, shader_by_reference = 0, args_by_reference = 0, names_by_reference = 0;
+			int shader_names = 0, shader_by_reference = 0, args_by_reference = 0, names_by_reference = 0, nonzero_literals = 0;
 			for (const auto& expected : oracle)
 			{
 				const bool reference = !expected.name.empty() && expected.name[0] == ',';
@@ -928,9 +1043,9 @@ namespace
 						{
 							const auto& shader = stage == 0 ? pass.vertex_shader : pass.pixel_shader;
 							const std::string& expected_name = stage == 0 ? ep.vs : ep.ps;
-							if (!shader)
+							if (!shader || !shader->has_name)
 							{
-								shader_by_reference++;
+								shader_by_reference++;		// the shader, or its name string, was loaded earlier in the zone
 							}
 							else if (shader_text(shader) != expected_name)
 							{
@@ -967,6 +1082,7 @@ namespace
 							{
 								// literal floats, "0.###" each, joined with ','
 								literals++;
+								nonzero_literals += arg.literal[0] != 0 || arg.literal[1] != 0 || arg.literal[2] != 0 || arg.literal[3] != 0 ? 1 : 0;
 								const auto parts = split(ea.value, ',');
 								ok = ok && arg.is_literal() && parts.size() == 4;
 								for (std::size_t k = 0; ok && k < 4; k++)
@@ -987,11 +1103,28 @@ namespace
 				}
 			}
 			std::printf("technique sets vs techset-dump: the oracle has %d defined here + %d references; located %d + %d\n", oracle_defined, oracle_references, found, found_references);
+			{
+				std::set<std::string> oracle_names;
+				for (const auto& expected : oracle)
+				{
+					oracle_names.insert(expected.name);
+				}
+				int extra = 0;
+				for (const auto& [name, set] : sets_by_name)
+				{
+					if (!oracle_names.count(name))
+					{
+						extra++;
+						std::printf("  walked but not a techset asset of the oracle: %s ( %zu techniques )\n", name.c_str(), set.techniques.size());
+					}
+				}
+				std::printf("  walked technique sets that the oracle does not list as assets: %d\n", extra);
+			}
 			std::printf("  slots: %d with a technique compared ( %d equal ), %d empty in both, %d point at a technique loaded earlier ( not resolvable without the zone reader )\n",
 				techniques, slots_equal, slots_empty_equal, slots_by_reference);
-			std::printf("  in the compared techniques: %d passes, %d arguments ( %d of them literals ), %d shader names equal;"
+			std::printf("  in the compared techniques: %d passes, %d arguments ( %d of them literals, %d with a non zero value ), %d shader names equal;"
 				" not comparable because the pointer is a reference: %d technique names, %d shaders, %d arguments\n",
-				passes, args_compared, literals, shader_names, names_by_reference, shader_by_reference, args_by_reference);
+				passes, args_compared, literals, nonzero_literals, shader_names, names_by_reference, shader_by_reference, args_by_reference);
 		}
 
 		// ---- materials ---------------------------------------------------------------------------------------
@@ -1107,6 +1240,8 @@ namespace
 		{
 			// zone-materials: name \t techset \t "sort S flags FF sf FF" \t "semantic:image .." \t models ( PortCommands.cs:881-933 )
 			int listed = 0, references = 0, found = 0, equal = 0, techset_names = 0, techset_by_reference = 0, image_names = 0, image_by_reference = 0, semantics = 0;
+			std::vector<std::string> not_located;
+			std::set<std::string> oracle_names;
 			for (const std::string& line : read_lines(args.get("materials")))
 			{
 				const auto fields = split(line, '\t');
@@ -1114,6 +1249,7 @@ namespace
 				{
 					continue;
 				}
+				oracle_names.insert(std::string(trim_reference(fields[0])));
 				if (!fields[0].empty() && fields[0][0] == ',')
 				{
 					references++;
@@ -1128,7 +1264,7 @@ namespace
 				const auto it = materials_by_name.find(fields[0]);
 				if (it == materials_by_name.end())
 				{
-					mismatches.add("material " + fields[0] + " of the oracle was not located");
+					not_located.push_back(fields[0]);
 					continue;
 				}
 				found++;
@@ -1145,8 +1281,7 @@ namespace
 				{
 					continue;
 				}
-				const byte_span header = view.read(m.pointer, build::MATERIAL_SIZE);
-				if (header[build::MATERIAL_SORT_KEY] != sort || m.game_flags != flags || m.state_flags != sf)
+				if (m.sort_key != sort || m.game_flags != flags || m.state_flags != sf)
 				{
 					differ("sort key / game flags / state flags");
 				}
@@ -1207,8 +1342,28 @@ namespace
 				}
 				equal += ok ? 1 : 0;
 			}
-			std::printf("materials vs zone-materials: the oracle lists %d materials defined here ( + %d references ); located %d; every compared field equal: %d\n",
-				listed, references, found, equal);
+			int extra = 0;
+			for (const auto& [name, m] : materials_by_name)
+			{
+				if (!oracle_names.count(name) && name.rfind("material_", 0) != 0)
+				{
+					extra++;
+					std::printf("  walked but not a material of the oracle: %s%s\n", m.is_reference ? "," : "", name.c_str());
+				}
+			}
+			std::printf("  walked materials that the oracle does not list: %d\n", extra);
+			// a listed material that was not located by name must be one whose name is a string loaded earlier
+			if (not_located.size() != zone.unnamed_materials.size())
+			{
+				mismatches.add(std::to_string(not_located.size()) + " materials of the oracle were not located by name, " + std::to_string(zone.unnamed_materials.size())
+					+ " located materials have a name by reference");
+				for (const auto& name : not_located)
+				{
+					mismatches.add("material " + name + " of the oracle was not located");
+				}
+			}
+			std::printf("materials vs zone-materials: the oracle lists %d materials defined here ( + %d references ); located by name %d; located with a name by"
+				" reference ( = listed but not found by name ) %zu; every compared field equal: %d\n", listed, references, found, zone.unnamed_materials.size(), equal);
 			std::printf("  compared: sort key, game flags, state flags of all %d; %d technique set names ( %d by reference ); %d texture semantics; %d image names"
 				" ( %d images by reference / water / null )\n", found, techset_names, techset_by_reference, semantics, image_names, image_by_reference);
 		}
@@ -1226,7 +1381,7 @@ int main(const int argc, char** argv)
 {
 	if (argc < 2)
 	{
-		std::printf("usage: codol_render_check survey|iwd|textures|zone|names [--key value ..]   ( see the head of tools/realdata_check.cpp )\n");
+		std::printf("usage: codol_render_check survey|sweep|iwd|textures|zone|names [--key value ..]   ( see the head of tools/realdata_check.cpp )\n");
 		return 2;
 	}
 	arguments args;
@@ -1243,6 +1398,10 @@ int main(const int argc, char** argv)
 	if (command == "survey")
 	{
 		return survey(args);
+	}
+	if (command == "sweep")
+	{
+		return sweep(args);
 	}
 	if (command == "iwd")
 	{

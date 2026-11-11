@@ -349,4 +349,76 @@ void test_iwd()
 		iwd_key key{};
 		CHECK(!derive_iwd_key(dir / "does_not_exist.exe", key, &error));
 	}
+
+	// ---- the game's search order over several archives ( IwdArchiveSet.cs, GameInstallation.cs:343-385 ) -------
+	{
+		std::error_code ec;
+		const auto root = std::filesystem::temp_directory_path(ec) / "codol_render_work" / "codol_render_test_game";
+		std::filesystem::remove_all(root, ec);
+		std::filesystem::create_directories(root / "main", ec);
+		std::filesystem::create_directories(root / "main_shared", ec);
+		const auto make = [&](const char* directory, const std::string& file_name, std::initializer_list<std::pair<const char*, const char*>> files)
+		{
+			std::vector<zip_entry> entries;
+			for (const auto& [name, content] : files)
+			{
+				zip_entry e;
+				e.name = name;
+				e.stored.assign(content, content + std::strlen(content));
+				e.crc = crc32(e.stored);
+				e.uncompressed_size = static_cast<std::uint32_t>(e.stored.size());
+				entries.push_back(e);
+			}
+			CHECK(write_file(root / directory / file_name, build_iwd(entries, file_name, &nist, 0)));
+		};
+		make("main", "iw_image_00.iwd", { { "images/a.iwi", "A0" }, { "images/b.iwi", "B0" } });
+		make("main", "iw_image_05.iwd", { { "images/A.iwi", "A5" } });								// a higher number wins; paths compare without case
+		make("main", "localized_x_iw_image_00.iwd", { { "images/b.iwi", "BL" } });				// localized archives are searched first
+		make("main", "iw_imagestripped_00.iwd", { { "images/a.iwi", "AS" }, { "images/c.iwi", "CS" } });
+		make("main", "iw_sound_00.iwd", { { "sound/x.wav", "X" } });								// no image: not part of the set
+		make("main_shared", "iw_image_09.iwd", { { "images/a.iwi", "A9" }, { "images\\d.iwi", "D" } });	// main is searched before main_shared
+
+		image_archive_sets sets;
+		std::string error;
+		std::vector<std::string> warnings;
+		CHECK(open_image_archives(root, nist, sets, &error, &warnings));
+		CHECK(warnings.empty());
+		CHECK(sets.images && sets.stripped);
+		if (sets.images && sets.stripped)
+		{
+			CHECK_EQ(sets.images->archives().size(), 4u);
+			CHECK(sets.images->archives()[0]->file_name() == "localized_x_iw_image_00.iwd");
+			CHECK(sets.images->archives()[1]->file_name() == "iw_image_05.iwd");
+			CHECK(sets.images->archives()[2]->file_name() == "iw_image_00.iwd");
+			CHECK(sets.images->archives()[3]->file_name() == "iw_image_09.iwd");
+			CHECK_EQ(sets.images->entry_count(), 3u);			// a, b, d
+			CHECK_EQ(sets.images->duplicate_names(), 3);		// a twice, b once
+			CHECK_EQ(sets.stripped->archives().size(), 1u);
+			CHECK_EQ(sets.stripped->entry_count(), 2u);
+
+			const auto content = [&](const char* image) -> std::string
+			{
+				std::vector<std::uint8_t> data;
+				return sets.read(image, data, &error) ? std::string(data.begin(), data.end()) : "?";
+			};
+			CHECK(content("a") == "A5");
+			CHECK(content(",a") == "A5");		// a reference name
+			CHECK(content("B") == "BL");
+			CHECK(content("d") == "D");
+			CHECK(content("c") == "CS");		// only the stripped archives have it
+			CHECK(content("e") == "?");
+			iwd_archive_set::hit hit;
+			CHECK(sets.images->find("IMAGES\\A.IWI", hit) && hit.archive->file_name() == "iw_image_05.iwd");
+			CHECK(!sets.images->find("images/c.iwi", hit));
+			CHECK(iwd_archive_set::normalize("\\Images/Foo.IWI") == "images/foo.iwi");
+			int visited = 0;
+			sets.images->for_each([&](const std::string&, const iwd_archive_set::hit&) { visited++; });
+			CHECK_EQ(visited, 3);
+		}
+		sets = {};		// closes the archives
+		std::filesystem::remove_all(root, ec);
+
+		image_archive_sets none;
+		CHECK(!open_image_archives(root, nist, none, &error));
+	}
 }

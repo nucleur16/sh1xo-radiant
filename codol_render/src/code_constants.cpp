@@ -1,5 +1,7 @@
 #include "codol_render/code_constants.hpp"
 
+#include "codol_render/code_tables.hpp"
+
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -414,6 +416,12 @@ namespace codol::render
 		}
 		const auto found = by_index_.find(index);
 		return { found != by_index_.end() ? found->second : name_slot(name), -1, 0 };
+	}
+
+	constant_handle code_constants::resolve(const int index)
+	{
+		const code_name* known = code_constant(index);
+		return resolve(index, known ? std::string_view(known->name) : std::string_view("code" + std::to_string(index)));
 	}
 
 	int code_constants::version_of(const constant_handle& handle) const

@@ -8,10 +8,19 @@
 // ( "1.1.1.13 is the IW4 numbering with ssaoParms at 8, renderSourceSize at 24 and overlayTexCoord at 56 added,
 // 79 float4 constants, the first code matrix at 79" ), GameMapRenderer.cs:1689-1738.
 //
-// The `name` of every entry is the identifier the game's HLSL uses, i.e. what a shader's constant table ( CTAB )
-// calls the register a code argument feeds; code_constants keys its float4 slots by that name. `observed` tells
-// whether tools/realdata_check ( the "names" check ) saw that pairing in the stock 1.1.1.13 zones; the names
-// of unobserved entries are the IW4 ones and are INFERRED.
+// `hlsl` is what the game's shaders call the register a code argument feeds ( the name in the shader's constant
+// table, CTAB ); the C# renderer keys its float4 slots by that name. `name` is the same identifier made unique per
+// index ( the elements of the HLSL arrays filterTap[8], particleCloudMatrix, codeMeshArg[2] get a number ), so that
+// a draw loop can resolve a code constant from its index alone: code_constants::resolve( index ).
+// `observed` tells whether tools/codol_render_check ( "names" ) saw the pairing in stock 1.1.1.13 zones ( MEASURED );
+// the names of unobserved entries are the IW4 ones ( INFERRED ).
+//
+// MATRICES. Index FIRST_CODE_MATRIX + 4 * group + variant with the variants in the enum order matrix, inverse,
+// transpose, inverse transpose. An HLSL float4x4 occupies four registers holding its COLUMNS, i.e. the rows of
+// its transpose, so the shaders' "worldMatrix" is fed by TRANSPOSE_WORLD_MATRIX ( index 101 ), "inverseWorldViewMatrix"
+// by INVERSE_TRANSPOSE_WORLD_VIEW_MATRIX ( 106 ), and so on - measured for 85, 89, 90, 93, 97, 101, 104, 105, 106, 109,
+// 117 and 129. The table's names follow the shaders; `source` is the enum. code_constants::write produces the rows
+// from the index, so nothing has to be transposed by the caller.
 
 #include "build_1_1_1_13.hpp"
 
@@ -22,17 +31,16 @@ namespace codol::render
 {
 	struct code_name
 	{
-		const char* name;			// HLSL identifier
+		const char* name;			// unique per index
+		const char* hlsl;			// register name in the shaders' constant tables ( "" when none was seen )
 		const char* source;			// the IW4 enum name without the CONST_SRC_CODE_ / TEXTURE_SRC_CODE_ prefix
-		bool observed;				// name confirmed against shader constant tables of the game's zones
+		bool observed;				// pairing confirmed against shader constant tables of the game's zones
 	};
 
-	// Code constant `index` ( shader_argument::code_index ), 0 .. CODE_CONSTANT_COUNT - 1. For a matrix
-	// ( index >= FIRST_CODE_MATRIX ) the name is the HLSL matrix name, e.g. "worldViewProjectionMatrix",
-	// "inverseViewMatrix". nullptr when out of range.
+	// Code constant `index` ( shader_argument::code_index ), 0 .. CODE_CONSTANT_COUNT - 1; nullptr when out of range.
 	const code_name* code_constant(int index);
 	inline const char* code_constant_name(const int index) { const auto* c = code_constant(index); return c ? c->name : ""; }
-	// -1 when no code constant has that HLSL name
+	// by the unique `name`; -1 when there is none
 	int code_constant_index(std::string_view name);
 
 	// Code sampler `index` ( the value of a CodePixelSampler argument ), 0 .. CODE_SAMPLER_COUNT - 1
