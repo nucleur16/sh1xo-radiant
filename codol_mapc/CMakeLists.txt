@@ -60,6 +60,7 @@ endfunction()
 add_library(codol_mapc STATIC
 	include/codol_mapc/mapc.hpp
 	include/codol_mapc/trace.hpp
+	include/codol_mapc/server_check.hpp
 	src/mapc_impl.hpp
 	src/diff.cpp
 	src/compile.cpp
@@ -67,6 +68,7 @@ add_library(codol_mapc STATIC
 	src/stage_brushes.cpp
 	src/stage_surfaces.cpp
 	src/trace.cpp
+	src/server_check.cpp
 )
 target_include_directories(codol_mapc PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # light_grid.hpp / sight_trace.hpp: the renderer's model lighting, so that a compiled model is lit the way load_map lights it

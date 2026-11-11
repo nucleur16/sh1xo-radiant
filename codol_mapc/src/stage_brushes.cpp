@@ -18,15 +18,20 @@
 //                        leafBrushCount is -1 the node that follows holds the brushes that straddle the split.
 //
 // A new brush goes into the tree of every collision leaf its box touches ( found by walking the clip map's BSP ),
-// or of its brush model. The existing trees are not rebuilt: a tree whose root is a list gets the brush appended;
-// in front of any other root a node with leafBrushCount -1 is put, followed by a list node with the new
-// brushes, both children leading to the old root ( range is set so that every trace takes child 0 ). A removed
-// brush leaves the lists that name it; the brush array is compacted and every list renumbered.
+// or of its brush model: into the list of a tree that is one list, else among the brushes on the split of the
+// tree's root ( tested by every trace that enters the tree ). A removed brush leaves the lists that name it; a
+// list left empty goes, with every split that has nothing left to choose between.
+//
+// The arrays are written again whole, in the shape the game's map compiler gives them and a dedicated server
+// insists on ( server_check.hpp ): brushsides and brushEdges are the runs of the brushes in brush order, leafbrushes
+// the lists of the nodes in node order, each back to back and without anything else.
 
 #include "mapc_impl.hpp"
 
 #include <functional>
+#include <optional>
 #include <set>
+#include <tuple>
 
 namespace codol::mapc
 {
@@ -387,100 +392,207 @@ namespace codol::mapc
 			throw compile_error("brushes: more than 65535 brushes");
 		}
 
-		// ---- brush arrays: the kept brushes in order ( a replaced one in its place ), then the new ones
-		std::map<std::uint32_t, ZoneTarget> brush_pointers;
+		// ---- brush arrays: the kept brushes in order ( a replaced one in its place ), then the new ones.
+		// brushsides and brushEdges are written again from the first entry: the runs of the brushes back to back in
+		// brush order, nothing else in them. That is how the base zones have them, and a dedicated server reads them
+		// by walking the brushes ( server_check.hpp ), so a run that is appended behind the others, or one that a
+		// removed brush leaves behind, makes the map unloadable there.
+		std::map<std::uint32_t, ZoneTarget> brush_pointers, side_planes;
 		for (const ZonePointer& p : editor.data_pointers(brushes_id))
 		{
 			brush_pointers.emplace(p.offset, p.target);
 		}
+		for (const ZonePointer& p : editor.data_pointers(sides_id))
+		{
+			side_planes.emplace(p.offset, p.target);
+		}
+		for (const auto& [id, owner, what] : { std::tuple{ sides_id, brushes_id, "clipMap.brushsides" }, std::tuple{ edges_id, brushes_id, "clipMap.brushEdges" },
+			std::tuple{ lists_id, nodes_id, "clipMap.leafbrushes" } })
+		{
+			for (const zone::ZoneInbound& in : editor.pointers_to(id))
+			{
+				if (in.from != owner)
+				{
+					throw compile_error(format("brushes: something else than the clip map's brushes / leaf brush nodes points into %s; the array cannot be written again", what));
+				}
+			}
+		}
 		std::vector<c1::cbrush_t> new_brushes(next_index);
 		std::vector<c1::Bounds> new_bounds(next_index);
 		std::vector<std::int32_t> new_contents(next_index);
-		std::vector<ZonePointer> new_brush_pointers;
-		std::vector<std::uint8_t> is_fresh(next_index, 0);
+		std::vector<ZonePointer> new_brush_pointers, new_side_pointers;
+		std::vector<std::uint8_t> new_sides, new_edges;
+		std::vector<int> old_of(next_index, -1);
+		std::vector<const new_brush*> fresh_at(next_index, nullptr);
 		for (const new_brush& b : fresh)
 		{
-			is_fresh[static_cast<std::size_t>(b.index)] = 1;
+			fresh_at[static_cast<std::size_t>(b.index)] = &b;
 		}
-		const std::uint32_t sides_offset = offsetof(c1::cbrush_t, sides), edges_offset = offsetof(c1::cbrush_t, baseAdjacentSide);
 		for (std::uint32_t b = 0; b < old_count; b++)
 		{
-			const int n = remap[b];
-			if (n < 0 || is_fresh[static_cast<std::size_t>(n)])
+			if (remap[b] >= 0 && !fresh_at[static_cast<std::size_t>(remap[b])])
 			{
-				continue;
-			}
-			new_brushes[static_cast<std::size_t>(n)] = brushes[b];
-			new_bounds[static_cast<std::size_t>(n)] = bounds[b];
-			new_contents[static_cast<std::size_t>(n)] = contents[b];
-			for (const std::uint32_t field : { sides_offset, edges_offset })
-			{
-				if (const auto it = brush_pointers.find(36 * b + field); it != brush_pointers.end())
-				{
-					new_brush_pointers.push_back({ 36u * static_cast<std::uint32_t>(n) + field, it->second });
-				}
+				old_of[static_cast<std::size_t>(remap[b])] = static_cast<int>(b);
 			}
 		}
-		std::sort(fresh.begin(), fresh.end(), [](const new_brush& a, const new_brush& b) { return a.index < b.index; });
-		std::vector<ZonePointer> side_pointers = editor.data_pointers(sides_id);
+		const std::uint32_t sides_offset = offsetof(c1::cbrush_t, sides), edges_offset = offsetof(c1::cbrush_t, baseAdjacentSide);
 		const std::size_t old_planes = planes.size(), old_sides = sides.size() / 8;
-		for (const new_brush& b : fresh)
+		struct empty_run		// the pointer of a brush without sides / edges that led into the array: it keeps its place between the runs
 		{
-			c1::cbrush_t packed{};
-			packed.numsides = static_cast<std::uint16_t>(b.sides.size());
-			std::vector<std::uint8_t> run;
-			for (int axis = 0; axis < 3; axis++)
+			std::uint32_t field;
+			bool is_sides;
+			std::uint32_t offset;
+		};
+		std::vector<empty_run> empty_runs;
+		int new_side_count = 0;
+		for (std::uint32_t n = 0; n < next_index; n++)
+		{
+			const std::uint32_t at = 36u * n;
+			if (const new_brush* fb = fresh_at[n])
 			{
-				for (int positive = 0; positive < 2; positive++)
+				const new_brush& b = *fb;
+				c1::cbrush_t packed{};
+				packed.numsides = static_cast<std::uint16_t>(b.sides.size());
+				std::vector<std::uint8_t> run;
+				for (int axis = 0; axis < 3; axis++)
 				{
-					packed.axialMaterialNum[positive][axis] = b.axial_material[positive][axis];
-					packed.firstAdjacentSideOffsets[positive][axis] = static_cast<std::uint8_t>(run.size());
-					packed.edgeCount[positive][axis] = static_cast<std::uint8_t>(b.axial_adjacent[positive][axis].size());
-					run.insert(run.end(), b.axial_adjacent[positive][axis].begin(), b.axial_adjacent[positive][axis].end());
-				}
-			}
-			const std::uint32_t at = 36u * static_cast<std::uint32_t>(b.index);
-			if (!b.sides.empty())
-			{
-				new_brush_pointers.push_back({ at + sides_offset, ZoneTarget::to_data(sides_id, static_cast<std::uint32_t>(sides.size())) });
-			}
-			for (const new_side& s : b.sides)
-			{
-				// the plane: one the map has, else a new one at the end of the array
-				std::size_t plane = planes.size();
-				for (std::size_t p = 0; p < planes.size(); p++)
-				{
-					if (std::fabs(planes[p].dist - s.dist) < 1e-3f && std::fabs(planes[p].normal[0] - s.normal[0]) < 1e-5f && std::fabs(planes[p].normal[1] - s.normal[1]) < 1e-5f
-						&& std::fabs(planes[p].normal[2] - s.normal[2]) < 1e-5f)
+					for (int positive = 0; positive < 2; positive++)
 					{
-						plane = p;
-						break;
+						packed.axialMaterialNum[positive][axis] = b.axial_material[positive][axis];
+						packed.firstAdjacentSideOffsets[positive][axis] = static_cast<std::uint8_t>(run.size());
+						packed.edgeCount[positive][axis] = static_cast<std::uint8_t>(b.axial_adjacent[positive][axis].size());
+						run.insert(run.end(), b.axial_adjacent[positive][axis].begin(), b.axial_adjacent[positive][axis].end());
 					}
 				}
-				if (plane == planes.size())
+				if (!b.sides.empty())
 				{
-					c1::cplane_s p{};
-					std::memcpy(p.normal, s.normal, 12);
-					p.dist = s.dist;
-					p.type = 3;		// not axial; the base zones leave signbits 0
-					planes.push_back(p);
+					new_brush_pointers.push_back({ at + sides_offset, ZoneTarget::to_data(sides_id, static_cast<std::uint32_t>(new_sides.size())) });
 				}
-				c1::cbrushside_t side{};
-				side.materialNum = static_cast<std::uint16_t>(s.material);
-				side.firstAdjacentSideOffset = static_cast<std::uint8_t>(run.size());
-				side.edgeCount = static_cast<std::uint8_t>(s.adjacent.size());
-				run.insert(run.end(), s.adjacent.begin(), s.adjacent.end());
-				side_pointers.push_back({ static_cast<std::uint32_t>(sides.size()), ZoneTarget::to_data(planes_id, static_cast<std::uint32_t>(20 * plane)) });
-				append(sides, side);
+				for (const new_side& s : b.sides)
+				{
+					// the plane: one the map has, else a new one at the end of the array. A unit normal: the server
+					// refuses a plane array with a normal whose length^2 is more than 0.001 from 1.
+					float normal[3] = { s.normal[0], s.normal[1], s.normal[2] };
+					const float length = std::sqrt(normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]);
+					if (!(length > 0.5f) || !std::isfinite(length) || !std::isfinite(s.dist))
+					{
+						throw compile_error("brushes: a side of a new brush has no usable plane");
+					}
+					const float dist = s.dist / length;
+					for (float& v : normal)
+					{
+						v /= length;
+					}
+					std::size_t plane = planes.size();
+					for (std::size_t p = 0; p < planes.size(); p++)
+					{
+						if (std::fabs(planes[p].dist - dist) < 1e-3f && std::fabs(planes[p].normal[0] - normal[0]) < 1e-5f && std::fabs(planes[p].normal[1] - normal[1]) < 1e-5f
+							&& std::fabs(planes[p].normal[2] - normal[2]) < 1e-5f)
+						{
+							plane = p;
+							break;
+						}
+					}
+					if (plane == planes.size())
+					{
+						c1::cplane_s p{};
+						std::memcpy(p.normal, normal, 12);
+						p.dist = dist;
+						p.type = 3;		// not axial; the base zones leave signbits 0
+						planes.push_back(p);
+					}
+					c1::cbrushside_t side{};
+					side.materialNum = static_cast<std::uint16_t>(s.material);
+					side.firstAdjacentSideOffset = static_cast<std::uint8_t>(run.size());
+					side.edgeCount = static_cast<std::uint8_t>(s.adjacent.size());
+					run.insert(run.end(), s.adjacent.begin(), s.adjacent.end());
+					new_side_pointers.push_back({ static_cast<std::uint32_t>(new_sides.size()), ZoneTarget::to_data(planes_id, static_cast<std::uint32_t>(20 * plane)) });
+					append(new_sides, side);
+					new_side_count++;
+				}
+				if (!run.empty())
+				{
+					new_brush_pointers.push_back({ at + edges_offset, ZoneTarget::to_data(edges_id, static_cast<std::uint32_t>(new_edges.size())) });
+					new_edges.insert(new_edges.end(), run.begin(), run.end());
+				}
+				new_brushes[n] = packed;
+				new_bounds[n] = b.bounds.bounds();
+				new_contents[n] = b.contents;
+				continue;
 			}
-			if (!run.empty())
+			const std::uint32_t b = static_cast<std::uint32_t>(old_of[n]);
+			c1::cbrush_t packed = brushes[b];
+			new_bounds[n] = bounds[b];
+			new_contents[n] = contents[b];
+			std::uint32_t edge_total = 0;
+			for (int positive = 0; positive < 2; positive++)
 			{
-				new_brush_pointers.push_back({ at + edges_offset, ZoneTarget::to_data(edges_id, static_cast<std::uint32_t>(edges.size())) });
-				edges.insert(edges.end(), run.begin(), run.end());
+				for (int axis = 0; axis < 3; axis++)
+				{
+					edge_total += packed.edgeCount[positive][axis];
+				}
 			}
-			new_brushes[static_cast<std::size_t>(b.index)] = packed;
-			new_bounds[static_cast<std::size_t>(b.index)] = b.bounds.bounds();
-			new_contents[static_cast<std::size_t>(b.index)] = b.contents;
+			const auto old_sides_pointer = brush_pointers.find(36 * b + sides_offset), old_edges_pointer = brush_pointers.find(36 * b + edges_offset);
+			const auto into = [&](const std::map<std::uint32_t, ZoneTarget>::const_iterator it, const ZoneDataId array)
+			{
+				return it != brush_pointers.end() && it->second.kind == ZoneTarget::Kind::data && it->second.data == array;
+			};
+			if (packed.numsides)
+			{
+				if (!into(old_sides_pointer, sides_id) || old_sides_pointer->second.offset % 8 || old_sides_pointer->second.offset + 8u * packed.numsides > sides.size())
+				{
+					throw compile_error(format("brushes: the sides of brush %u are not a run of clipMap.brushsides", b));
+				}
+				new_brush_pointers.push_back({ at + sides_offset, ZoneTarget::to_data(sides_id, static_cast<std::uint32_t>(new_sides.size())) });
+				for (std::uint32_t s = 0; s < packed.numsides; s++)
+				{
+					const std::uint32_t source = old_sides_pointer->second.offset + 8 * s;
+					const auto plane = side_planes.find(source);
+					if (plane == side_planes.end())
+					{
+						throw compile_error(format("brushes: a side of brush %u does not point at its plane", b));
+					}
+					new_side_pointers.push_back({ static_cast<std::uint32_t>(new_sides.size()), plane->second });
+					new_sides.insert(new_sides.end(), sides.begin() + source, sides.begin() + source + 8);
+					edge_total += sides[source + offsetof(c1::cbrushside_t, edgeCount)];
+				}
+			}
+			else if (into(old_sides_pointer, sides_id))
+			{
+				empty_runs.push_back({ at + sides_offset, true, static_cast<std::uint32_t>(new_sides.size()) });
+				packed.sides = 0;
+			}
+			else if (old_sides_pointer != brush_pointers.end())
+			{
+				new_brush_pointers.push_back({ at + sides_offset, old_sides_pointer->second });
+			}
+			if (edge_total)
+			{
+				if (!into(old_edges_pointer, edges_id) || old_edges_pointer->second.offset + edge_total > edges.size())
+				{
+					throw compile_error(format("brushes: the edge lists of brush %u are not a run of clipMap.brushEdges", b));
+				}
+				new_brush_pointers.push_back({ at + edges_offset, ZoneTarget::to_data(edges_id, static_cast<std::uint32_t>(new_edges.size())) });
+				new_edges.insert(new_edges.end(), edges.begin() + old_edges_pointer->second.offset, edges.begin() + old_edges_pointer->second.offset + edge_total);
+			}
+			else if (into(old_edges_pointer, edges_id))
+			{
+				empty_runs.push_back({ at + edges_offset, false, static_cast<std::uint32_t>(new_edges.size()) });
+				packed.baseAdjacentSide = 0;
+			}
+			else if (old_edges_pointer != brush_pointers.end())
+			{
+				new_brush_pointers.push_back({ at + edges_offset, old_edges_pointer->second });
+			}
+			new_brushes[n] = packed;
+		}
+		for (const empty_run& r : empty_runs)
+		{
+			// behind the last run there is nothing to point at: the field is null then ( nothing reads it )
+			if (r.offset < (r.is_sides ? new_sides.size() : new_edges.size()))
+			{
+				new_brush_pointers.push_back({ r.field, ZoneTarget::to_data(r.is_sides ? sides_id : edges_id, r.offset) });
+			}
 		}
 		std::sort(new_brush_pointers.begin(), new_brush_pointers.end(), [](const ZonePointer& a, const ZonePointer& b) { return a.offset < b.offset; });
 
@@ -544,85 +656,117 @@ namespace codol::mapc
 			}
 		}
 
-		// ---- the lists of the existing trees: removed brushes leave, the rest is renumbered
-		const zaddr lists_address = raw.leafbrushes;
-		for (std::uint16_t& v : lists)
-		{
-			v = v < old_count && remap[v] >= 0 ? static_cast<std::uint16_t>(remap[v]) : std::uint16_t{ 0 };
-		}
+		// ---- the leaf brush trees.
+		// What a dedicated server takes ( server_check.hpp ): a node lists brushes, or it splits with two children that
+		// lie behind it - there is no node that does neither - and in node order the lists that are stored in
+		// clipMap.leafbrushes are that array, back to back. So the trees are edited as trees and written again:
+		//   a removed brush leaves its list; a list left empty goes, and with it every split that has nothing left
+		//     on one side and nothing on the split ( the other side takes its place );
+		//   a new brush joins the list of a tree that is one list. In a tree that splits it joins the brushes *on* the
+		//     root's split ( the list a node with leafBrushCount -1 has behind it; a root without one gets one ): those
+		//     are tested by every trace that enters the tree, whatever side of the split it is on, so this does not
+		//     depend on reading dist / range right, and no node is made up.
 		struct node_state
 		{
-			std::vector<std::uint16_t> list;		// what the node lists now
+			std::vector<std::uint16_t> list;		// what the node lists now ( new brush indices )
 			ZoneDataId inline_list = 0;				// the list is stored behind the node array
-			std::optional<ZoneTarget> pointer;		// else: where it points
-			bool rewrite = false;
+			bool changed = false;
 		};
-		std::vector<node_state> states(nodes.size());
+		const std::size_t node_count = nodes.size();
+		std::vector<node_state> states(node_count);
 		std::map<std::uint32_t, ZoneTarget> node_pointers;
 		for (const ZonePointer& p : editor.data_pointers(nodes_id))
 		{
-			if (p.target.kind != ZoneTarget::Kind::raw)
-			{
-				node_pointers.emplace(p.offset, p.target);
-			}
+			node_pointers.emplace(p.offset, p.target);
 		}
-		for (std::size_t n = 0; n < nodes.size(); n++)
+		const auto is_list = [&](const std::size_t n) { return nodes[n].leafBrushCount > 0; };
+		const auto is_reserved = [&](const std::size_t n)
 		{
-			if (nodes[n].leafBrushCount <= 0)
+			static const c1::cLeafBrushNode_s zero{};
+			return n == 0 && std::memcmp(&nodes[0], &zero, sizeof(zero)) == 0;
+		};
+		const auto child_of = [&](const std::size_t n, const int c) { return n + rd<std::uint16_t>({ nodes[n].data, 12 }, 8 + 2 * static_cast<std::size_t>(c)); };
+		for (std::size_t n = 0; n < node_count; n++)
+		{
+			if (!is_list(n))
 			{
+				if (is_reserved(n))
+				{
+					continue;
+				}
+				// a split: children behind it, inside the array; with leafBrushCount -1 the node right behind it is the
+				// tree ( mostly one list ) of the brushes on the split
+				for (int c = 0; c < 2; c++)
+				{
+					if (child_of(n, c) <= n || child_of(n, c) >= node_count)
+					{
+						throw compile_error(format("brushes: leaf brush node %zu neither lists brushes nor splits; the trees of the base zone are not shaped as expected", n));
+					}
+				}
+				if (nodes[n].leafBrushCount < -1 || (nodes[n].leafBrushCount < 0 && n + 1 >= node_count))
+				{
+					throw compile_error(format("brushes: leaf brush node %zu ( leafBrushCount %d ) has no node behind it", n, nodes[n].leafBrushCount));
+				}
 				continue;
 			}
 			node_state& s = states[n];
 			const zaddr address = rd<zaddr>({ node_image[n].data, 12 }, 0);
 			const auto old_list = zone.get_array<std::uint16_t>(address, static_cast<std::size_t>(nodes[n].leafBrushCount));
-			bool lost = false;
 			for (const std::uint16_t b : old_list)
 			{
 				if (b < old_count && !removed[b] && remap[b] >= 0)
 				{
 					s.list.push_back(static_cast<std::uint16_t>(remap[b]));
 				}
-				else
-				{
-					lost = true;
-				}
 			}
+			s.changed = s.list != old_list;
 			if (rd<std::uint32_t>({ nodes[n].data, 12 }, 0) == FOLLOWS)
 			{
 				s.inline_list = ctx.data(address, "leaf brush list");
-				s.rewrite = lost || s.list != old_list;
 			}
 			else
 			{
 				const auto it = node_pointers.find(static_cast<std::uint32_t>(NODE_SIZE * n + 8));
-				if (it == node_pointers.end())
+				if (it == node_pointers.end() || it->second.kind != ZoneTarget::Kind::data || it->second.data != lists_id)
 				{
-					throw compile_error("brushes: a leaf brush node lists brushes without pointing at them");
-				}
-				s.pointer = it->second;
-				// a list in the leafbrushes array was renumbered in place; one that lost a brush moves to a new run
-				s.rewrite = lost || !(address >= lists_address && it->second.kind == ZoneTarget::Kind::data && it->second.data == lists_id);
-				if (!lost && !s.rewrite)
-				{
-					s.rewrite = false;
-				}
-				else if (!lost)
-				{
-					// stored elsewhere and not ours to renumber: only an issue when brushes were deleted
-					s.rewrite = s.list != old_list;
+					throw compile_error(format("brushes: the list of leaf brush node %zu is neither in clipMap.leafbrushes nor behind the nodes", n));
 				}
 			}
 		}
+		std::map<std::size_t, std::vector<std::uint16_t>> new_split_lists;		// split -> a new list of brushes on its split, written right behind it
+		// what stands for the tree below node n once the empty parts are gone: a node of the old array, or -1 for nothing
+		const std::function<int(std::size_t, int)> resolve = [&](const std::size_t n, const int depth) -> int
+		{
+			if (depth > 256)
+			{
+				throw compile_error("brushes: a leaf brush tree of the base zone is deeper than 256 nodes ( or not a tree )");
+			}
+			if (is_list(n))
+			{
+				return states[n].list.empty() ? -1 : static_cast<int>(n);
+			}
+			if (is_reserved(n))
+			{
+				return -1;
+			}
+			const int a = resolve(child_of(n, 0), depth + 1), b = resolve(child_of(n, 1), depth + 1);
+			const int on_split = nodes[n].leafBrushCount < 0 ? resolve(n + 1, depth + 1) : -1;
+			if (new_split_lists.count(n) || on_split >= 0)
+			{
+				// with nothing left on either side, what is on the split is the tree
+				return a < 0 && b < 0 ? on_split : static_cast<int>(n);
+			}
+			return a >= 0 && b >= 0 ? static_cast<int>(n) : a >= 0 ? a : b;
+		};
+		const auto has_split_list = [&](const std::size_t n)
+		{
+			return new_split_lists.count(n) != 0 || (nodes[n].leafBrushCount < 0 && resolve(n + 1, 1) >= 0);
+		};
 
 		// ---- new brushes into the trees
-		struct root_add
-		{
-			std::vector<int> brushes;
-			int contents = 0;
-		};
-		std::map<int, root_add> wrap;			// old root ( inner node ) -> brushes to put in front of it
 		std::vector<std::pair<std::vector<int>, int>> fresh_roots;		// trees of their own: brushes, contents
 		std::map<int, int> fresh_root_of_leaf, fresh_root_of_model;
+		std::size_t split_lists_grown = 0;
 		const auto contents_of = [&](const std::vector<int>& list)
 		{
 			int all = 0;
@@ -632,35 +776,58 @@ namespace codol::mapc
 			}
 			return all;
 		};
-		const auto add_to_root = [&](const int root, const std::vector<int>& add) -> bool		// false: there is no tree, make one
+		const auto add_to_list = [](std::vector<std::uint16_t>& list, const std::vector<int>& add)
 		{
-			if (root <= 0 || root >= static_cast<int>(nodes.size()))
+			for (const int b : add)
+			{
+				if (std::find(list.begin(), list.end(), static_cast<std::uint16_t>(b)) == list.end())
+				{
+					list.push_back(static_cast<std::uint16_t>(b));
+				}
+			}
+		};
+		// adds the brushes to the tree below node n so that every trace that enters the tree tests them. false: nothing
+		// is left of that tree
+		const std::function<bool(std::size_t, const std::vector<int>&, int)> add_to_tree = [&](const std::size_t n, const std::vector<int>& add, const int depth) -> bool
+		{
+			if (is_list(n))
+			{
+				add_to_list(states[n].list, add);
+				states[n].changed = true;
+				nodes[n].contents |= contents_of(add);
+				return true;
+			}
+			if (is_reserved(n) || depth > 256)
 			{
 				return false;
 			}
-			if (nodes[static_cast<std::size_t>(root)].leafBrushCount > 0)
+			const bool sides_left = resolve(child_of(n, 0), 1) >= 0 || resolve(child_of(n, 1), 1) >= 0;
+			if (nodes[n].leafBrushCount < 0 && resolve(n + 1, 1) >= 0)
 			{
-				node_state& s = states[static_cast<std::size_t>(root)];
-				for (const int b : add)
+				// among the brushes on the split
+				if (!add_to_tree(n + 1, add, depth + 1))
 				{
-					if (std::find(s.list.begin(), s.list.end(), static_cast<std::uint16_t>(b)) == s.list.end())
-					{
-						s.list.push_back(static_cast<std::uint16_t>(b));
-					}
-				}
-				s.rewrite = true;
-				nodes[static_cast<std::size_t>(root)].contents |= contents_of(add);
-				return true;
-			}
-			root_add& w = wrap[root];
-			for (const int b : add)
-			{
-				if (std::find(w.brushes.begin(), w.brushes.end(), b) == w.brushes.end())
-				{
-					w.brushes.push_back(b);
+					return false;
 				}
 			}
-			w.contents |= contents_of(add);
+			else if (sides_left)
+			{
+				add_to_list(new_split_lists[n], add);
+			}
+			else
+			{
+				return false;
+			}
+			nodes[n].contents |= contents_of(add);
+			return true;
+		};
+		const auto add_to_root = [&](const int root_index, const std::vector<int>& add) -> bool		// false: there is no tree, make one
+		{
+			if (root_index <= 0 || root_index >= static_cast<int>(node_count) || !add_to_tree(static_cast<std::size_t>(root_index), add, 0))
+			{
+				return false;
+			}
+			split_lists_grown += is_list(static_cast<std::size_t>(root_index)) ? 0 : 1;
 			return true;
 		};
 		for (const auto& [leaf, add] : leaf_adds)
@@ -688,72 +855,76 @@ namespace codol::mapc
 		{
 			models_changed.insert(model);
 		}
-		std::vector<std::vector<int>> model_lists(models.size());
 		{
 			const std::function<void(int, std::vector<int>&, int)> collect = [&](const int n, std::vector<int>& out, const int depth)
 			{
-				if (n < 0 || n >= static_cast<int>(nodes.size()) || depth > 128)
+				if (n < 0 || n >= static_cast<int>(node_count) || depth > 256)
 				{
 					return;
 				}
-				const c1::cLeafBrushNode_s& node = nodes[static_cast<std::size_t>(n)];
-				if (node.leafBrushCount > 0)
+				const std::size_t at = static_cast<std::size_t>(n);
+				if (is_list(at))
 				{
-					out.insert(out.end(), states[static_cast<std::size_t>(n)].list.begin(), states[static_cast<std::size_t>(n)].list.end());
+					out.insert(out.end(), states[at].list.begin(), states[at].list.end());
 					return;
 				}
-				if (node.leafBrushCount < 0)
+				if (is_reserved(at))
+				{
+					return;
+				}
+				if (nodes[at].leafBrushCount < 0)
 				{
 					collect(n + 1, out, depth + 1);
 				}
+				if (const auto extra = new_split_lists.find(at); extra != new_split_lists.end())
+				{
+					out.insert(out.end(), extra->second.begin(), extra->second.end());
+				}
 				for (int c = 0; c < 2; c++)
 				{
-					if (const std::uint16_t offset = rd<std::uint16_t>({ node.data, 12 }, 8 + 2 * static_cast<std::size_t>(c)))
-					{
-						collect(n + offset, out, depth + 1);
-					}
+					collect(static_cast<int>(child_of(at, c)), out, depth + 1);
 				}
 			};
-			// a model that lost a brush is changed too
-			std::vector<int> owner(old_count, 0);
+			// a model that lost a brush is changed too: what the base zone lists below its root
 			for (std::size_t m = 1; m < models.size(); m++)
 			{
-				if (models[m].leaf.leafBrushNode > 0)
+				if (models[m].leaf.leafBrushNode <= 0)
 				{
-					// before the removals: what the base zone lists
-					const std::function<void(int, int)> mark = [&](const int n, const int depth)
-					{
-						if (n < 0 || n >= static_cast<int>(nodes.size()) || depth > 128)
-						{
-							return;
-						}
-						const c1::cLeafBrushNode_s& node = nodes[static_cast<std::size_t>(n)];
-						if (node.leafBrushCount > 0)
-						{
-							const auto old_list = zone.get_array<std::uint16_t>(rd<zaddr>({ node_image[static_cast<std::size_t>(n)].data, 12 }, 0), static_cast<std::size_t>(node.leafBrushCount));
-							for (const std::uint16_t b : old_list)
-							{
-								if (b < old_count && removed[b])
-								{
-									models_changed.insert(static_cast<int>(m));
-								}
-							}
-							return;
-						}
-						if (node.leafBrushCount < 0)
-						{
-							mark(n + 1, depth + 1);
-						}
-						for (int c = 0; c < 2; c++)
-						{
-							if (const std::uint16_t offset = rd<std::uint16_t>({ node.data, 12 }, 8 + 2 * static_cast<std::size_t>(c)))
-							{
-								mark(n + offset, depth + 1);
-							}
-						}
-					};
-					mark(models[m].leaf.leafBrushNode, 0);
+					continue;
 				}
+				const std::function<void(int, int)> mark = [&](const int n, const int depth)
+				{
+					if (n < 0 || n >= static_cast<int>(node_count) || depth > 256)
+					{
+						return;
+					}
+					const std::size_t at = static_cast<std::size_t>(n);
+					if (is_list(at))
+					{
+						const auto old_list = zone.get_array<std::uint16_t>(rd<zaddr>({ node_image[at].data, 12 }, 0), static_cast<std::size_t>(nodes[at].leafBrushCount));
+						for (const std::uint16_t b : old_list)
+						{
+							if (b < old_count && removed[b])
+							{
+								models_changed.insert(static_cast<int>(m));
+							}
+						}
+						return;
+					}
+					if (is_reserved(at))
+					{
+						return;
+					}
+					if (nodes[at].leafBrushCount < 0)
+					{
+						mark(n + 1, depth + 1);
+					}
+					for (int c = 0; c < 2; c++)
+					{
+						mark(static_cast<int>(child_of(at, c)), depth + 1);
+					}
+				};
+				mark(models[m].leaf.leafBrushNode, 0);
 			}
 			for (const int m : models_changed)
 			{
@@ -762,11 +933,6 @@ namespace codol::mapc
 					continue;
 				}
 				c1::cmodel_t& model = models[static_cast<std::size_t>(m)];
-				std::vector<int> all;
-				if (model.leaf.leafBrushNode > 0)
-				{
-					collect(model.leaf.leafBrushNode, all, 0);
-				}
 				if (const auto add = model_adds.find(m); add != model_adds.end())
 				{
 					if (!add_to_root(model.leaf.brushContents != 0 || model.leaf.leafBrushNode > 0 ? model.leaf.leafBrushNode : 0, add->second))
@@ -774,7 +940,15 @@ namespace codol::mapc
 						fresh_root_of_model[m] = static_cast<int>(fresh_roots.size());
 						fresh_roots.emplace_back(add->second, contents_of(add->second));
 					}
-					all.insert(all.end(), add->second.begin(), add->second.end());
+				}
+				std::vector<int> all;
+				if (const auto own = fresh_root_of_model.find(m); own != fresh_root_of_model.end())
+				{
+					all = fresh_roots[static_cast<std::size_t>(own->second)].first;
+				}
+				else if (model.leaf.leafBrushNode > 0)
+				{
+					collect(model.leaf.leafBrushNode, all, 0);
 				}
 				box all_bounds;
 				int all_contents = 0;
@@ -810,123 +984,162 @@ namespace codol::mapc
 			}
 		}
 
-		// ---- write the lists: new runs at the end of leafbrushes
-		const auto new_run = [&](const std::vector<std::uint16_t>& list)
+		// ---- which nodes stay: everything that still stands for itself
+		std::vector<std::uint8_t> keep(node_count, 1);
+		for (std::size_t n = 0; n < node_count; n++)
 		{
-			const std::uint32_t at = static_cast<std::uint32_t>(lists.size());
-			lists.insert(lists.end(), list.begin(), list.end());
-			return ZoneTarget::to_data(lists_id, 2 * at);
-		};
+			if (is_reserved(n))
+			{
+				continue;
+			}
+			keep[n] = resolve(n, 0) == static_cast<int>(n);
+		}
+		// what is on the split of a node with leafBrushCount -1 stays exactly when it is not empty ( resolve says so ); a
+		// split that stays keeps its place in front of it
+
+		// ---- write the nodes again; the lists of clipMap.leafbrushes in node order, back to back
 		struct emitted
 		{
 			c1::cLeafBrushNode_s node{};
 			std::optional<ZoneTarget> pointer;
 		};
 		std::vector<emitted> out_nodes;
-		std::vector<int> new_of_node(nodes.size(), -1), root_of_node(nodes.size(), -1);
+		std::vector<std::uint16_t> pool;
+		std::vector<int> new_of_node(node_count, -1);
 		std::vector<ZoneDataId> inline_removed;
 		std::vector<std::pair<ZoneDataId, std::vector<std::uint16_t>>> inline_rewritten;
-		const auto list_node = [&](const std::vector<int>& brush_list, const int list_contents)
+		std::size_t nodes_dropped = 0, lists_added = 0;
+		const auto pooled_list = [&](c1::cLeafBrushNode_s node, const std::vector<std::uint16_t>& list)
 		{
-			emitted e;
-			e.node.leafBrushCount = static_cast<std::int16_t>(brush_list.size());
-			e.node.contents = list_contents;
-			std::vector<std::uint16_t> run;
-			for (const int b : brush_list)
+			if (list.empty() || list.size() > 0x7FFF)
 			{
-				run.push_back(static_cast<std::uint16_t>(b));
+				throw compile_error("brushes: a leaf brush list with no or more than 32767 brushes");
 			}
-			e.pointer = new_run(run);
+			emitted e;
+			e.node = node;
+			e.node.leafBrushCount = static_cast<std::int16_t>(list.size());
+			std::memset(e.node.data, 0, sizeof(e.node.data));
+			e.pointer = ZoneTarget::to_data(lists_id, static_cast<std::uint32_t>(2 * pool.size()));
+			pool.insert(pool.end(), list.begin(), list.end());
 			return e;
 		};
-		for (std::size_t n = 0; n < nodes.size(); n++)
+		const auto fresh_list = [&](const std::vector<std::uint16_t>& list, const int list_contents)
 		{
-			if (const auto w = wrap.find(static_cast<int>(n)); w != wrap.end())
+			c1::cLeafBrushNode_s node{};
+			node.contents = list_contents;
+			lists_added++;
+			return pooled_list(node, list);
+		};
+		for (std::size_t n = 0; n < node_count; n++)
+		{
+			if (!keep[n])
 			{
-				// the node in front of an old root: its own list in the next node, both children the old root
-				emitted e;
-				e.node.leafBrushCount = -1;
-				e.node.contents = nodes[n].contents | w->second.contents;
-				const float dist = 0.0f, range = 1e30f;		// every trace is on the child 0 side
-				const std::uint16_t children[2] = { 2, 2 };
-				std::memcpy(e.node.data, &dist, 4);
-				std::memcpy(e.node.data + 4, &range, 4);
-				std::memcpy(e.node.data + 8, children, 4);
-				root_of_node[n] = static_cast<int>(out_nodes.size());
-				out_nodes.push_back(e);
-				out_nodes.push_back(list_node(w->second.brushes, w->second.contents));
+				nodes_dropped++;
+				if (states[n].inline_list)
+				{
+					inline_removed.push_back(states[n].inline_list);
+				}
+				continue;
 			}
 			new_of_node[n] = static_cast<int>(out_nodes.size());
-			emitted e;
-			e.node = nodes[n];
-			if (nodes[n].leafBrushCount > 0)
+			if (is_list(n))
 			{
-				node_state& s = states[n];
-				if (s.list.empty())
+				const node_state& s = states[n];
+				if (s.inline_list)
 				{
-					// nothing left: a node no trace enters
-					e.node.leafBrushCount = 0;
-					e.node.contents = 0;
-					std::memset(e.node.data, 0, sizeof(e.node.data));
-					if (s.inline_list)
+					emitted e;
+					e.node = nodes[n];
+					e.node.leafBrushCount = static_cast<std::int16_t>(s.list.size());
+					if (s.changed)
 					{
-						inline_removed.push_back(s.inline_list);
+						inline_rewritten.emplace_back(s.inline_list, s.list);
 					}
+					out_nodes.push_back(e);
 				}
 				else
 				{
-					e.node.leafBrushCount = static_cast<std::int16_t>(s.list.size());
-					if (s.inline_list)
-					{
-						if (s.rewrite)
-						{
-							inline_rewritten.emplace_back(s.inline_list, s.list);
-						}
-					}
-					else
-					{
-						e.pointer = s.rewrite ? new_run(s.list) : *s.pointer;
-						std::memset(e.node.data, 0, 4);
-					}
+					out_nodes.push_back(pooled_list(nodes[n], s.list));
 				}
+				continue;
+			}
+			emitted e;
+			e.node = nodes[n];
+			if (!is_reserved(n))
+			{
+				e.node.leafBrushCount = has_split_list(n) ? std::int16_t{ -1 } : std::int16_t{ 0 };
 			}
 			out_nodes.push_back(e);
+			if (const auto extra = new_split_lists.find(n); extra != new_split_lists.end())
+			{
+				std::vector<int> as_int(extra->second.begin(), extra->second.end());
+				out_nodes.push_back(fresh_list(extra->second, contents_of(as_int)));
+			}
 		}
 		const int first_fresh_root = static_cast<int>(out_nodes.size());
 		for (const auto& [brush_list, list_contents] : fresh_roots)
 		{
-			out_nodes.push_back(list_node(brush_list, list_contents));
+			std::vector<std::uint16_t> list;
+			for (const int b : brush_list)
+			{
+				list.push_back(static_cast<std::uint16_t>(b));
+			}
+			out_nodes.push_back(fresh_list(list, list_contents));
 		}
-		// the children of the old nodes are relative: nothing may have come between a node and its children
-		for (std::size_t n = 0; n < nodes.size(); n++)
+		// the children of a split are relative: to wherever what stands for the child is now
+		for (std::size_t n = 0; n < node_count; n++)
 		{
-			if (nodes[n].leafBrushCount > 0)
+			if (!keep[n] || is_list(n) || is_reserved(n))
 			{
 				continue;
 			}
+			c1::cLeafBrushNode_s& node = out_nodes[static_cast<std::size_t>(new_of_node[n])].node;
+			int target[2] = { resolve(child_of(n, 0), 1), resolve(child_of(n, 1), 1) };
+			if (target[0] < 0 && target[1] < 0)
+			{
+				throw compile_error("brushes: a split of a leaf brush tree was kept without anything below it");
+			}
+			// a side with nothing left ( only possible when the node has brushes on its split ): both sides lead to the other
+			target[0] = target[0] < 0 ? target[1] : target[0];
+			target[1] = target[1] < 0 ? target[0] : target[1];
 			for (int c = 0; c < 2; c++)
 			{
-				const std::uint16_t offset = rd<std::uint16_t>({ nodes[n].data, 12 }, 8 + 2 * static_cast<std::size_t>(c));
-				if (offset && (n + offset >= nodes.size() || new_of_node[n + offset] - new_of_node[n] != offset || wrap.count(static_cast<int>(n + offset))))
+				const int offset = new_of_node[static_cast<std::size_t>(target[c])] - new_of_node[n];
+				if (new_of_node[static_cast<std::size_t>(target[c])] < 0 || offset <= 0 || offset > 0xFFFF)
 				{
-					throw compile_error("brushes: a leaf brush tree of the base zone is not laid out as one block per collision leaf; new brushes cannot be added to it");
+					throw compile_error("brushes: a leaf brush tree could not be written again ( a child does not lie behind its node )");
+				}
+				const std::uint16_t value = static_cast<std::uint16_t>(offset);
+				std::memcpy(node.data + 8 + 2 * c, &value, 2);
+			}
+			if (node.leafBrushCount < 0 && !new_split_lists.count(n))
+			{
+				const int on_split = resolve(n + 1, 1);
+				if (on_split < 0 || new_of_node[static_cast<std::size_t>(on_split)] != new_of_node[n] + 1)
+				{
+					throw compile_error("brushes: a leaf brush tree could not be written again ( the brushes on a split are not right behind it )");
 				}
 			}
-			if (nodes[n].leafBrushCount < 0 && (n + 1 >= nodes.size() || new_of_node[n + 1] - new_of_node[n] != 1))
-			{
-				throw compile_error("brushes: a leaf brush tree of the base zone is not laid out as one block per collision leaf; new brushes cannot be added to it");
-			}
 		}
-		const auto root_now = [&](const int old_root) { return root_of_node[static_cast<std::size_t>(old_root)] >= 0 ? root_of_node[static_cast<std::size_t>(old_root)] : new_of_node[static_cast<std::size_t>(old_root)]; };
+		// roots: what stands for the old root; a tree with nothing left is node 0 and no brush contents
+		const auto root_now = [&](const int old_root, std::int32_t& brush_contents)
+		{
+			const int now = resolve(static_cast<std::size_t>(old_root), 0);
+			if (now < 0)
+			{
+				brush_contents = 0;
+				return 0;
+			}
+			return new_of_node[static_cast<std::size_t>(now)];
+		};
 		for (std::size_t l = 0; l < leafs.size(); l++)
 		{
 			if (const auto f = fresh_root_of_leaf.find(static_cast<int>(l)); f != fresh_root_of_leaf.end())
 			{
 				leafs[l].leafBrushNode = first_fresh_root + f->second;
 			}
-			else if (leafs[l].leafBrushNode > 0 && leafs[l].leafBrushNode < static_cast<int>(nodes.size()))
+			else if (leafs[l].leafBrushNode > 0 && leafs[l].leafBrushNode < static_cast<int>(node_count))
 			{
-				leafs[l].leafBrushNode = root_now(leafs[l].leafBrushNode);
+				leafs[l].leafBrushNode = root_now(leafs[l].leafBrushNode, leafs[l].brushContents);
 			}
 		}
 		for (std::size_t m = 0; m < models.size(); m++)
@@ -935,13 +1148,13 @@ namespace codol::mapc
 			{
 				models[m].leaf.leafBrushNode = first_fresh_root + f->second;
 			}
-			else if (models[m].leaf.leafBrushNode > 0 && models[m].leaf.leafBrushNode < static_cast<int>(nodes.size()))
+			else if (models[m].leaf.leafBrushNode > 0 && models[m].leaf.leafBrushNode < static_cast<int>(node_count))
 			{
-				models[m].leaf.leafBrushNode = root_now(models[m].leaf.leafBrushNode);
+				models[m].leaf.leafBrushNode = root_now(models[m].leaf.leafBrushNode, models[m].leaf.brushContents);
 			}
 		}
 
-		// ---- write. Arrays that are pointed into grow before the pointers that use the new part are set.
+		// ---- write. Arrays that are pointed into are set before the pointers that lead into them.
 		std::vector<c1::cLeafBrushNode_s> packed_nodes(out_nodes.size());
 		std::vector<ZonePointer> packed_pointers;
 		for (std::size_t n = 0; n < out_nodes.size(); n++)
@@ -955,9 +1168,9 @@ namespace codol::mapc
 		ctx.set(nodes_id, bytes_of(packed_nodes), {}, "clipMap.leafbrushNodes");
 		ctx.set(brushes_id, bytes_of(new_brushes), {}, "clipMap.brushes");
 		ctx.set(planes_id, bytes_of(planes), {}, "plane array");
-		ctx.set(sides_id, sides, side_pointers, "clipMap.brushsides");
-		ctx.set(edges_id, edges, {}, "clipMap.brushEdges");
-		ctx.set(lists_id, bytes_of(lists), {}, "clipMap.leafbrushes");
+		ctx.set(sides_id, new_sides, new_side_pointers, "clipMap.brushsides");
+		ctx.set(edges_id, new_edges, {}, "clipMap.brushEdges");
+		ctx.set(lists_id, bytes_of(pool), {}, "clipMap.leafbrushes");
 		for (const ZoneDataId id : inline_removed)
 		{
 			check(editor.remove_data(id), "leaf brush list");
@@ -973,25 +1186,31 @@ namespace codol::mapc
 		ctx.set(leafs_id, bytes_of(leafs), {}, "clipMap.leafs");
 		ctx.set(models_id, bytes_of(models), {}, "clipMap.cmodels");
 		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numBrushes), static_cast<std::uint16_t>(next_index), "clipMap.numBrushes");
-		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numBrushSides), static_cast<std::uint32_t>(sides.size() / 8), "clipMap.numBrushSides");
-		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numBrushEdges), static_cast<std::uint32_t>(edges.size()), "clipMap.numBrushEdges");
+		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numBrushSides), static_cast<std::uint32_t>(new_sides.size() / 8), "clipMap.numBrushSides");
+		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numBrushEdges), static_cast<std::uint32_t>(new_edges.size()), "clipMap.numBrushEdges");
 		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, leafbrushNodesCount), static_cast<std::uint32_t>(packed_nodes.size()), "clipMap.leafbrushNodesCount");
-		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numLeafBrushes), static_cast<std::uint32_t>(lists.size()), "clipMap.numLeafBrushes");
+		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, numLeafBrushes), static_cast<std::uint32_t>(pool.size()), "clipMap.numLeafBrushes");
 		ctx.patch(ctx.clip_header, offsetof(c1::clipMap_t, planeCount), static_cast<std::int32_t>(planes.size()), "clipMap.planeCount");
 		ctx.patch(ctx.gfx_header, offsetof(c1::GfxWorld, planeCount), static_cast<std::int32_t>(planes.size()), "GfxWorld.planeCount");
 
 		for (const new_brush& b : fresh)
 		{
-			(is_fresh[static_cast<std::size_t>(b.index)] && static_cast<std::uint32_t>(b.index) < kept ? ctx.rep.brushes_replaced : ctx.rep.brushes_added)++;
+			(static_cast<std::uint32_t>(b.index) < kept ? ctx.rep.brushes_replaced : ctx.rep.brushes_added)++;
 		}
 		ctx.rep.brushes_deleted = static_cast<int>(std::count(deleted.begin(), deleted.end(), std::uint8_t{ 1 }));
-		ctx.rep.brush_sides_added = static_cast<int>(sides.size() / 8 - old_sides);
+		ctx.rep.brush_sides_added = new_side_count;
 		ctx.rep.planes_added = static_cast<int>(planes.size() - old_planes);
-		ctx.note(format("brushes: %u -> %u brushes; %zu leaf brush nodes -> %zu ( %zu put in front of a tree, %zu trees of their own ); leafbrushes %u -> %zu entries", old_count,
-			next_index, nodes.size(), packed_nodes.size(), 2 * wrap.size(), fresh_roots.size(), raw.numLeafBrushes, lists.size()));
+		ctx.note(format("brushes: %u -> %u brushes; brush sides %zu -> %zu, edge bytes %zu -> %zu ( both written again in brush order ); leaf brush nodes %zu -> %zu "
+			"( %zu lists added: %zu on the split of a tree's root, %zu trees of their own; %zu nodes without brushes removed ); leafbrushes %u -> %zu entries",
+			old_count, next_index, old_sides, new_sides.size() / 8, edges.size(), new_edges.size(), node_count, packed_nodes.size(), lists_added, lists_added - fresh_roots.size(),
+			fresh_roots.size(), nodes_dropped, raw.numLeafBrushes, pool.size()));
+		if (split_lists_grown > lists_added - fresh_roots.size())
+		{
+			ctx.note(format("brushes: %zu trees already had brushes on the split of their root; the new brushes joined that list", split_lists_grown - (lists_added - fresh_roots.size())));
+		}
 		if (ctx.rep.brushes_deleted + ctx.rep.brushes_replaced > 0)
 		{
-			ctx.note("brushes: the sides, planes and edge lists of removed brushes stay in their arrays, unreferenced");
+			ctx.note("brushes: the planes of removed brushes stay in the plane array ( it is shared with the GfxWorld ), unreferenced");
 		}
 	}
 }
