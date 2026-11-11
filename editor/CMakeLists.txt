@@ -23,6 +23,8 @@ set(CODOL_ZONE_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${ROOT}/codol_zone ${CMAKE_BINARY_DIR}/codol_zone)
 add_subdirectory(${ROOT}/codol_render ${CMAKE_BINARY_DIR}/codol_render)
 add_subdirectory(${ROOT}/codol_view ${CMAKE_BINARY_DIR}/codol_view)
+set(CODOL_EDIT_RAPIDJSON_INCLUDE ${DEPS}/rapidjson/include CACHE PATH "" FORCE)
+add_subdirectory(${ROOT}/codol_edit ${CMAKE_BINARY_DIR}/codol_edit)
 
 # ---- imgui ( docking )
 file(GLOB IMGUI_SRC ${DEPS}/imgui/*.cpp)
@@ -49,9 +51,6 @@ add_executable(CoDOLRadiant WIN32
 	# shared with the radiant plugin
 	${ROOT}/src/codol/script_lex.cpp
 	${ROOT}/src/codol/anim_index.cpp
-	${ROOT}/src/codol/map_ents.cpp
-	${ROOT}/src/codol/map_geometry.cpp
-	${ROOT}/src/codol/map_zone.cpp
 	${ROOT}/src/components/fonts.cpp
 	${ROOT}/src/components/modules/codol_game.cpp
 	${ROOT}/src/ggui/script_workbench.cpp
@@ -76,5 +75,5 @@ target_link_options(CoDOLRadiant PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OP
 target_precompile_headers(CoDOLRadiant PRIVATE compat/std_include.hpp)
 set_source_files_properties(${DEPS}/ImGuizmo/ImGuizmo.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "/W0")
 
-target_link_libraries(CoDOLRadiant PRIVATE imgui codol_zone codol_render codol_view
+target_link_libraries(CoDOLRadiant PRIVATE imgui codol_edit codol_zone codol_render codol_view
 	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm)
