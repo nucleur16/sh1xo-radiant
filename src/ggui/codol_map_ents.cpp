@@ -337,7 +337,8 @@ namespace ggui
 				if (material_code == 0)
 				{
 					material_code = components::codol_game::run_command("\"" + asset_converter + "\" --materials \"" + exported
-						+ "\\world\\world.map.json\" --root \"" + base + "\"", "", material_summary);
+						+ "\\world\\world.map.json\" --root \"" + base + "\" --models \"" + exported + "\\smodels\\smodels.map.json\" --ents \"" + ents_file
+						+ "\" --tool \"" + tool + "\" --game \"" + install + "\" --work \"" + work + "\\model_work\"", "", material_summary);
 				}
 
 				if (material_code != 0)
@@ -371,7 +372,29 @@ namespace ggui
 						m.pop_back();
 					}
 
-					log("materials: " + m);
+					// one line per result ( models, materials )
+					std::size_t start = 0;
+					while (start < m.size())
+					{
+						auto end = m.find('\n', start);
+						if (end == std::string::npos)
+						{
+							end = m.size();
+						}
+
+						auto part = m.substr(start, end - start);
+						while (!part.empty() && part.back() == '\r')
+						{
+							part.pop_back();
+						}
+
+						if (!part.empty())
+						{
+							log("assets: " + part, part.starts_with("codol_assetconv:"));
+						}
+
+						start = end + 1;
+					}
 				}
 
 				open_imported_map(map_name, out_path, entity_text, line);
@@ -647,7 +670,7 @@ namespace ggui
 		ImGui::Checkbox("with geometry: brushes, brush entities and static models ( otherwise entities only )", &m_import_geometry);
 
 		ImGui::BeginDisabled(!m_import_geometry);
-		ImGui::Checkbox("convert the map's materials and textures for radiant ( adds about a minute )", &m_import_materials);
+		ImGui::Checkbox("convert the map's materials, textures and models for radiant ( adds a few minutes the first time )", &m_import_materials);
 		ImGui::EndDisabled();
 
 		ImGui::BeginDisabled(m_busy || m_selected < 0 || m_selected >= static_cast<int>(m_sources.size()));

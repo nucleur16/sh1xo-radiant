@@ -28,6 +28,7 @@
 #include <fstream>
 #include <map>
 #include <string>
+#include <set>
 #include <unordered_set>
 #include <vector>
 
@@ -152,6 +153,7 @@ namespace
 		std::string techset;
 		std::string color_image;
 		std::uint8_t color_sampler = 0x0B;
+		std::string file_name;	// of the stock material, for its material_properties record
 		bool valid = false;
 	};
 
@@ -585,93 +587,521 @@ namespace
 		std::fprintf(stderr, "codol_assetconv: %s\n", message.c_str());
 		return 1;
 	}
+
+	// ------------------------------------------------------------------------------------------
+	// shared state of one run
+
+	struct converter
+	{
+		fs::path raw;
+		int max_size = 512;
+		bool force = false;
+		std::map<kind, raw_material> templates;
+
+		std::map<std::string, std::pair<int, int>> converted;	// iwi name -> size
+		std::unordered_set<std::string> alpha_images;
+
+		int written = 0, kept_stock = 0, no_texture = 0, failed = 0, images = 0;
+
+		bool load_templates()
+		{
+			std::error_code ec;
+			for (auto it = fs::directory_iterator(raw / "materials", ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+			{
+				if (!it->is_regular_file(ec) || it->file_size(ec) > 4096)
+				{
+					continue;
+				}
+
+				std::string data;
+				if (!read_file(it->path(), data))
+				{
+					continue;
+				}
+
+				auto mat = parse_material(data);
+				if (!mat.valid || mat.color_image.starts_with("codol_"))
+				{
+					continue;
+				}
+
+				// plain lit materials with only a colour map. The raw technique set names carry the kind:
+				// l_sm_r0c0 replace ( opaque ), l_sm_t0c0 alpha test, l_sm_b0c0 blend
+				kind k;
+				if (mat.techset == "l_sm_r0c0") { k = kind::opaque; }
+				else if (mat.techset == "l_sm_t0c0") { k = kind::alpha_test; }
+				else if (mat.techset == "l_sm_b0c0") { k = kind::blend; }
+				else { continue; }
+
+				mat.file_name = it->path().filename().string();
+				templates.try_emplace(k, mat);
+
+				if (templates.size() == 3)
+				{
+					break;
+				}
+			}
+
+			return templates.contains(kind::opaque);
+		}
+
+		// image names are limited ( 42 characters with the extension for converted images )
+		static std::string iwi_name_for(const std::string& image)
+		{
+			std::string name = "codol_" + lower(image);
+			for (auto& c : name)
+			{
+				if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-' || c == '~' || c == '$'))
+				{
+					c = '_';
+				}
+			}
+
+			if (name.size() > 36)
+			{
+				char hash[16];
+				std::snprintf(hash, sizeof(hash), "_%08x", static_cast<unsigned>(std::hash<std::string>{}(name)));
+				name = name.substr(0, 27) + hash;
+			}
+
+			return name;
+		}
+
+		// png -> iwi ( once per image ) and the raw material that uses it. false: nothing was written
+		bool emit(const std::string& radiant_name, const std::string& image_name, const fs::path& png, kind wanted)
+		{
+			const fs::path material_path = raw / "materials" / fs::u8path(radiant_name);
+
+			// never replace a stock material
+			if (!force)
+			{
+				std::string existing;
+				if (read_file(material_path, existing) && !parse_material(existing).color_image.starts_with("codol_"))
+				{
+					kept_stock++;
+					return false;
+				}
+			}
+
+			const std::string iwi_name = iwi_name_for(image_name);
+			int width = 0, height = 0;
+
+			if (const auto done = converted.find(iwi_name); done != converted.end())
+			{
+				width = done->second.first;
+				height = done->second.second;
+			}
+			else
+			{
+				image img;
+				if (!load_png(png, img))
+				{
+					std::fprintf(stderr, "codol_assetconv: can not decode %s\n", png.string().c_str());
+					failed++;
+					return false;
+				}
+
+				const bool alpha = has_alpha(img);
+				if (!write_iwi(raw / "images" / (iwi_name + ".iwi"), std::move(img), max_size, alpha, width, height))
+				{
+					failed++;
+					return false;
+				}
+
+				if (alpha)
+				{
+					alpha_images.insert(iwi_name);
+				}
+
+				converted[iwi_name] = { width, height };
+				images++;
+			}
+
+			if (wanted != kind::opaque && !alpha_images.contains(iwi_name))
+			{
+				wanted = kind::opaque; // no alpha channel to test or blend with
+			}
+
+			auto tmpl = templates.find(wanted);
+			if (tmpl == templates.end())
+			{
+				tmpl = templates.find(kind::opaque);
+			}
+
+			if (!write_file(material_path, build_material(tmpl->second, radiant_name, iwi_name, width, height)))
+			{
+				failed++;
+				return false;
+			}
+
+			// the mod tools ( xmodel conversion, map compile ) read contents / surface flags from this record
+			std::string props;
+			if (read_file(raw / "material_properties" / tmpl->second.file_name, props) && props.size() == 16)
+			{
+				std::memcpy(props.data() + 4, &tmpl->second.header.info.contents, 4);
+				std::memcpy(props.data() + 8, &tmpl->second.header.info.surfaceFlags, 4);
+				write_file(raw / "material_properties" / fs::u8path(radiant_name), props);
+			}
+
+			written++;
+			return true;
+		}
+	};
+
+	// run a program hidden, wait, capture stdout + stderr. -1: could not start, -2: timeout
+	int run(const std::wstring& command_line, const fs::path& cwd, std::string& output, const DWORD timeout_ms)
+	{
+		SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+		HANDLE read_pipe = nullptr, write_pipe = nullptr;
+
+		if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0))
+		{
+			return -1;
+		}
+
+		SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+		// no stdin: the mod tools wait for a key otherwise
+		HANDLE nul = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, 0, nullptr);
+
+		STARTUPINFOW si = {};
+		si.cb = sizeof(si);
+		si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+		si.hStdInput = nul;
+		si.hStdOutput = write_pipe;
+		si.hStdError = write_pipe;
+		si.wShowWindow = SW_HIDE;
+
+		PROCESS_INFORMATION pi = {};
+		std::wstring mutable_cmd = command_line;
+
+		const BOOL ok = CreateProcessW(nullptr, mutable_cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr,
+			cwd.empty() ? nullptr : cwd.c_str(), &si, &pi);
+
+		CloseHandle(write_pipe);
+		CloseHandle(nul);
+
+		if (!ok)
+		{
+			CloseHandle(read_pipe);
+			return -1;
+		}
+
+		// reader thread, so a full pipe never blocks the child while we wait with a timeout
+		std::string captured;
+		HANDLE reader = CreateThread(nullptr, 0, [](LPVOID param) -> DWORD
+		{
+			auto* ctx = static_cast<std::pair<HANDLE, std::string*>*>(param);
+			char buf[4096];
+			DWORD read = 0;
+
+			while (ReadFile(ctx->first, buf, sizeof(buf), &read, nullptr) && read)
+			{
+				ctx->second->append(buf, read);
+			}
+
+			return 0;
+		}, new std::pair<HANDLE, std::string*>(read_pipe, &captured), 0, nullptr);
+
+		int code;
+		if (WaitForSingleObject(pi.hProcess, timeout_ms) == WAIT_TIMEOUT)
+		{
+			TerminateProcess(pi.hProcess, 1);
+			code = -2;
+		}
+		else
+		{
+			DWORD exit_code = 0;
+			GetExitCodeProcess(pi.hProcess, &exit_code);
+			code = static_cast<int>(exit_code);
+		}
+
+		WaitForSingleObject(reader, 5000);
+		CloseHandle(reader);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+		CloseHandle(read_pipe);
+
+		output += captured;
+		return code;
+	}
+
+	std::wstring widen(const std::string& s)
+	{
+		return fs::u8path(s).wstring();
+	}
+
+	std::string gdt_entry(const std::string& name)
+	{
+		static const char* keys[][2] =
+		{
+			{ "type", "rigid" }, { "filename", nullptr }, { "highLodDist", "0" }, { "forceMediumLodRigid", "0" }, { "mediumLod", "" },
+			{ "mediumLodDist", "0" }, { "forceLowLodRigid", "0" }, { "lowLod", "" }, { "lowLodDist", "0" }, { "forceLowestLodRigid", "0" },
+			{ "lowestLod", "" }, { "lowestLodDist", "0" }, { "groundLit", "0" }, { "noRadialNormals", "0" }, { "radialOriginX", "0" },
+			{ "radialOriginY", "0" }, { "radialOriginZ", "0" }, { "allowHidingAllParts", "0" }, { "collisionLOD", "None" }, { "hitBoxModel", "" },
+			{ "skinOverride", "" }, { "boneControllers", "" }, { "boneStabilizers", "" }, { "physicsPreset", "" },
+		};
+
+		std::string out = "\t\"" + name + "\" ( \"xmodel.gdf\" )\r\n\t{\r\n";
+		for (const auto& kv : keys)
+		{
+			out += std::string("\t\t\"") + kv[0] + "\" \"" + (kv[1] ? std::string(kv[1]) : "codol\\\\" + name + ".XMODEL_EXPORT") + "\"\r\n";
+		}
+
+		return out + "\t}\r\n";
+	}
+
+	// model names a map uses: static models of the export + "model" keys of the entities
+	void collect_models(const std::string& smodels_json, const std::string& ents_path, std::set<std::string>& names)
+	{
+		std::string text;
+		if (!smodels_json.empty() && read_file(fs::u8path(smodels_json), text))
+		{
+			rapidjson::Document doc;
+			doc.Parse(text.data(), text.size());
+
+			if (const auto* objects = doc.IsObject() ? member(doc, "objects") : nullptr; objects && objects->IsArray())
+			{
+				for (const auto& obj : objects->GetArray())
+				{
+					if (auto asset = str(obj, "asset"); !asset.empty())
+					{
+						names.insert(lower(asset));
+					}
+				}
+			}
+		}
+
+		if (!ents_path.empty() && read_file(fs::u8path(ents_path), text))
+		{
+			static const std::string key = "\"model\" \"";
+			for (auto pos = text.find(key); pos != std::string::npos; pos = text.find(key, pos + 1))
+			{
+				const auto start = pos + key.size();
+				const auto end = text.find('"', start);
+
+				if (end != std::string::npos && end > start && text[start] != '*' && text[start] != '?')
+				{
+					names.insert(lower(text.substr(start, end - start)));
+				}
+			}
+		}
+	}
+
+	// CoDOL models -> CoD4 raw xmodels through the mod tools:
+	// asset tool ( XMODEL_EXPORT + png ) -> materials + GDT entry -> converter.exe -single xmodel <name>
+	int convert_models(converter& conv, const fs::path& root, const std::set<std::string>& wanted, const std::string& tool,
+		const std::string& game, const fs::path& work)
+	{
+		std::vector<std::string> todo;
+		int have = 0;
+
+		for (const auto& name : wanted)
+		{
+			std::error_code ec;
+			if (!conv.force && fs::exists(root / "raw" / "xmodel" / fs::u8path(name), ec))
+			{
+				have++; // stock CoD4 model of that name, or converted earlier
+				continue;
+			}
+
+			todo.push_back(name);
+		}
+
+		int exported = 0, compiled = 0, model_failed = 0;
+		const fs::path export_dir = root / "model_export" / "codol";
+		std::error_code ec;
+		fs::create_directories(export_dir, ec);
+
+		// 1. export in batches ( command line length )
+		for (std::size_t i = 0; i < todo.size(); i += 40)
+		{
+			std::wstring cmd = L"\"" + widen(tool) + L"\" export-models --game \"" + widen(game) + L"\" --out \"" + work.wstring()
+				+ L"\" --format xmodel_export --lod0";
+
+			for (std::size_t k = i; k < std::min(todo.size(), i + 40); k++)
+			{
+				cmd += L" --filter " + widen(todo[k]);
+			}
+
+			std::string output;
+			if (const int code = run(cmd, {}, output, 600000); code != 0)
+			{
+				std::fprintf(stderr, "codol_assetconv: the asset tool failed ( %d ) exporting models\n%s\n", code, output.c_str());
+			}
+		}
+
+		// 2. materials, export text with the radiant material names, GDT
+		std::vector<std::string> ready;
+
+		for (const auto& name : todo)
+		{
+			const fs::path dir = work / "models" / fs::u8path(name);
+			std::string text;
+
+			if (!read_file(dir / (name + ".xmodel_export"), text))
+			{
+				model_failed++; // not a model of this game ( eg. a CoD4 only name in a ported script )
+				continue;
+			}
+
+			exported++;
+
+			// MATERIAL <n> "<name>" "<type>" "color_map:<file>"
+			std::string rewritten;
+			rewritten.reserve(text.size());
+			std::size_t pos = 0;
+
+			while (pos < text.size())
+			{
+				auto end = text.find('\n', pos);
+				if (end == std::string::npos)
+				{
+					end = text.size();
+				}
+
+				std::string line = text.substr(pos, end - pos);
+
+				if (line.starts_with("MATERIAL "))
+				{
+					const auto q1 = line.find('"');
+					const auto q2 = (q1 == std::string::npos) ? q1 : line.find('"', q1 + 1);
+
+					if (q2 != std::string::npos)
+					{
+						const std::string game_name = line.substr(q1 + 1, q2 - q1 - 1);
+
+						std::string radiant_name = "codol_" + lower(game_name);
+						for (auto& c : radiant_name)
+						{
+							if (c == '/' || c == '\\' || c == ' ')
+							{
+								c = '_';
+							}
+						}
+
+						static const std::string color_key = "color_map:";
+						if (const auto ck = line.find(color_key); ck != std::string::npos)
+						{
+							const auto file_end = line.find('"', ck);
+							const std::string file = line.substr(ck + color_key.size(), file_end == std::string::npos ? std::string::npos : file_end - ck - color_key.size());
+
+							std::string image = file;
+							if (const auto slash = image.find_last_of('/'); slash != std::string::npos)
+							{
+								image.erase(0, slash + 1);
+							}
+
+							if (const auto dot = image.find_last_of('.'); dot != std::string::npos)
+							{
+								image.erase(dot);
+							}
+
+							// only a real texture file: a material without a colour map has nothing after the key
+							if (lower(file).ends_with(".png"))
+							{
+								conv.emit(radiant_name, image, dir / fs::u8path(file), kind::alpha_test);
+							}
+						}
+
+						// a material the converter can not find aborts the model
+						if (!fs::exists(conv.raw / "material_properties" / fs::u8path(radiant_name), ec))
+						{
+							radiant_name = conv.templates.at(kind::opaque).file_name; // a stock material that has a record
+						}
+
+						line = line.substr(0, q1 + 1) + radiant_name + line.substr(q2);
+					}
+				}
+
+				rewritten += line;
+				rewritten += '\n';
+				pos = end + 1;
+			}
+
+			if (write_file(export_dir / (name + ".XMODEL_EXPORT"), rewritten))
+			{
+				ready.push_back(name);
+			}
+		}
+
+		// the GDT lists every model that was ever exported here
+		{
+			std::string gdt = "{\r\n";
+			for (auto it = fs::directory_iterator(export_dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec))
+			{
+				if (lower(it->path().extension().string()) == ".xmodel_export")
+				{
+					gdt += gdt_entry(it->path().stem().string());
+				}
+			}
+
+			gdt += "}\r\n";
+			write_file(root / "source_data" / "codol_models.gdt", gdt);
+		}
+
+		// 3. compile
+		for (const auto& name : ready)
+		{
+			std::string output;
+			const int code = run(L"\"" + (root / "bin" / "converter.exe").wstring() + L"\" -nopause -nocachedownload -single xmodel " + widen(name),
+				root / "bin", output, 180000);
+
+			if (fs::exists(root / "raw" / "xmodel" / fs::u8path(name), ec))
+			{
+				compiled++;
+			}
+			else
+			{
+				model_failed++;
+				const auto err = output.find("ERROR");
+				std::fprintf(stderr, "codol_assetconv: %s was not converted ( exit %d ): %s\n", name.c_str(), code,
+					err == std::string::npos ? "no output" : output.substr(err, 300).c_str());
+			}
+		}
+
+		std::printf("models: %d of %zu converted, %d already in raw/xmodel, %d exported, %d failed\n",
+			compiled, wanted.size(), have, exported, model_failed);
+
+		return 0;
+	}
 }
 
 int main(int argc, char** argv)
 {
-	std::string materials_path, root;
-	int max_size = 512;
-	bool force = false;
+	std::string materials_path, root, models_json, ents_path, tool, game, work;
+	converter conv;
 
 	for (int i = 1; i < argc; i++)
 	{
 		const std::string key = argv[i];
 
-		if (key == "--force") { force = true; }
+		if (key == "--force") { conv.force = true; }
 		else if (i + 1 >= argc) { return fail("missing value for " + key); }
 		else if (key == "--materials") { materials_path = argv[++i]; }
 		else if (key == "--root") { root = argv[++i]; }
-		else if (key == "--max-size") { max_size = std::clamp(std::atoi(argv[++i]), 16, 4096); }
+		else if (key == "--max-size") { conv.max_size = std::clamp(std::atoi(argv[++i]), 16, 4096); }
+		else if (key == "--models") { models_json = argv[++i]; }
+		else if (key == "--ents") { ents_path = argv[++i]; }
+		else if (key == "--tool") { tool = argv[++i]; }
+		else if (key == "--game") { game = argv[++i]; }
+		else if (key == "--work") { work = argv[++i]; }
 		else { return fail("unknown option " + key); }
 	}
 
-	if (materials_path.empty() || root.empty())
+	const bool do_models = !models_json.empty() || !ents_path.empty();
+
+	if (root.empty() || (materials_path.empty() && !do_models) || (do_models && (tool.empty() || game.empty() || work.empty())))
 	{
-		return fail("usage: codol_assetconv --materials <export>.map.json --root <radiant root> [--max-size 512] [--force]");
+		return fail("usage: codol_assetconv --root <radiant root> [--materials <export>.map.json] [--max-size 512] [--force]\n"
+			"                       [--models <smodels>.map.json] [--ents <entities>] --tool <CodolSoundDumper.exe> --game <install> --work <folder>");
 	}
 
-	const fs::path raw = fs::u8path(root) / "raw";
-	const fs::path export_dir = fs::u8path(materials_path).parent_path();
+	conv.raw = fs::u8path(root) / "raw";
 
-	// templates: stock materials by ( world / model, kind )
-	std::map<std::pair<bool, kind>, raw_material> templates;
+	if (!conv.load_templates())
 	{
-		std::error_code ec;
-		for (auto it = fs::directory_iterator(raw / "materials", ec); !ec && it != fs::directory_iterator(); it.increment(ec))
-		{
-			if (!it->is_regular_file(ec) || it->file_size(ec) > 4096)
-			{
-				continue;
-			}
-
-			std::string data;
-			if (!read_file(it->path(), data))
-			{
-				continue;
-			}
-
-			const auto mat = parse_material(data);
-			if (!mat.valid || mat.color_image.starts_with("codol_"))
-			{
-				continue;
-			}
-
-			// plain lit materials with only a colour map. The raw technique set names carry the kind:
-			// l_sm_r0c0 replace ( opaque ), l_sm_t0c0 alpha test, l_sm_b0c0 blend
-			kind k;
-			if (mat.techset == "l_sm_r0c0") { k = kind::opaque; }
-			else if (mat.techset == "l_sm_t0c0") { k = kind::alpha_test; }
-			else if (mat.techset == "l_sm_b0c0") { k = kind::blend; }
-			else { continue; }
-
-			// world textures only ( usage / surface flags of a wall ), not weapons or decals: sort key of the default opaque / blend layers
-			templates.try_emplace({ true, k }, mat);
-
-			if (templates.size() == 3)
-			{
-				break;
-			}
-		}
-	}
-
-	if (!templates.contains({ true, kind::opaque }))
-	{
-		return fail("no stock l_sm_r0c0 material found in " + (raw / "materials").string() + " to take the render state from");
-	}
-
-	std::string json;
-	if (!read_file(fs::u8path(materials_path), json))
-	{
-		return fail("can not read " + materials_path);
-	}
-
-	rapidjson::Document doc;
-	doc.Parse(json.data(), json.size());
-
-	const auto* materials = doc.IsObject() ? member(doc, "materials") : nullptr;
-	if (!materials || !materials->IsArray())
-	{
-		return fail(materials_path + " has no \"materials\" array");
+		return fail("no stock l_sm_r0c0 material found in " + (conv.raw / "materials").string() + " to take the render state from");
 	}
 
 	if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))
@@ -680,126 +1110,84 @@ int main(int argc, char** argv)
 		return fail("could not start the Windows imaging component");
 	}
 
-	int written = 0, kept_stock = 0, no_texture = 0, failed = 0, images = 0;
-	std::map<std::string, std::pair<int, int>> converted; // image -> size
-	std::unordered_set<std::string> alpha_images;
-
-	for (const auto& mat : materials->GetArray())
+	if (!materials_path.empty())
 	{
-		const std::string game_name = str(mat, "name");
-		if (game_name.empty())
+		const fs::path export_dir = fs::u8path(materials_path).parent_path();
+
+		std::string json;
+		if (!read_file(fs::u8path(materials_path), json))
 		{
-			continue;
+			return fail("can not read " + materials_path);
 		}
 
-		// colour texture
-		std::string image_name, image_file;
-		if (const auto* textures = member(mat, "textures"); textures && textures->IsArray())
+		rapidjson::Document doc;
+		doc.Parse(json.data(), json.size());
+
+		const auto* materials = doc.IsObject() ? member(doc, "materials") : nullptr;
+		if (!materials || !materials->IsArray())
 		{
-			for (const auto& tex : textures->GetArray())
+			return fail(materials_path + " has no \"materials\" array");
+		}
+
+		for (const auto& mat : materials->GetArray())
+		{
+			const std::string game_name = str(mat, "name");
+			if (game_name.empty())
 			{
-				if (str(tex, "semantic") == "color" && !str(tex, "file").empty())
+				continue;
+			}
+
+			std::string image_name, image_file;
+			if (const auto* textures = member(mat, "textures"); textures && textures->IsArray())
+			{
+				for (const auto& tex : textures->GetArray())
 				{
-					image_name = str(tex, "image");
-					image_file = str(tex, "file");
-					break;
+					if (str(tex, "semantic") == "color" && !str(tex, "file").empty())
+					{
+						image_name = str(tex, "image");
+						image_file = str(tex, "file");
+						break;
+					}
 				}
 			}
-		}
 
-		if (image_name.empty())
-		{
-			no_texture++;
-			continue;
-		}
-
-		const std::string radiant_name = game_name.starts_with("wc/") ? game_name.substr(3) : game_name;
-		const fs::path material_path = raw / "materials" / fs::u8path(radiant_name);
-
-		// never replace a stock material
-		if (!force)
-		{
-			std::string existing;
-			if (read_file(material_path, existing) && !parse_material(existing).color_image.starts_with("codol_"))
+			if (image_name.empty())
 			{
-				kept_stock++;
-				continue;
-			}
-		}
-
-		const std::string iwi_name = "codol_" + lower(image_name);
-		int width = 0, height = 0;
-
-		if (const auto done = converted.find(iwi_name); done != converted.end())
-		{
-			width = done->second.first;
-			height = done->second.second;
-		}
-		else
-		{
-			image img;
-			if (!load_png(export_dir / fs::u8path(image_file), img))
-			{
-				std::fprintf(stderr, "codol_assetconv: can not decode %s\n", image_file.c_str());
-				failed++;
+				conv.no_texture++;
 				continue;
 			}
 
-			const bool alpha = has_alpha(img);
-			if (!write_iwi(raw / "images" / (iwi_name + ".iwi"), std::move(img), max_size, alpha, width, height))
+			// render state: what the game uses, limited by what the texture can do
+			const std::string blend = str(mat, "blend");
+			const std::string alpha_test = str(mat, "alphaTest");
+
+			kind k = kind::opaque;
+			if (!blend.empty() && blend != "Opaque" && blend != "None")
 			{
-				failed++;
-				continue;
+				k = kind::blend;
+			}
+			else if (!alpha_test.empty() && alpha_test != "None" && alpha_test != "Disabled" && alpha_test != "Always")
+			{
+				k = kind::alpha_test;
 			}
 
-			if (alpha)
-			{
-				alpha_images.insert(iwi_name);
-			}
-
-			converted[iwi_name] = { width, height };
-			images++;
+			// world materials are "wc/<name>" in the game, brush sides name them without the prefix
+			conv.emit(game_name.starts_with("wc/") ? game_name.substr(3) : game_name, image_name, export_dir / fs::u8path(image_file), k);
 		}
+	}
 
-		// render state: what the game uses, limited by what the texture can do
-		const std::string blend = str(mat, "blend");
-		const std::string alpha_test = str(mat, "alphaTest");
-
-		kind k = kind::opaque;
-		if (!blend.empty() && blend != "Opaque" && blend != "None")
-		{
-			k = kind::blend;
-		}
-		else if (!alpha_test.empty() && alpha_test != "None" && alpha_test != "Disabled" && alpha_test != "Always")
-		{
-			k = kind::alpha_test;
-		}
-
-		if (k != kind::opaque && !alpha_images.contains(iwi_name))
-		{
-			k = kind::opaque; // no alpha channel to test or blend with
-		}
-
-		auto tmpl = templates.find({ true, k });
-		if (tmpl == templates.end())
-		{
-			tmpl = templates.find({ true, kind::opaque });
-		}
-
-		if (!write_file(material_path, build_material(tmpl->second, radiant_name, iwi_name, width, height)))
-		{
-			failed++;
-			continue;
-		}
-
-		written++;
+	if (do_models)
+	{
+		std::set<std::string> names;
+		collect_models(models_json, ents_path, names);
+		convert_models(conv, fs::u8path(root), names, tool, game, fs::u8path(work));
 	}
 
 	g_wic->Release();
 	CoUninitialize();
 
 	std::printf("%d materials written ( %d images ), %d stock materials kept, %d without a colour texture, %d failed -> %s\n",
-		written, images, kept_stock, no_texture, failed, raw.string().c_str());
+		conv.written, conv.images, conv.kept_stock, conv.no_texture, conv.failed, conv.raw.string().c_str());
 
 	return 0;
 }
