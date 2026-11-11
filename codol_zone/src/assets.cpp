@@ -119,6 +119,7 @@ namespace codol::zone
 	// xmodel
 
 	std::vector<SurfaceVertex> SurfaceView::vertices() const
+	try
 	{
 		std::vector<SurfaceVertex> out(vertexBytes.size() / sizeof(c1::GfxPackedVertex));
 		for (std::size_t i = 0; i < out.size(); i++)
@@ -142,8 +143,13 @@ namespace codol::zone
 		}
 		return out;
 	}
+	catch (const std::exception&)
+	{
+		return {};
+	}
 
 	std::vector<std::uint16_t> SurfaceView::indices() const
+	try
 	{
 		std::vector<std::uint16_t> out(indexBytes.size() / 2);
 		if (!out.empty())
@@ -152,8 +158,13 @@ namespace codol::zone
 		}
 		return out;
 	}
+	catch (const std::exception&)
+	{
+		return {};
+	}
 
 	std::vector<RigidVertList> SurfaceView::rigid_lists() const
+	try
 	{
 		std::vector<RigidVertList> out(rigidBytes.size() / sizeof(c1::XRigidVertList));
 		for (std::size_t i = 0; i < out.size(); i++)
@@ -167,8 +178,13 @@ namespace codol::zone
 		}
 		return out;
 	}
+	catch (const std::exception&)
+	{
+		return {};
+	}
 
 	std::vector<VertexWeights> SurfaceView::weights(const Zone& zone) const
+	try
 	{
 		std::vector<VertexWeights> out(vertCount);
 		for (VertexWeights& w : out)
@@ -225,8 +241,13 @@ namespace codol::zone
 		}
 		return out;
 	}
+	catch (const std::exception&)
+	{
+		return {};
+	}
 
 	bool read_surface(const Zone& zone, const zaddr surface, SurfaceView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, surface, view.raw))
@@ -244,8 +265,14 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_model_surfs(const Zone& zone, const zaddr modelSurfs, ModelSurfsView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, modelSurfs, view.raw))
@@ -273,8 +300,14 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_model(const Zone& zone, const zaddr model, ModelView& view, const bool withGeometry)
+	try
 	{
 		view = {};
 		if (!read_header(zone, model, view.raw))
@@ -392,11 +425,17 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	// ------------------------------------------------------------------------------------------
 	// material / techset / image
 
 	bool read_material(const Zone& zone, const zaddr material, MaterialView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, material, view.raw))
@@ -430,8 +469,14 @@ namespace codol::zone
 		view.stateBits = zone.get_array<std::array<std::uint32_t, 2>>(m.stateBitsTable, m.stateBitsCount);
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_techset(const Zone& zone, const zaddr techset, TechniqueSetView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, techset, view.raw))
@@ -442,8 +487,14 @@ namespace codol::zone
 		resolve_name(zone, c1::ASSET_TYPE_TECHNIQUE_SET, techset, view.raw.name, view.name, view.isReference);
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_image(const Zone& zone, const zaddr image, ImageView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, image, view.raw))
@@ -463,11 +514,17 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	// ------------------------------------------------------------------------------------------
 	// small assets
 
 	bool read_rawfile(const Zone& zone, const zaddr rawfile, RawFileView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, rawfile, view.raw))
@@ -482,6 +539,11 @@ namespace codol::zone
 			view.stored = zone.bytes(view.raw.buffer, static_cast<std::size_t>(stored));
 		}
 		return true;
+	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
 	}
 
 	Status rawfile_contents(const RawFileView& view, std::vector<std::uint8_t>& contents)
@@ -524,6 +586,7 @@ namespace codol::zone
 	}
 
 	bool read_stringtable(const Zone& zone, const zaddr table, StringTableView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, table, view.raw))
@@ -544,8 +607,14 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_localize(const Zone& zone, const zaddr entry, LocalizeView& view)
+	try
 	{
 		view = {};
 		c1::LocalizeEntry raw{};
@@ -558,8 +627,14 @@ namespace codol::zone
 		view.value = zone.c_string(raw.value);
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_anim(const Zone& zone, const zaddr anim, AnimView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, anim, view.raw))
@@ -590,11 +665,17 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	// ------------------------------------------------------------------------------------------
 	// map
 
 	bool read_map_ents(const Zone& zone, const zaddr mapEnts, MapEntsView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, mapEnts, view.raw))
@@ -612,6 +693,11 @@ namespace codol::zone
 		view.triggerHullCount = view.raw.trigger.hullCount;
 		view.triggerSlabCount = view.raw.trigger.slabCount;
 		return true;
+	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
 	}
 
 	zaddr find_map_ents(const Zone& zone)
@@ -650,6 +736,7 @@ namespace codol::zone
 	}
 
 	bool read_com_world(const Zone& zone, const zaddr comWorld, ComWorldView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, comWorld, view.raw))
@@ -662,8 +749,14 @@ namespace codol::zone
 		view.primaryLightBytes = zone.bytes(view.raw.primaryLights, static_cast<std::size_t>(view.raw.primaryLightCount) * COM_PRIMARY_LIGHT_SIZE);
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	bool read_clip_map(const Zone& zone, const zaddr clipMap, ClipMapView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, clipMap, view.raw))
@@ -738,8 +831,14 @@ namespace codol::zone
 		}
 		return true;
 	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
+	}
 
 	std::vector<c1::GfxWorldVertex> GfxWorldView::vertices() const
+	try
 	{
 		std::vector<c1::GfxWorldVertex> out(vertexBytes.size() / sizeof(c1::GfxWorldVertex));
 		if (!out.empty())
@@ -748,8 +847,13 @@ namespace codol::zone
 		}
 		return out;
 	}
+	catch (const std::exception&)
+	{
+		return {};
+	}
 
 	std::vector<std::uint16_t> GfxWorldView::indices() const
+	try
 	{
 		std::vector<std::uint16_t> out(indexBytes.size() / 2);
 		if (!out.empty())
@@ -758,8 +862,13 @@ namespace codol::zone
 		}
 		return out;
 	}
+	catch (const std::exception&)
+	{
+		return {};
+	}
 
 	bool read_gfx_world(const Zone& zone, const zaddr gfxWorld, GfxWorldView& view)
+	try
 	{
 		view = {};
 		if (!read_header(zone, gfxWorld, view.raw))
@@ -791,5 +900,10 @@ namespace codol::zone
 			view.cells.push_back(std::move(out));
 		}
 		return true;
+	}
+	catch (const std::exception&)
+	{
+		view = {};
+		return false;
 	}
 }

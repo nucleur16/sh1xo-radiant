@@ -67,6 +67,7 @@ if(CODOL_ZONE_BUILD_TESTS)
 	enable_testing()
 	add_executable(codol_zone_tests tests/codol_zone_tests.cpp)
 	target_link_libraries(codol_zone_tests PRIVATE codol_zone)
+	target_include_directories(codol_zone_tests PRIVATE src)	# crypto_win.hpp: known answer tests of the CNG wrappers
 	target_compile_definitions(codol_zone_tests PRIVATE CODOL_ZONE_GAME_DIR="${CODOL_ZONE_GAME_DIR}")
 	codol_zone_warnings(codol_zone_tests)
 	add_test(NAME codol_zone_tests COMMAND codol_zone_tests)

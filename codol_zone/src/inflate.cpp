@@ -1,6 +1,7 @@
 // zlib ( RFC 1950 ) / deflate ( RFC 1951 ) decoder, written for codol_zone. No third party code.
 
 #include "codol_zone/fastfile.hpp"
+#include "crypto_win.hpp"
 
 #include <cstring>
 
@@ -196,261 +197,303 @@ namespace codol::zone
 		}
 	}
 
-	Status zlib_inflate(const std::span<const std::uint8_t> compressed, std::vector<std::uint8_t>& out, const std::size_t sizeHint,
-		std::size_t* consumed)
+	namespace
 	{
-		out.clear();
-		if (compressed.size() < 2)
+		Status inflate_impl(const std::span<const std::uint8_t> compressed, std::vector<std::uint8_t>& out, const std::size_t sizeHint,
+			std::size_t* consumed, const bool zoneHeader)
 		{
-			return Status::error("zlib stream is shorter than its header");
-		}
-		const std::uint32_t cmf = compressed[0], flg = compressed[1];
-		if ((cmf & 0x0F) != 8 || (cmf >> 4) > 7 || ((cmf << 8) | flg) % 31 != 0 || (flg & 0x20))
-		{
-			return Status::error("not a zlib stream ( bad CMF / FLG header )");
-		}
-
-		BitReader br{ compressed.data() + 2, compressed.data() + compressed.size() };
-
-		std::size_t cap = sizeHint ? sizeHint : compressed.size() * 4 + 4096;
-		out.resize(cap);
-		std::size_t pos = 0;
-
-		const auto ensure = [&](const std::size_t extra)
-		{
-			if (pos + extra > cap)
+			out.clear();
+			if (compressed.size() < 2)
 			{
-				cap = (cap + extra) + (cap >> 1);
+				return Status::error("zlib stream is shorter than its header");
+			}
+			const std::uint32_t cmf = compressed[0], flg = compressed[1];
+			if ((cmf & 0x0F) != 8 || (cmf >> 4) > 7 || ((cmf << 8) | flg) % 31 != 0 || (flg & 0x20))
+			{
+				return Status::error("not a zlib stream ( bad CMF / FLG header )");
+			}
+
+			BitReader br{ compressed.data() + 2, compressed.data() + compressed.size() };
+
+			// a zone starts with XFile.size: begin small and size the buffer exactly once those four bytes are out
+			std::size_t cap = zoneHeader ? 0x10000 : sizeHint ? sizeHint : compressed.size() * 4 + 4096;
+			out.resize(cap);
+			std::size_t pos = 0;
+			bool probed = !zoneHeader;
+
+			const auto ensure = [&](const std::size_t extra)
+			{
+				if (pos + extra <= cap)
+				{
+					return;
+				}
+				if (!probed && pos >= 4)
+				{
+					probed = true;
+					std::uint32_t size;
+					std::memcpy(&size, out.data(), 4);
+					const std::size_t declared = static_cast<std::size_t>(size) + 40 + 512;
+					if (declared > cap)
+					{
+						cap = declared;
+					}
+				}
+				if (pos + extra > cap)
+				{
+					cap = (cap + extra) + (cap >> 1);
+				}
 				out.resize(cap);
-			}
-		};
+			};
 
-		// heap: the tables are ~4 KB each and this may run on a small thread stack
-		struct Tables
-		{
-			Huffman litlen, dist;
-			std::uint8_t lengths[320];
-		};
-		const auto tables = std::make_unique<Tables>();
-		Huffman& litlen = tables->litlen;
-		Huffman& dist = tables->dist;
-		std::uint8_t* lengths = tables->lengths;
-
-		bool last = false;
-		while (!last)
-		{
-			last = br.get(1) != 0;
-			const std::uint32_t type = br.get(2);
-
-			if (type == 0)
+			// heap: the tables are ~4 KB each and this may run on a small thread stack
+			struct Tables
 			{
-				// stored: drop the bits up to the byte boundary, then LEN / NLEN
-				const int drop = br.bits & 7;
-				br.buf >>= drop;
-				br.bits -= drop;
-				const std::uint32_t len = br.get(16);
-				const std::uint32_t nlen = br.get(16);
-				if ((len ^ 0xFFFFu) != nlen)
-				{
-					return Status::error("deflate: stored block length check failed");
-				}
-				ensure(len);
-				std::uint32_t left = len;
-				while (left && br.bits >= 8)
-				{
-					out[pos++] = static_cast<std::uint8_t>(br.buf & 0xFF);
-					br.buf >>= 8;
-					br.bits -= 8;
-					left--;
-				}
-				if (left)
-				{
-					if (static_cast<std::size_t>(br.end - br.p) < left)
-					{
-						return Status::error("deflate: stored block runs past the end of the input");
-					}
-					std::memcpy(out.data() + pos, br.p, left);
-					br.p += left;
-					pos += left;
-				}
-				continue;
-			}
+				Huffman litlen, dist;
+				std::uint8_t lengths[320];
+			};
+			const auto tables = std::make_unique<Tables>();
+			Huffman& litlen = tables->litlen;
+			Huffman& dist = tables->dist;
+			std::uint8_t* lengths = tables->lengths;
 
-			if (type == 1)
+			bool last = false;
+			while (!last)
 			{
-				int i = 0;
-				for (; i < 144; i++) lengths[i] = 8;
-				for (; i < 256; i++) lengths[i] = 9;
-				for (; i < 280; i++) lengths[i] = 7;
-				for (; i < 288; i++) lengths[i] = 8;
-				build(litlen, lengths, 288);
-				for (i = 0; i < 30; i++) lengths[i] = 5;
-				build(dist, lengths, 30);
-			}
-			else if (type == 2)
-			{
-				const int nlen = static_cast<int>(br.get(5)) + 257;
-				const int ndist = static_cast<int>(br.get(5)) + 1;
-				const int ncode = static_cast<int>(br.get(4)) + 4;
-				if (nlen > 286 || ndist > 30)
-				{
-					return Status::error("deflate: bad dynamic block counts");
-				}
-				static constexpr std::uint8_t ORDER[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
-				std::memset(lengths, 0, 19);
-				for (int i = 0; i < ncode; i++)
-				{
-					lengths[ORDER[i]] = static_cast<std::uint8_t>(br.get(3));
-				}
-				if (!build(litlen, lengths, 19))
-				{
-					return Status::error("deflate: bad code length code");
-				}
+				last = br.get(1) != 0;
+				const std::uint32_t type = br.get(2);
 
-				int index = 0;
-				while (index < nlen + ndist)
+				if (type == 0)
 				{
-					const int sym = decode(br, litlen);
-					if (sym < 0)
+					// stored: drop the bits up to the byte boundary, then LEN / NLEN
+					const int drop = br.bits & 7;
+					br.buf >>= drop;
+					br.bits -= drop;
+					const std::uint32_t len = br.get(16);
+					const std::uint32_t nlen = br.get(16);
+					if ((len ^ 0xFFFFu) != nlen)
 					{
-						return Status::error("deflate: bad code length symbol");
+						return Status::error("deflate: stored block length check failed");
 					}
-					if (sym < 16)
+					ensure(len);
+					std::uint32_t left = len;
+					while (left && br.bits >= 8)
 					{
-						lengths[index++] = static_cast<std::uint8_t>(sym);
-						continue;
+						out[pos++] = static_cast<std::uint8_t>(br.buf & 0xFF);
+						br.buf >>= 8;
+						br.bits -= 8;
+						left--;
 					}
-					std::uint8_t value = 0;
-					int repeat;
-					if (sym == 16)
+					if (left)
 					{
-						if (!index)
+						if (static_cast<std::size_t>(br.end - br.p) < left)
 						{
-							return Status::error("deflate: repeat without a previous length");
+							return Status::error("deflate: stored block runs past the end of the input");
 						}
-						value = lengths[index - 1];
-						repeat = 3 + static_cast<int>(br.get(2));
+						std::memcpy(out.data() + pos, br.p, left);
+						br.p += left;
+						pos += left;
 					}
-					else if (sym == 17)
-					{
-						repeat = 3 + static_cast<int>(br.get(3));
-					}
-					else
-					{
-						repeat = 11 + static_cast<int>(br.get(7));
-					}
-					if (index + repeat > nlen + ndist)
-					{
-						return Status::error("deflate: code lengths overflow");
-					}
-					while (repeat--)
-					{
-						lengths[index++] = value;
-					}
-				}
-				if (!lengths[256])
-				{
-					return Status::error("deflate: block has no end code");
-				}
-				std::uint8_t distLengths[32];
-				std::memcpy(distLengths, lengths + nlen, static_cast<std::size_t>(ndist));
-				if (!build(litlen, lengths, nlen) || !build(dist, distLengths, ndist))
-				{
-					return Status::error("deflate: over-subscribed huffman code");
-				}
-			}
-			else
-			{
-				return Status::error("deflate: reserved block type");
-			}
-
-			for (;;)
-			{
-				if (br.overrun)
-				{
-					return Status::error("deflate: stream is truncated");
-				}
-				int sym = decode(br, litlen);
-				if (sym < 0)
-				{
-					return Status::error("deflate: bad literal / length code");
-				}
-				if (sym < 256)
-				{
-					if (pos >= cap)
-					{
-						ensure(1);
-					}
-					out[pos++] = static_cast<std::uint8_t>(sym);
 					continue;
 				}
-				if (sym == 256)
-				{
-					break;
-				}
-				sym -= 257;
-				if (sym >= 29)
-				{
-					return Status::error("deflate: bad length symbol");
-				}
-				const std::uint32_t len = LENGTH_BASE[sym] + br.get(LENGTH_EXTRA[sym]);
 
-				const int dsym = decode(br, dist);
-				if (dsym < 0 || dsym >= 30)
+				if (type == 1)
 				{
-					return Status::error("deflate: bad distance code");
+					int i = 0;
+					for (; i < 144; i++) lengths[i] = 8;
+					for (; i < 256; i++) lengths[i] = 9;
+					for (; i < 280; i++) lengths[i] = 7;
+					for (; i < 288; i++) lengths[i] = 8;
+					build(litlen, lengths, 288);
+					for (i = 0; i < 30; i++) lengths[i] = 5;
+					build(dist, lengths, 30);
 				}
-				const std::size_t distance = DIST_BASE[dsym] + br.get(DIST_EXTRA[dsym]);
-				if (distance > pos)
+				else if (type == 2)
 				{
-					return Status::error("deflate: distance reaches before the start of the output");
-				}
+					const int nlen = static_cast<int>(br.get(5)) + 257;
+					const int ndist = static_cast<int>(br.get(5)) + 1;
+					const int ncode = static_cast<int>(br.get(4)) + 4;
+					if (nlen > 286 || ndist > 30)
+					{
+						return Status::error("deflate: bad dynamic block counts");
+					}
+					static constexpr std::uint8_t ORDER[19] = { 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 };
+					std::memset(lengths, 0, 19);
+					for (int i = 0; i < ncode; i++)
+					{
+						lengths[ORDER[i]] = static_cast<std::uint8_t>(br.get(3));
+					}
+					if (!build(litlen, lengths, 19))
+					{
+						return Status::error("deflate: bad code length code");
+					}
 
-				ensure(len);
-				std::uint8_t* dst = out.data() + pos;
-				const std::uint8_t* src = dst - distance;
-				if (distance >= len)
-				{
-					std::memcpy(dst, src, len);
+					int index = 0;
+					while (index < nlen + ndist)
+					{
+						const int sym = decode(br, litlen);
+						if (sym < 0)
+						{
+							return Status::error("deflate: bad code length symbol");
+						}
+						if (sym < 16)
+						{
+							lengths[index++] = static_cast<std::uint8_t>(sym);
+							continue;
+						}
+						std::uint8_t value = 0;
+						int repeat;
+						if (sym == 16)
+						{
+							if (!index)
+							{
+								return Status::error("deflate: repeat without a previous length");
+							}
+							value = lengths[index - 1];
+							repeat = 3 + static_cast<int>(br.get(2));
+						}
+						else if (sym == 17)
+						{
+							repeat = 3 + static_cast<int>(br.get(3));
+						}
+						else
+						{
+							repeat = 11 + static_cast<int>(br.get(7));
+						}
+						if (index + repeat > nlen + ndist)
+						{
+							return Status::error("deflate: code lengths overflow");
+						}
+						while (repeat--)
+						{
+							lengths[index++] = value;
+						}
+					}
+					if (!lengths[256])
+					{
+						return Status::error("deflate: block has no end code");
+					}
+					std::uint8_t distLengths[32];
+					std::memcpy(distLengths, lengths + nlen, static_cast<std::size_t>(ndist));
+					if (!build(litlen, lengths, nlen) || !build(dist, distLengths, ndist))
+					{
+						return Status::error("deflate: over-subscribed huffman code");
+					}
 				}
 				else
 				{
-					for (std::uint32_t i = 0; i < len; i++)
-					{
-						dst[i] = src[i];
-					}
+					return Status::error("deflate: reserved block type");
 				}
-				pos += len;
+
+				for (;;)
+				{
+					if (br.overrun)
+					{
+						return Status::error("deflate: stream is truncated");
+					}
+					int sym = decode(br, litlen);
+					if (sym < 0)
+					{
+						return Status::error("deflate: bad literal / length code");
+					}
+					if (sym < 256)
+					{
+						if (pos >= cap)
+						{
+							ensure(1);
+						}
+						out[pos++] = static_cast<std::uint8_t>(sym);
+						continue;
+					}
+					if (sym == 256)
+					{
+						break;
+					}
+					sym -= 257;
+					if (sym >= 29)
+					{
+						return Status::error("deflate: bad length symbol");
+					}
+					const std::uint32_t len = LENGTH_BASE[sym] + br.get(LENGTH_EXTRA[sym]);
+
+					const int dsym = decode(br, dist);
+					if (dsym < 0 || dsym >= 30)
+					{
+						return Status::error("deflate: bad distance code");
+					}
+					const std::size_t distance = DIST_BASE[dsym] + br.get(DIST_EXTRA[dsym]);
+					if (distance > pos)
+					{
+						return Status::error("deflate: distance reaches before the start of the output");
+					}
+
+					ensure(len);
+					std::uint8_t* dst = out.data() + pos;
+					const std::uint8_t* src = dst - distance;
+					if (distance >= len)
+					{
+						std::memcpy(dst, src, len);
+					}
+					else
+					{
+						for (std::uint32_t i = 0; i < len; i++)
+						{
+							dst[i] = src[i];
+						}
+					}
+					pos += len;
+				}
 			}
-		}
 
-		if (br.overrun)
-		{
-			return Status::error("deflate: stream is truncated");
-		}
-		out.resize(pos);
+			if (br.overrun)
+			{
+				return Status::error("deflate: stream is truncated");
+			}
+			out.resize(pos);
 
-		// trailer: adler32 of the output, big endian, byte aligned
-		const int drop = br.bits & 7;
-		br.buf >>= drop;
-		br.bits -= drop;
-		const std::size_t unused = br.unused_bytes();
-		const std::size_t used = static_cast<std::size_t>(br.p - compressed.data()) - unused;
-		if (compressed.size() - used < 4)
-		{
-			return Status::error("zlib stream has no adler32 trailer");
+			// trailer: adler32 of the output, big endian, byte aligned
+			const int drop = br.bits & 7;
+			br.buf >>= drop;
+			br.bits -= drop;
+			const std::size_t unused = br.unused_bytes();
+			const std::size_t used = static_cast<std::size_t>(br.p - compressed.data()) - unused;
+			if (compressed.size() - used < 4)
+			{
+				return Status::error("zlib stream has no adler32 trailer");
+			}
+			const std::uint8_t* t = compressed.data() + used;
+			const std::uint32_t expected = (static_cast<std::uint32_t>(t[0]) << 24) | (static_cast<std::uint32_t>(t[1]) << 16)
+				| (static_cast<std::uint32_t>(t[2]) << 8) | t[3];
+			if (adler32(out.data(), out.size()) != expected)
+			{
+				return Status::error("zlib adler32 mismatch: the inflated data is corrupt");
+			}
+			if (consumed)
+			{
+				*consumed = used + 4;
+			}
+			return {};
 		}
-		const std::uint8_t* t = compressed.data() + used;
-		const std::uint32_t expected = (static_cast<std::uint32_t>(t[0]) << 24) | (static_cast<std::uint32_t>(t[1]) << 16)
-			| (static_cast<std::uint32_t>(t[2]) << 8) | t[3];
-		if (adler32(out.data(), out.size()) != expected)
+	}
+
+	Status zlib_inflate(const std::span<const std::uint8_t> compressed, std::vector<std::uint8_t>& out, const std::size_t sizeHint,
+		std::size_t* consumed)
+	{
+		try
 		{
-			return Status::error("zlib adler32 mismatch: the inflated data is corrupt");
+			return inflate_impl(compressed, out, sizeHint, consumed, false);
 		}
-		if (consumed)
+		catch (const std::exception& e)
 		{
-			*consumed = used + 4;
+			out.clear();
+			return Status::error(std::string("inflate failed: ") + e.what());
 		}
-		return {};
+	}
+
+	namespace detail
+	{
+		Status zlib_inflate_zone(const std::span<const std::uint8_t> compressed, std::vector<std::uint8_t>& zone)
+		{
+			return inflate_impl(compressed, zone, 0, nullptr, true);
+		}
 	}
 }

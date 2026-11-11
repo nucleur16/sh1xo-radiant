@@ -19,7 +19,7 @@ namespace
 		"\n"
 		"  info <ff>                    header, blocks, asset counts per type\n"
 		"  assets <ff> [--all]          type and name of every asset ( --all: also the nested ones )\n"
-		"  check <folder>               load every .ff of a folder, report failures\n"
+		"  check <folder> [--all]       load every .ff of a folder, report failures ( --all: also *.ff.* backups )\n"
 		"  decrypt <ff> --out <file>    write the decrypted, inflated zone\n"
 		"  dump-ents <ff> [--out <f>]   entity string of the map\n"
 		"  dump-rawfile <ff> [<name>] [--out <f>]   one rawfile, inflated ( no name: list them )\n"
@@ -34,13 +34,14 @@ namespace
 		"\n"
 		"options:\n"
 		"  --exe <client exe>           C1.exe or codoMP_client_shipRetail.exe ( default: searched next to / above the .ff )\n"
+		"  --geometry                   model --json: add the decoded positions, normals, uvs, colours, bones and indices\n"
 		"  --json                       machine readable output ( info, assets, check, model, models, material, image, map )\n";
 	struct Args
 	{
 		std::string command;
 		std::vector<std::string> positional;
 		std::string exe, out;
-		bool json = false, all = false;
+		bool json = false, all = false, geometry = false;
 	};
 
 	// ---- minimal JSON writer ------------------------------------------------------------------
@@ -117,8 +118,8 @@ namespace
 		void kv(const std::string_view k, const char* v) { key(k); str(v); }
 		void kv(const std::string_view k, const long long v) { key(k); integer(v); }
 		void kv(const std::string_view k, const int v) { key(k); integer(v); }
-		void kv(const std::string_view k, const std::uint32_t v) { key(k); integer(v); }
-		void kv(const std::string_view k, const std::size_t v) { key(k); integer(static_cast<long long>(v)); }
+		void kv(const std::string_view k, const unsigned int v) { key(k); integer(v); }
+		void kv(const std::string_view k, const unsigned long long v) { key(k); integer(static_cast<long long>(v)); }
 		void kv(const std::string_view k, const double v) { key(k); num(v); }
 		void kv(const std::string_view k, const bool v) { key(k); boolean(v); }
 	private:
@@ -438,7 +439,8 @@ namespace
 		std::error_code ec;
 		for (const auto& e : std::filesystem::directory_iterator(args.positional[0], ec))
 		{
-			if (e.is_regular_file() && e.path().extension() == ".ff")
+			// --all: also backups such as "zm_sumpf_sh.ff.pre-wallbuy"
+			if (e.is_regular_file() && (e.path().extension() == ".ff" || (args.all && e.path().filename().string().find(".ff.") != std::string::npos)))
 			{
 				files.push_back(e.path());
 			}
@@ -792,6 +794,45 @@ namespace
 					j.kv("rigidLists", surface.raw.vertListCount);
 					j.kv("blended", surface.raw.vertsBlend != 0);
 					j.kv("material", slot < model.materialNames.size() ? model.materialNames[slot] : std::string_view());
+					if (args.geometry)
+					{
+						// decoded vertex streams, flat arrays
+						const auto verts = surface.vertices();
+						const auto weights = surface.weights(zone);
+						j.key("positions");
+						j.begin('[');
+						for (const SurfaceVertex& v : verts) for (const float f : v.position) j.num(f);
+						j.end(']');
+						j.key("normals");
+						j.begin('[');
+						for (const SurfaceVertex& v : verts) for (const float f : v.normal) j.num(f);
+						j.end(']');
+						j.key("uvs");
+						j.begin('[');
+						for (const SurfaceVertex& v : verts) for (const float f : v.uv) j.num(f);
+						j.end(']');
+						j.key("colors");
+						j.begin('[');
+						for (const SurfaceVertex& v : verts) for (const std::uint8_t c : v.color) j.integer(c);
+						j.end(']');
+						j.key("weights");	// per vertex: bone, weight, bone, weight ..
+						j.begin('[');
+						for (const VertexWeights& w : weights)
+						{
+							j.begin('[');
+							for (int k = 0; k < w.count; k++)
+							{
+								j.integer(w.bone[k]);
+								j.num(w.weight[k]);
+							}
+							j.end(']');
+						}
+						j.end(']');
+						j.key("indices");
+						j.begin('[');
+						for (const std::uint16_t i : surface.indices()) j.integer(i);
+						j.end(']');
+					}
 					j.end('}');
 				}
 				j.end(']');
@@ -1432,6 +1473,10 @@ int main(const int argc, char** argv)
 		else if (a == "--all")
 		{
 			args.all = true;
+		}
+		else if (a == "--geometry")
+		{
+			args.geometry = true;
 		}
 		else if (a == "--help" || a == "-h")
 		{

@@ -105,6 +105,10 @@ namespace codol::zone
 	Status decode_fastfile(std::span<const std::uint8_t> file, const ClientKey& key, std::vector<std::uint8_t>& zone,
 		FastFileInfo* info = nullptr, const FastFileOptions& options = {});
 
+	// same, but decrypts inside the caller's buffer instead of a copy of it ( the buffer is consumed )
+	Status decode_fastfile(std::vector<std::uint8_t>&& file, const ClientKey& key, std::vector<std::uint8_t>& zone,
+		FastFileInfo* info = nullptr, const FastFileOptions& options = {});
+
 	Status read_fastfile(const std::filesystem::path& path, const ClientKey& key, std::vector<std::uint8_t>& zone,
 		FastFileInfo* info = nullptr, const FastFileOptions& options = {});
 

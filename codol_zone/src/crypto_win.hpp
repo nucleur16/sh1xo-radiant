@@ -59,3 +59,14 @@ namespace codol::zone::crypto
 		void* key_ = nullptr;
 	};
 }
+
+namespace codol::zone
+{
+	struct Status;
+
+	namespace detail
+	{
+		// zlib stream of a zone: the output buffer is sized from XFile.size ( its first four bytes ). May throw std::bad_alloc.
+		Status zlib_inflate_zone(std::span<const std::uint8_t> compressed, std::vector<std::uint8_t>& zone);
+	}
+}
