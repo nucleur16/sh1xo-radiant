@@ -124,8 +124,9 @@ namespace codol::zone
 		// Copies a top level asset of another zone in front of `position` ( npos: at the end ). Pointers of the asset
 		// that lead to other assets of the donor zone are re-targeted at the asset of the same type and name in this
 		// zone; withDependencies also copies those that are missing here. Shared strings are re-targeted at an equal
-		// string of this zone. Fails ( and changes nothing ) when a pointer cannot be re-targeted, or when the
-		// asset uses script strings and the two zones do not have the same script string list.
+		// string of this zone. Script string indices of the asset ( bone names, notetracks .. ) are translated to this
+		// zone's script string list, which grows by the strings it lacks. Fails ( and changes nothing ) when a pointer
+		// cannot be re-targeted: the asset shares data other than strings with another asset of its zone.
 		Status add_asset(const ZoneEditor& donor, std::size_t donorIndex, std::size_t position = npos, bool withDependencies = false);
 
 		// Replaces a top level asset with one of another zone ( same type ); pointers of other assets to the

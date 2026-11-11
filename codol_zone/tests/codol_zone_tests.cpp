@@ -816,7 +816,7 @@ namespace
 		{
 			Zone z;
 			CHECK(z.open(zones / "common_gametype_mp.ff", key));
-			std::size_t tables = 0, cells = 0;
+			std::size_t tables = 0, cells = 0, wrongHashes = 0;
 			for (const AssetRecord& r : z.all_assets())
 			{
 				StringTableView table;
@@ -825,10 +825,17 @@ namespace
 					tables++;
 					cells += table.cells.size();
 					CHECK_EQ(table.cells.size(), static_cast<std::size_t>(table.raw.rowCount) * static_cast<std::size_t>(table.raw.columnCount));
+					// the hash the writer computes is the one the shipped tables carry
+					const auto stored = z.get_array<c1::StringTableCell>(table.raw.values, table.cells.size());
+					for (std::size_t i = 0; i < stored.size(); i++)
+					{
+						wrongHashes += stored[i].hash != string_table_hash(table.cells[i]);
+					}
 				}
 			}
 			CHECK_EQ(tables, 120);
 			CHECK(cells > 1000);
+			CHECK_EQ(wrongHashes, 0);
 
 			// a skinned weapon view model whose surfaces are streamed from an .iwd
 			ModelView weapon;
@@ -920,6 +927,40 @@ namespace
 				}
 			}
 			CHECK_EQ(changed, 1);
+
+			// an asset of another zone: its script string indices follow this zone's list
+			if (std::filesystem::exists(zones / "mp_dome.ff", ec))
+			{
+				ZoneEditor donor;
+				CHECK(donor.open(zones / "mp_dome.ff", key));
+				const std::size_t paper = donor.find_asset(c1::ASSET_TYPE_XMODEL, "machinery_windmill");
+				CHECK(paper != ZoneEditor::npos);
+				if (paper != ZoneEditor::npos)
+				{
+					CHECK(donor.asset(paper).usesScriptStrings);
+					CHECK(editor.find_asset(c1::ASSET_TYPE_XMODEL, "machinery_windmill") == ZoneEditor::npos);
+					CHECK(editor.add_asset(donor, paper));
+					std::vector<std::uint8_t> withModel;
+					CHECK(editor.write(withModel));
+					ZoneEditor taken;
+					CHECK(taken.load(withModel, "mp_killhouse_sh"));
+					const std::size_t here = taken.find_asset(c1::ASSET_TYPE_XMODEL, "machinery_windmill");
+					CHECK(here != ZoneEditor::npos);
+					CHECK(taken.asset_fingerprint(here) == donor.asset_fingerprint(paper));
+					ModelView theirs, ours;
+					CHECK(read_model(donor.zone(), donor.zone().find_asset(c1::ASSET_TYPE_XMODEL, "machinery_windmill"), theirs));
+					CHECK(read_model(taken.zone(), taken.zone().find_asset(c1::ASSET_TYPE_XMODEL, "machinery_windmill"), ours));
+					CHECK_EQ(ours.bones.size(), theirs.bones.size());
+					for (std::size_t i = 0; i < ours.bones.size() && i < theirs.bones.size(); i++)
+					{
+						CHECK(ours.bones[i].name == theirs.bones[i].name);
+					}
+					for (std::size_t i = 0; i < before.size(); i++)
+					{
+						CHECK(taken.asset_fingerprint(i) == check.asset_fingerprint(i));
+					}
+				}
+			}
 
 			// the geometry the renderer reads is where the pointers say it is
 			GfxWorldView oldWorld, newWorld;

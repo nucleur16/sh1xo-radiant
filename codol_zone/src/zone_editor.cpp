@@ -87,6 +87,12 @@ namespace codol::zone
 			std::uint32_t targetOffset = 0;
 		};
 
+		struct ScriptRef
+		{
+			std::uint32_t chunk = 0;
+			std::uint32_t offset = 0;
+		};
+
 		struct Chunk
 		{
 			std::uint64_t source = 0;		// offset into Unit::blob or Unit::local
@@ -106,8 +112,8 @@ namespace codol::zone
 			std::vector<Chunk> chunks;
 			std::vector<Reloc> relocs;								// sorted by ( chunk, offset )
 			std::vector<std::uint32_t> allocOrdinals;				// g_streamPos stores ( counted per unit ) that are relocation targets
+			std::vector<ScriptRef> scriptRefs;						// u16 fields that hold an index into the zone's script string list
 			bool modified = false;
-			bool usesScriptStrings = false;
 
 			const std::uint8_t* data(const Chunk& c) const
 			{
@@ -208,7 +214,9 @@ namespace codol::zone
 			std::vector<CReloc> relocs;
 			std::vector<CAlloc> allocs[BLOCK_COUNT];
 			std::vector<std::uint32_t> unitFirst{ 0 };				// first chunk id of every unit
-			std::vector<std::uint8_t> unitScript{ 0 };
+			std::vector<std::pair<std::uint32_t, std::uint32_t>> scriptRefs;	// chunk id, offset
+			std::uint32_t windowBase = 0;							// the script string array ( handles after the load of the list )
+			std::uint32_t pendingEntry = NONE;						// array entry the loader read last
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> headers;	// pooled header -> chunk id
 			std::uint32_t unit = 0;
 			std::uint32_t posWrites = 0;
@@ -289,7 +297,6 @@ namespace codol::zone
 			{
 				unit++;
 				unitFirst.push_back(static_cast<std::uint32_t>(chunks.size()));
-				unitScript.push_back(0);
 				posWrites = 0;
 			}
 
@@ -302,9 +309,43 @@ namespace codol::zone
 				}
 			}
 
-			void on_read32(std::uint32_t) override
+			void on_script_strings(const std::uint32_t array, std::uint32_t) override
 			{
-				unitScript[unit] = 1;
+				windowBase = array;
+			}
+
+			// Load_ScriptString: *field = list.strings[*field], a 16 bit read of the array followed by a 16 bit store
+			void on_window_read(const std::uint32_t address) override
+			{
+				pendingEntry = address;
+			}
+
+			void on_write16(const std::uint32_t address, const std::uint16_t value) override
+			{
+				if (pendingEntry == NONE)
+				{
+					return;
+				}
+				const std::uint32_t gid = find_chunk(address);
+				if (gid == NONE)
+				{
+					return;
+				}
+				const CChunk& c = chunks[gid];
+				const std::uint32_t offset = address - c.dest;
+				const std::uint8_t* handle = mem->peek(pendingEntry, 2);
+				if (offset + 2 > c.size || !handle)
+				{
+					return;
+				}
+				std::uint16_t index, expected;
+				std::memcpy(&index, stream.data() + c.source + offset, 2);
+				std::memcpy(&expected, handle, 2);
+				if (windowBase + 4u * index == pendingEntry && expected == value)
+				{
+					scriptRefs.emplace_back(gid, offset);
+					pendingEntry = NONE;
+				}
 			}
 
 			void on_write32(const std::uint32_t address, const std::uint32_t value) override
@@ -605,8 +646,61 @@ namespace codol::zone
 
 		void build(const Capture& capture);
 		Status import(const ZoneEditor::Impl& donor, std::size_t donorIndex, std::size_t position, bool withDependencies,
-			std::vector<std::shared_ptr<Unit>>& working, std::shared_ptr<Unit>& imported) const;
+			std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& strings, std::shared_ptr<Unit>& imported) const;
+		void set_script_strings(const std::vector<std::string>& strings);
 	};
+
+	// appends the strings that `strings` has beyond the current list to the root: count, array entry, string
+	void ZoneEditor::Impl::set_script_strings(const std::vector<std::string>& strings)
+	{
+		const auto insert = [&](const std::uint32_t at, const std::span<const std::uint8_t> bytes, const bool string)
+		{
+			Chunk c;
+			c.string = string;
+			root->chunks.insert(root->chunks.begin() + at, c);
+			root->set_data(at, bytes);
+			for (Reloc& reloc : root->relocs)
+			{
+				reloc.chunk += reloc.chunk >= at ? 1 : 0;
+			}
+			for_each_unit(root, assets, [&](Unit& unit, std::size_t)
+			{
+				for (Reloc& reloc : unit.relocs)
+				{
+					if (reloc.unit == root.get() && reloc.kind == TargetKind::CHUNK && reloc.index >= at)
+					{
+						reloc.index++;
+					}
+				}
+			});
+			if (tableChunk != NONE && tableChunk >= at)
+			{
+				tableChunk++;
+			}
+		};
+		const std::uint8_t inlinePointer[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+		for (std::size_t k = scriptStrings.size(); k < strings.size(); k++)
+		{
+			std::uint8_t* list = root->make_local(0);
+			const std::uint32_t count = get_u32(list);
+			put_u32(list, count + 1);
+			put_u32(list + 4, INLINE);
+			if (!count)
+			{
+				insert(1, inlinePointer, false);
+			}
+			else
+			{
+				std::vector<std::uint8_t> array(root->data(root->chunks[1]), root->data(root->chunks[1]) + root->chunks[1].size);
+				array.insert(array.end(), inlinePointer, inlinePointer + 4);
+				root->set_data(1, array);
+			}
+			std::vector<std::uint8_t> text(strings[k].begin(), strings[k].end());
+			text.push_back(0);
+			insert(tableChunk != NONE ? tableChunk : static_cast<std::uint32_t>(root->chunks.size()), text, true);
+			scriptStrings.push_back(strings[k]);
+		}
+	}
 
 	void ZoneEditor::Impl::build(const Capture& capture)
 	{
@@ -618,7 +712,6 @@ namespace codol::zone
 		{
 			const std::shared_ptr<Unit> unit = k == 0 ? root : std::make_shared<Unit>();
 			unit->blob = blob;
-			unit->usesScriptStrings = capture.unitScript[k] != 0;
 			const std::uint32_t first = capture.unitFirst[k];
 			const std::uint32_t last = k + 1 < unitCount ? capture.unitFirst[k + 1] : static_cast<std::uint32_t>(capture.chunks.size());
 			unit->chunks.reserve(last - first);
@@ -757,6 +850,17 @@ namespace codol::zone
 			p.unit->relocs[p.reloc].index = static_cast<std::uint32_t>(std::lower_bound(ordinals.begin(), ordinals.end(), p.ordinal) - ordinals.begin());
 		}
 
+		for (const auto& [gid, offset] : capture.scriptRefs)
+		{
+			units[capture.chunks[gid].unit]->scriptRefs.push_back(ScriptRef{ indexInUnit[gid], offset });
+		}
+		for (const auto& unit : units)
+		{
+			std::sort(unit->scriptRefs.begin(), unit->scriptRefs.end(), [](const ScriptRef& a, const ScriptRef& b)
+			{
+				return a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset;
+			});
+		}
 		for (const auto& [pooled, gid] : capture.headers)
 		{
 			headerChunk[pooled] = { units[capture.chunks[gid].unit].get(), indexInUnit[gid] };
@@ -866,7 +970,7 @@ namespace codol::zone
 			out.relocations = static_cast<std::uint32_t>(unit.relocs.size());
 			out.streamBytes = unit.stream_bytes();
 			out.modified = unit.modified;
-			out.usesScriptStrings = unit.usesScriptStrings;
+			out.usesScriptStrings = !unit.scriptRefs.empty();
 		}
 		return out;
 	}
@@ -908,19 +1012,27 @@ namespace codol::zone
 		number(unit.rawHeader);
 		bytes(unit.name.data(), unit.name.size());
 		number(unit.chunks.size());
-		std::size_t r = 0;
+		std::size_t r = 0, s = 0;
+		std::vector<std::uint8_t> masked;
 		for (std::uint32_t k = 0; k < unit.chunks.size(); k++)
 		{
 			const Chunk& c = unit.chunks[k];
 			const std::uint8_t* data = unit.data(c);
 			number(c.size);
 			number(c.string ? 1u : 0u);
-			std::uint32_t at = 0;
+			const bool fields = (r < unit.relocs.size() && unit.relocs[r].chunk == k) || (s < unit.scriptRefs.size() && unit.scriptRefs[s].chunk == k);
+			if (!fields)
+			{
+				bytes(data, c.size);
+				continue;
+			}
+			// pointer and script string fields count by what they stand for
+			masked.assign(data, data + c.size);
 			for (; r < unit.relocs.size() && unit.relocs[r].chunk == k; r++)
 			{
 				const Reloc& reloc = unit.relocs[r];
-				bytes(data + at, reloc.offset - at);
-				at = reloc.offset + 4;
+				std::memset(masked.data() + reloc.offset, 0, 4);
+				number(reloc.offset);
 				number(static_cast<std::uint32_t>(reloc.kind));
 				if (reloc.kind == TargetKind::RAW)
 				{
@@ -936,7 +1048,19 @@ namespace codol::zone
 				number(reloc.kind == TargetKind::ALLOC ? reloc.unit->allocOrdinals[reloc.index] : reloc.index);
 				number(reloc.targetOffset);
 			}
-			bytes(data + at, c.size - at);
+			for (; s < unit.scriptRefs.size() && unit.scriptRefs[s].chunk == k; s++)
+			{
+				const ScriptRef& ref = unit.scriptRefs[s];
+				std::uint16_t stringIndex;
+				std::memcpy(&stringIndex, masked.data() + ref.offset, 2);
+				std::memset(masked.data() + ref.offset, 0, 2);
+				number(ref.offset);
+				if (stringIndex < impl_->scriptStrings.size())
+				{
+					bytes(impl_->scriptStrings[stringIndex].data(), impl_->scriptStrings[stringIndex].size());
+				}
+			}
+			bytes(masked.data(), masked.size());
 		}
 		return hash;
 	}
@@ -1216,17 +1340,37 @@ namespace codol::zone
 
 	// copies donor asset `donorIndex` into `working` in front of `position`; pointers that leave the asset are re-targeted
 	Status ZoneEditor::Impl::import(const ZoneEditor::Impl& donor, const std::size_t donorIndex, std::size_t position, const bool withDependencies,
-		std::vector<std::shared_ptr<Unit>>& working, std::shared_ptr<Unit>& imported) const
+		std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& scriptList, std::shared_ptr<Unit>& imported) const
 	{
 		const Unit& source = *donor.assets[donorIndex];
 		const std::string what = describe(source, donorIndex) + " of zone '" + donor.name + "'";
-		if (source.usesScriptStrings && donor.scriptStrings != scriptStrings)
-		{
-			return Status::error(what + " uses script strings, and the two zones do not have the same script string list");
-		}
 		auto unit = std::make_shared<Unit>(source);
 		unit->modified = true;
 		imported = unit;
+
+		// script string indices: the donor's list -> this zone's list, which grows by what it does not have
+		for (const ScriptRef& ref : unit->scriptRefs)
+		{
+			std::uint8_t* field = unit->make_local(ref.chunk) + ref.offset;
+			std::uint16_t index;
+			std::memcpy(&index, field, 2);
+			if (index >= donor.scriptStrings.size())
+			{
+				return Status::error(what + " holds a script string index outside its zone's list");
+			}
+			const std::string& text = donor.scriptStrings[index];
+			std::size_t here = static_cast<std::size_t>(std::find(scriptList.begin(), scriptList.end(), text) - scriptList.begin());
+			if (here == scriptList.size())
+			{
+				if (here >= 0xFFFF)
+				{
+					return Status::error("the script string list is full ( 65535 strings )");
+				}
+				scriptList.push_back(text);
+			}
+			index = static_cast<std::uint16_t>(here);
+			std::memcpy(field, &index, 2);
+		}
 		if (position > working.size())
 		{
 			position = working.size();
@@ -1291,7 +1435,7 @@ namespace codol::zone
 					}
 					std::shared_ptr<Unit> dependency;
 					const auto at = static_cast<std::size_t>(std::find(working.begin(), working.end(), unit) - working.begin());
-					if (const Status s = import(donor, other, at, true, working, dependency); !s)
+					if (const Status s = import(donor, other, at, true, working, scriptList, dependency); !s)
 					{
 						return s;
 					}
@@ -1335,12 +1479,14 @@ namespace codol::zone
 			return Status::error("no such asset");
 		}
 		std::vector<std::shared_ptr<Unit>> working = impl_->assets;
+		std::vector<std::string> strings = impl_->scriptStrings;
 		std::shared_ptr<Unit> imported;
-		if (const Status s = impl_->import(*donor.impl_, donorIndex, position, withDependencies, working, imported); !s)
+		if (const Status s = impl_->import(*donor.impl_, donorIndex, position, withDependencies, working, strings, imported); !s)
 		{
 			return s;
 		}
 		impl_->assets = std::move(working);
+		impl_->set_script_strings(strings);
 		return {};
 	}
 	catch (const std::exception& e)
@@ -1368,8 +1514,9 @@ namespace codol::zone
 		// the replaced asset must not serve as a dependency of the new one
 		std::vector<std::shared_ptr<Unit>> working = impl_->assets;
 		working.erase(working.begin() + static_cast<std::ptrdiff_t>(index));
+		std::vector<std::string> strings = impl_->scriptStrings;
 		std::shared_ptr<Unit> imported;
-		if (const Status s = impl_->import(*donor.impl_, donorIndex, index, false, working, imported); !s)
+		if (const Status s = impl_->import(*donor.impl_, donorIndex, index, false, working, strings, imported); !s)
 		{
 			return s;
 		}
@@ -1394,6 +1541,7 @@ namespace codol::zone
 			it = it->second.first == target.get() ? impl_->headerChunk.erase(it) : std::next(it);
 		}
 		impl_->assets = std::move(working);
+		impl_->set_script_strings(strings);
 		return {};
 	}
 	catch (const std::exception& e)

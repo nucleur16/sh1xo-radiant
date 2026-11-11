@@ -438,6 +438,7 @@ namespace codol::zone
 				{
 					// reads of the script string array: an asset that turns its string indices into handles
 					m.set_read_window(m.U32(list + 4), 4u * static_cast<std::uint32_t>(stringCount));
+					nat.tracer->on_script_strings(m.U32(list + 4), static_cast<std::uint32_t>(stringCount));
 				}
 
 				push(3);

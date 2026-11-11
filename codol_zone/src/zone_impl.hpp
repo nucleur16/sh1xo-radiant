@@ -50,9 +50,11 @@ namespace codol::zone
 		virtual void on_stream_read(std::uint32_t /*destination*/, std::uint32_t /*size*/, std::uint64_t /*streamOffset*/, bool /*string*/) {}
 		virtual void on_asset_begin(std::int32_t /*index*/, std::uint64_t /*streamOffset*/) {}
 		virtual void on_asset_end(std::int32_t /*index*/, std::uint64_t /*streamOffset*/) {}
+		virtual void on_script_strings(std::uint32_t /*array*/, std::uint32_t /*count*/) {}	// the list is loaded: handles from here on
 		virtual void on_add_asset(std::int32_t /*type*/, std::uint32_t /*loadedHeader*/, std::uint32_t /*pooledHeader*/) {}
 		void on_write32(std::uint32_t, std::uint32_t) override {}
-		void on_read32(std::uint32_t) override {}
+		void on_write16(std::uint32_t, std::uint16_t) override {}
+		void on_window_read(std::uint32_t) override {}
 	};
 
 	// runs the translated loaders over zone bytes; throws LoadError. With a tracer that supplies the stream, `bytes`

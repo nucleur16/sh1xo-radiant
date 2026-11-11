@@ -28,7 +28,8 @@ namespace codol::zone
 	{
 		virtual ~MemWatch() = default;
 		virtual void on_write32(std::uint32_t address, std::uint32_t value) = 0;	// before the store
-		virtual void on_read32(std::uint32_t address) = 0;							// only inside the read window
+		virtual void on_write16(std::uint32_t address, std::uint16_t value) = 0;	// before the store
+		virtual void on_window_read(std::uint32_t address) = 0;						// 16 / 32 bit reads inside the read window
 	};
 
 	class VMem
@@ -104,6 +105,10 @@ namespace codol::zone
 
 		std::uint16_t U16(const std::uint32_t a)
 		{
+			if (watch_ && a - readWindow_ < readWindowSize_)
+			{
+				watch_->on_window_read(a);
+			}
 			std::uint16_t v;
 			std::memcpy(&v, at(a, 2), 2);
 			return v;
@@ -114,7 +119,7 @@ namespace codol::zone
 		{
 			if (watch_ && a - readWindow_ < readWindowSize_)
 			{
-				watch_->on_read32(a);
+				watch_->on_window_read(a);
 			}
 			std::uint32_t v;
 			std::memcpy(&v, at(a, 4), 4);
@@ -134,6 +139,10 @@ namespace codol::zone
 		}
 		std::uint16_t WU16(const std::uint32_t a, const std::uint16_t v)
 		{
+			if (watch_)
+			{
+				watch_->on_write16(a, v);
+			}
 			std::memcpy(at(a, 2), &v, 2);
 			return v;
 		}
