@@ -39,6 +39,7 @@ namespace editor
 		bool g_show_console = true;
 		bool g_show_demo = false;
 		bool g_show_about = false;
+		bool g_show_settings = false;
 		std::string g_console_input;
 
 		// ---------------------------------------------------------------------------------------------
@@ -306,6 +307,8 @@ namespace editor
 				}
 
 				ImGui::Separator();
+				ImGui::MenuItem("Settings ..", nullptr, &g_show_settings);
+				ImGui::Separator();
 
 				if (ImGui::MenuItem("Exit"))
 				{
@@ -357,6 +360,84 @@ namespace editor
 			}
 
 			ImGui::EndMainMenuBar();
+		}
+
+		// every saved setting, generically
+		void draw_settings()
+		{
+			if (!g_show_settings)
+			{
+				return;
+			}
+
+			ImGui::SetNextWindowSize(ImVec2(820.0f, 0.0f), ImGuiCond_Appearing);
+
+			if (ImGui::Begin("Settings##window", &g_show_settings, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking))
+			{
+				ImGui::TextDisabled("Saved to codol_editor.cfg next to the editor. Hover a name for its meaning.");
+				ImGui::Separator();
+
+				for (auto* dvar : dvars::all())
+				{
+					// the asset tool is only used by the radiant plugin's history; nothing here converts assets
+					if (!(dvar->flags & game::dvar_flags::saved) || std::string_view(dvar->name) == "codol_asset_tool")
+					{
+						continue;
+					}
+
+					ImGui::PushID(dvar->name);
+					ImGui::AlignTextToFramePadding();
+					ImGui::TextUnformatted(dvar->name);
+
+					if (ImGui::IsItemHovered() && dvar->description && *dvar->description)
+					{
+						ImGui::SetTooltip("%s", dvar->description);
+					}
+
+					ImGui::SameLine(260.0f);
+					ImGui::SetNextItemWidth(-1.0f);
+
+					switch (dvar->type)
+					{
+					case game::dvar_type::boolean:
+					{
+						bool value = dvar->current.enabled;
+						if (ImGui::Checkbox("##value", &value))
+						{
+							dvars::set_bool(dvar, value);
+						}
+
+						break;
+					}
+
+					case game::dvar_type::integer:
+					{
+						int value = dvar->current.integer;
+						if (ImGui::InputInt("##value", &value, 0))
+						{
+							dvars::set_int(dvar, value);
+						}
+
+						break;
+					}
+
+					default:
+					{
+						std::string value = dvar->current.string ? dvar->current.string : "";
+						if (ImGui::InputText("##value", &value))
+						{
+							dvars::set_string(dvar, value.c_str());
+						}
+
+						break;
+					}
+					}
+
+					ImGui::PopID();
+				}
+			}
+
+			ImGui::End();
 		}
 
 		void draw_about()
@@ -440,6 +521,7 @@ namespace editor
 			}
 
 			draw_console();
+			draw_settings();
 			draw_about();
 
 			if (g_show_demo)
@@ -637,7 +719,8 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int)
 
 		if (components::codol_game::install_path().empty())
 		{
-			log("^1The CoDOL install folder is not set: Script Workbench > Setup.");
+			log("^1The CoDOL install folder is not set: File > Settings ( codol_install_path ).");
+			g_show_settings = true;
 		}
 
 		GET_GUI(ggui::codol_viewport_dialog)->open();
