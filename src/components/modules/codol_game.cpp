@@ -306,6 +306,16 @@ namespace components
 		}
 	}
 
+	void codol_game::post_to_gui(std::function<void()> func)
+	{
+		components::post_to_gui(std::move(func));
+	}
+
+	int codol_game::run_command(const std::string& command_line, const std::string& working_dir, std::string& output)
+	{
+		return components::run_command(command_line, working_dir, output);
+	}
+
 	// -------------------------------------------------------------------------------------
 	// paths
 
@@ -693,8 +703,81 @@ namespace components
 
 	// -------------------------------------------------------------------------------------
 
+	void codol_game::dev_capture_frame()
+	{
+		static int state = 0; // 0: unchecked, 1: active, 2: off
+		static std::string path;
+		static double next = 0.0;
+
+		if (state == 0)
+		{
+			char env[MAX_PATH] = {};
+			state = GetEnvironmentVariableA("CODOL_AUTOSHOT", env, sizeof(env)) ? 1 : 2;
+			path = env;
+		}
+
+		if (state != 1 || ImGui::GetTime() < next || !game::glob::d3d9_device)
+		{
+			return;
+		}
+
+		next = ImGui::GetTime() + 2.0;
+
+		IDirect3DSurface9* target = nullptr;
+		if (SUCCEEDED(game::glob::d3d9_device->GetRenderTarget(0, &target)) && target)
+		{
+			// write to a temp name first so a reader never sees a half written file
+			const std::string tmp = path + ".tmp";
+			if (SUCCEEDED(D3DXSaveSurfaceToFileA(tmp.c_str(), D3DXIFF_PNG, target, nullptr, nullptr)))
+			{
+				MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+			}
+
+			target->Release();
+		}
+	}
+
 	void codol_game::frame()
 	{
+		// CODOL_STARTUP_CMDS: run console commands once the gui has settled.
+		// "wait <seconds>" pauses the list ( imports run in the background )
+		static bool startup_read = false;
+		static std::vector<std::string> startup_cmds;
+		static std::size_t startup_next = 0;
+		static double startup_resume = 0.0;
+
+		if (!startup_read && ImGui::GetFrameCount() > 60)
+		{
+			startup_read = true;
+
+			char env[2048] = {};
+			if (GetEnvironmentVariableA("CODOL_STARTUP_CMDS", env, sizeof(env)))
+			{
+				for (const auto& cmd : utils::split(std::string(env), ';'))
+				{
+					if (auto c = trim_copy(cmd); !c.empty())
+					{
+						startup_cmds.push_back(c);
+					}
+				}
+			}
+		}
+
+		while (startup_next < startup_cmds.size() && ImGui::GetTime() >= startup_resume)
+		{
+			const auto& c = startup_cmds[startup_next++];
+			const auto args = utils::split(c, ' ');
+
+			if (args[0] == "wait")
+			{
+				startup_resume = ImGui::GetTime() + (args.size() > 1 ? utils::try_stof(args[1], true) : 1.0f);
+				break;
+			}
+
+			game::printf_to_console("[CoDOL] startup command: %s\n", c.c_str());
+			command::execute_command(args);
+		}
+
 		std::vector<pending_result> results;
 		{
 			std::lock_guard lock(g_result_mutex);
@@ -779,6 +862,18 @@ namespace components
 			/* flags	*/ game::dvar_flags::saved,
 			/* desc		*/ "working directory of codol_reload_precheck_cmd");
 
+		dvars::codol_asset_tool = dvars::register_string(
+			/* name		*/ "codol_asset_tool",
+			/* default	*/ "",
+			/* flags	*/ game::dvar_flags::saved,
+			/* desc		*/ "path to CodolSoundDumper.exe ( CODOL-AssetExplorer ), used to decrypt map zones when importing their entities");
+
+		dvars::codol_xanim_list = dvars::register_string(
+			/* name		*/ "codol_xanim_list",
+			/* default	*/ "",
+			/* flags	*/ game::dvar_flags::saved,
+			/* desc		*/ "optional text file with the xanims the game ships ( one name per line, eg. docs/zone_assets/ALL_xanim.txt ). Scripts that use other animations get a warning");
+
 		dvars::codol_client_exe = dvars::register_string(
 			/* name		*/ "codol_client_exe",
 			/* default	*/ "codoMP_client_shipRetail.exe;C1.exe",
@@ -815,6 +910,70 @@ namespace components
 					game::printf_to_console("%s\n", response.c_str());
 				}
 			});
+		});
+
+		command::register_command("codol_workbench"s, [](const std::vector<std::string>&)
+		{
+			GET_GUI(ggui::script_workbench_dialog)->toggle();
+		});
+
+		command::register_command("codol_gameview"s, [](const std::vector<std::string>&)
+		{
+			GET_GUI(ggui::game_view_dialog)->toggle();
+		});
+
+		// codol_open <file> [line]
+		command::register_command("codol_open"s, [](const std::vector<std::string>& args)
+		{
+			if (args.size() < 2)
+			{
+				game::printf_to_console("usage: codol_open <file> [line]\n");
+				return;
+			}
+
+			GET_GUI(ggui::script_workbench_dialog)->open_file(args[1], args.size() > 2 ? utils::try_stoi(args[2], true) : 0);
+		});
+
+		command::register_command("codol_mapents"s, [](const std::vector<std::string>&)
+		{
+			GET_GUI(ggui::codol_map_ents_dialog)->toggle();
+		});
+
+		// codol_import_ents <file> [map name]
+		command::register_command("codol_import_ents"s, [](const std::vector<std::string>& args)
+		{
+			if (args.size() < 2)
+			{
+				game::printf_to_console("usage: codol_import_ents <.ff | .zone | .d3dbsp.ents | entity text> [map name]\n");
+				return;
+			}
+
+			std::string map = args.size() > 2 ? args[2] : args[1];
+			if (args.size() <= 2)
+			{
+				if (const auto slash = map.find_last_of("\\/"); slash != std::string::npos)
+				{
+					map.erase(0, slash + 1);
+				}
+
+				if (const auto dot = map.find('.'); dot != std::string::npos)
+				{
+					map.erase(dot);
+				}
+			}
+
+			GET_GUI(ggui::codol_map_ents_dialog)->import_file(args[1], map);
+		});
+
+		// codol_export_ents [noreload]
+		command::register_command("codol_export_ents"s, [](const std::vector<std::string>& args)
+		{
+			const auto dlg = GET_GUI(ggui::codol_map_ents_dialog);
+			const bool keep = dlg->m_reload_after_export;
+
+			dlg->m_reload_after_export = !(args.size() > 1 && args[1] == "noreload");
+			dlg->export_current_map();
+			dlg->m_reload_after_export = keep;
 		});
 
 		command::register_command("codol_reload"s, [](const std::vector<std::string>&)

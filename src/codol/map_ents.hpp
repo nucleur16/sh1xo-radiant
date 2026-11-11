@@ -20,6 +20,7 @@ namespace codol::mapents
 	inline constexpr const char* KEY_BASE_CRC = "codol_base_crc32";
 	inline constexpr const char* KEY_MAP_NAME = "codol_map";
 	inline constexpr const char* KEY_ORIG_CLASS = "codol_classname";
+	inline constexpr const char* KEY_ID = "codol_id";			// index of the entity in the entity string it was imported from
 	inline constexpr const char* CLASS_BMODEL = "codol_bmodel";
 
 	struct entity
@@ -64,6 +65,19 @@ namespace codol::mapents
 		std::vector<std::string> warnings;
 	};
 
-	// read a radiant .map that was created by to_radiant_map() ( and edited ) and build the override
+	// read a radiant .map that was created by to_radiant_map() ( and edited ) and build the override.
+	// Every value is taken from the map as radiant saved it - see merge_radiant_map() for the precise way.
 	bool from_radiant_map(std::string_view map_text, export_result& out, std::string& error);
+
+	// Radiant rewrites entities when it saves a map, even untouched ones: origins are rounded to one decimal,
+	// classes it knows from its own game get their "model" replaced, point entities gain an "origin" ..
+	// To export only what the user changed, the saved map is compared with a baseline ( the same map saved by
+	// radiant right after the import, before any edit ):
+	//   - a key that still has its baseline value is exported with the value of the original entity string
+	//     ( or not at all if the original entity did not have it )
+	//   - a key that differs from the baseline, or is new, is an edit and is exported as it is
+	//   - entities without a valid "codol_id" are new and exported as they are
+	// `original_ents` is the entity string the map was imported from ( optionally with its "// base_crc32" line ).
+	bool merge_radiant_map(std::string_view current_map, std::string_view baseline_map, std::string_view original_ents,
+		export_result& out, std::string& error);
 }

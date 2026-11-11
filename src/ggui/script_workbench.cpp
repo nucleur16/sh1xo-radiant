@@ -218,7 +218,7 @@ namespace ggui
 	// ---------------------------------------------------------------------------------------
 	// scanning
 
-	script_workbench_dialog::scan_result script_workbench_dialog::scan(std::vector<std::string> roots)
+	script_workbench_dialog::scan_result script_workbench_dialog::scan(std::vector<std::string> roots, std::string xanim_list)
 	{
 		scan_result result;
 		result.roots = std::move(roots);
@@ -322,6 +322,47 @@ namespace ggui
 			result.dirs[dir].files.push_back(f);
 		}
 
+		if (!xanim_list.empty())
+		{
+			std::string text;
+			if (read_text_file(xanim_list, text))
+			{
+				std::vector<std::string> names;
+				std::size_t pos = 0;
+
+				while (pos < text.size())
+				{
+					auto end = text.find('\n', pos);
+					if (end == std::string::npos)
+					{
+						end = text.size();
+					}
+
+					// first word of the line
+					std::size_t b = pos;
+					while (b < end && (text[b] == ' ' || text[b] == '\t'))
+					{
+						b++;
+					}
+
+					std::size_t e = b;
+					while (e < end && !std::isspace(static_cast<unsigned char>(text[e])) && text[e] != ',')
+					{
+						e++;
+					}
+
+					if (e > b && text[b] != '#' && text[b] != '/')
+					{
+						names.emplace_back(text.substr(b, e - b));
+					}
+
+					pos = end + 1;
+				}
+
+				result.index.set_known_xanims(std::move(names));
+			}
+		}
+
 		result.index.build(result.roots);
 		return result;
 	}
@@ -334,7 +375,8 @@ namespace ggui
 		}
 
 		m_scanning = true;
-		m_scan = std::async(std::launch::async, &script_workbench_dialog::scan, components::codol_game::script_roots());
+		m_scan = std::async(std::launch::async, &script_workbench_dialog::scan, components::codol_game::script_roots(),
+			std::string((dvars::codol_xanim_list && dvars::codol_xanim_list->current.string) ? dvars::codol_xanim_list->current.string : ""));
 	}
 
 	void script_workbench_dialog::on_open()
@@ -496,9 +538,10 @@ namespace ggui
 		const auto begin = doc.line_starts[index];
 		const auto end = (index + 1 < static_cast<int>(doc.line_starts.size())) ? doc.line_starts[index + 1] - 1 : static_cast<std::uint32_t>(doc.text.size());
 
-		// select the line so it is easy to spot
-		doc.pending_cursor = static_cast<int>(begin);
-		doc.pending_sel_end = static_cast<int>(end);
+		// select the line so it is easy to spot. The cursor ends up at the start of the line, so a long
+		// line does not scroll the view sideways
+		doc.pending_cursor = static_cast<int>(end);
+		doc.pending_sel_end = static_cast<int>(begin);
 		doc.request_focus = true;
 	}
 
@@ -650,7 +693,19 @@ namespace ggui
 
 		if (ImGuiWindow* child = ImGui::FindWindowByName(child_name))
 		{
-			const ImVec2 origin = ImVec2(child->DC.CursorStartPos.x + style.FramePadding.x, child->DC.CursorStartPos.y + style.FramePadding.y);
+			// a multiline input scrolls vertically through its child window, but horizontally through its own
+			// state ( to keep the cursor in view ) - and only applies that while it is being edited
+			float scroll_x = 0.0f;
+			if (const ImGuiInputTextState* input_state = ImGui::GetInputTextState(id))
+			{
+				const ImGuiID active = ImGui::GetActiveID();
+				if (active == id || active == child->GetID("#SCROLLY"))
+				{
+					scroll_x = input_state->ScrollX;
+				}
+			}
+
+			const ImVec2 origin = ImVec2(child->DC.CursorStartPos.x + style.FramePadding.x - scroll_x, child->DC.CursorStartPos.y + style.FramePadding.y);
 			const ImRect clip = child->InnerClipRect;
 			const int line_count = static_cast<int>(doc.line_starts.size());
 
@@ -1684,6 +1739,8 @@ namespace ggui
 			m_cfg_precheck_cwd = dvar_str(dvars::codol_reload_precheck_cwd);
 			m_cfg_launch = dvar_str(dvars::codol_launch_cmd);
 			m_cfg_client_exe = dvar_str(dvars::codol_client_exe);
+			m_cfg_asset_tool = dvar_str(dvars::codol_asset_tool);
+			m_cfg_xanim_list = dvar_str(dvars::codol_xanim_list);
 			m_cfg_port = dvars::codol_rcon_port ? dvars::codol_rcon_port->current.integer : 17733;
 			ImGui::OpenPopup("CoDOL Setup##wb");
 		}
@@ -1712,10 +1769,15 @@ namespace ggui
 		field("Reference script folder ( optional )", "rawfiles exported from the zones", m_cfg_ref_root,
 			"A second, read-mostly tree. Files of the script folder shadow it, animtrees of both are merged\n( the game also merges the tree from its zones with loose files ).");
 
+		field("Game xanim list ( optional )", "D:\\...\\docs\\zone_assets\\ALL_xanim.txt", m_cfg_xanim_list,
+			"Text file with the animations the game ships, one name per line ( anything after the name is ignored ).\nScripts that use an animation that is not in it get a warning.");
+
 		ImGui::Dummy(ImVec2(0.0f, 6.0f));
 		ImGui::TextColored(COL_SECTION, "Game");
 		field("CoDOL install folder", "D:\\...\\Call of Duty Online 1.1.1.13", m_cfg_install, "Folder that contains main\\ and client_shipRetail\\.");
 		field("Start command", "path to the script / exe that starts the client", m_cfg_launch, "Used by the Launch button of the Game window. Runs in its own folder.");
+		field("Asset tool ( optional )", "D:\\...\\CodolSoundDumper.exe", m_cfg_asset_tool,
+			"CodolSoundDumper.exe of CODOL-AssetExplorer. Used by CoDOL > Map Entities to decrypt a map zone ( .ff ).");
 		field("Client process names", "codoMP_client_shipRetail.exe;C1.exe", m_cfg_client_exe, "Used to find the window of the running game ( ; separated ).");
 
 		ImGui::Dummy(ImVec2(0.0f, 6.0f));
@@ -1741,6 +1803,8 @@ namespace ggui
 			dvars::set_string(dvars::codol_reload_precheck_cwd, m_cfg_precheck_cwd.c_str());
 			dvars::set_string(dvars::codol_launch_cmd, m_cfg_launch.c_str());
 			dvars::set_string(dvars::codol_client_exe, m_cfg_client_exe.c_str());
+			dvars::set_string(dvars::codol_asset_tool, m_cfg_asset_tool.c_str());
+			dvars::set_string(dvars::codol_xanim_list, m_cfg_xanim_list.c_str());
 			dvars::set_int(dvars::codol_rcon_port, std::clamp(m_cfg_port, 1, 65535));
 
 			rescan();

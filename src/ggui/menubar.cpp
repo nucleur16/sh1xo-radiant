@@ -1050,6 +1050,11 @@ namespace ggui
 					GET_GUI(ggui::script_workbench_dialog)->toggle();
 				}
 
+				if (ImGui::MenuItem("Map Entities", nullptr, GET_GUI(ggui::codol_map_ents_dialog)->is_active()))
+				{
+					GET_GUI(ggui::codol_map_ents_dialog)->toggle();
+				}
+
 				if (ImGui::MenuItem("Game Window", nullptr, GET_GUI(ggui::game_view_dialog)->is_active()))
 				{
 					GET_GUI(ggui::game_view_dialog)->toggle();

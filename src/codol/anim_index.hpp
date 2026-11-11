@@ -161,7 +161,7 @@ namespace codol::script
 		[[nodiscard]] const gsc_file* find_gsc(std::string_view abs_path) const;
 
 		// animations the game itself can load ( optional, from a list exported out of the zones ).
-		// when set, anims that are in an animtree but not in the game are reported as warnings.
+		// when set, anims that scripts use but the game does not ship are reported as warnings.
 		void set_known_xanims(std::vector<std::string> names);
 		[[nodiscard]] bool has_known_xanims() const { return !known_xanims_.empty(); }
 		[[nodiscard]] bool is_known_xanim(std::string_view name) const;

@@ -318,7 +318,8 @@ static void test_index(const std::string& tmp_root)
 	// known xanims: anims that only exist in the tree are reported
 	index.set_known_xanims({ "run_fast", "pb_stand", "pt_shoot" });
 	index.validate();
-	CHECK(count(severity::warning, "'walk_slow' is in animtree 'generic_human' but the game has no xanim") == 1);
+	CHECK(count(severity::warning, "%walk_slow is in animtree 'generic_human' but is not an xanim of the game") == 1);
+	CHECK(count(severity::warning, "%run_fast") == 0);
 
 	fs::remove_all(tmp_root);
 }
@@ -450,6 +451,80 @@ static void test_map_ents(const char* real_ents_file)
 	CHECK(exp.text.find("caulk") == std::string::npos);
 	CHECK(exp.text.find("\"classname\" \"trigger_multiple\"\n\"model\" \"?3\"") != std::string::npos);
 	CHECK(parse_entity_string(exp.text, back, error) && back.ents.size() == 6);
+
+	// ---- merge against a baseline: radiant rewrites untouched entities when it saves
+	{
+		const auto replace_all = [](std::string s, const std::string& from, const std::string& to)
+		{
+			for (auto pos = s.find(from); pos != std::string::npos; pos = s.find(from, pos + to.size()))
+			{
+				s.replace(pos, from.size(), to);
+			}
+
+			return s;
+		};
+
+		// what a radiant save does to the freshly imported map
+		std::string baseline = map;
+		baseline = replace_all(baseline, "\"origin\" \"10 20 30\"", "\"origin\" \"10.0 20.0 30.0\"");	// reformatted
+		baseline = replace_all(baseline, "\"origin\" \"1 2 3\"", "\"origin\" \"1.0 2.0 3.0\"");
+		baseline = replace_all(baseline, "\"model\" \"com_barrel\"", "\"model\" \"radiant_forced_model\"");	// known class
+		baseline = replace_all(baseline, "\"model\" \"?3\"\n", "\"model\" \"?3\"\n\"origin\" \"0.0 0.0 0.0\"\n");	// point entity
+		baseline = replace_all(baseline, "\"model\" \"*1\"\n", "\"model\" \"*1\"\n\"origin\" \"0.0 0.0 0.0\"\n");
+		CHECK(baseline != map);
+
+		// nothing edited: the override is the zone's entity string, byte for byte
+		export_result merged;
+		CHECK(merge_radiant_map(baseline, baseline, zone_text, merged, error));
+		CHECK(merged.exported == 5 && merged.warnings.empty() && merged.base_crc == set.base_crc && merged.map_name == "mp_test");
+		CHECK(parse_entity_string(merged.text, back, error));
+		CHECK(serialize_entity_string(back.ents) == zone_text);
+
+		// the plain exporter would have taken radiant's rewrites
+		CHECK(from_radiant_map(baseline, exp, error));
+		CHECK(exp.text.find("radiant_forced_model") != std::string::npos);
+
+		// edits
+		std::string edited_map = baseline;
+		edited_map = replace_all(edited_map, "\"origin\" \"10.0 20.0 30.0\"", "\"origin\" \"64.0 64.0 8.0\"");			// moved a spawn
+		edited_map = replace_all(edited_map, "\"model\" \"?3\"\n\"origin\" \"0.0 0.0 0.0\"", "\"model\" \"?3\"\n\"origin\" \"5.0 0.0 0.0\"");	// moved a trigger hull
+		edited_map = replace_all(edited_map, "\"sunlight\" \"1.1\"", "\"sunlight\" \"2\"");							// worldspawn key
+		edited_map = replace_all(edited_map, "\"targetname\" \"flag\"\n", "\"targetname\" \"flag\"\n\"script_label\" \"_a\"\n");	// new key
+
+		// delete the script_model ( entity 4 ), add a spawn and a copy of the trigger hull that was moved
+		edited_map.erase(edited_map.find("// entity 4"));
+		edited_map += "// entity 4\n{\n\"classname\" \"mp_tdm_spawn\"\n\"origin\" \"7.0 7.0 7.0\"\n}\n";
+		edited_map += "// entity 5\n{\n\"classname\" \"codol_bmodel\"\n\"model\" \"?3\"\n\"origin\" \"100.0 0.0 0.0\"\n\"targetname\" \"flag\"\n"
+			"\"codol_classname\" \"trigger_multiple\"\n\"codol_id\" \"2\"\n}\n";
+
+		CHECK(merge_radiant_map(edited_map, baseline, zone_text, merged, error));
+		CHECK(merged.exported == 6 && merged.warnings.empty());
+		CHECK(parse_entity_string(merged.text, back, error) && back.ents.size() == 6);
+
+		if (back.ents.size() == 6)
+		{
+			CHECK(*back.ents[0].find("sunlight") == "2" && back.ents[0].pairs.size() == 2);
+			CHECK(*back.ents[1].find("origin") == "64.0 64.0 8.0" && *back.ents[1].find("angles") == "0 90 0");
+			CHECK(*back.ents[2].find("classname") == "trigger_multiple" && *back.ents[2].find("origin") == "5.0 0.0 0.0"
+				&& *back.ents[2].find("script_label") == "_a" && *back.ents[2].find("model") == "?3");
+			CHECK(*back.ents[3].find("classname") == "script_brushmodel" && !back.ents[3].find("origin")); // radiant's origin is not exported
+			CHECK(*back.ents[4].find("classname") == "mp_tdm_spawn");
+			CHECK(*back.ents[5].find("classname") == "trigger_multiple" && *back.ents[5].find("origin") == "100.0 0.0 0.0"
+				&& *back.ents[5].find("model") == "?3" && !back.ents[5].find("script_label"));
+		}
+
+		CHECK(merged.text.find("codol_") == std::string::npos && merged.text.find("radiant_forced_model") == std::string::npos);
+
+		// a key deleted by the user stays deleted, a class change is kept
+		std::string edited2 = replace_all(baseline, "\"angles\" \"0 90 0\"\n", "");
+		edited2 = replace_all(edited2, "\"classname\" \"mp_dm_spawn\"", "\"classname\" \"mp_tdm_spawn\"");
+		CHECK(merge_radiant_map(edited2, baseline, zone_text, merged, error));
+		CHECK(parse_entity_string(merged.text, back, error) && back.ents.size() == 5);
+		CHECK(back.ents.size() == 5 && !back.ents[1].find("angles") && *back.ents[1].find("classname") == "mp_tdm_spawn"
+			&& *back.ents[1].find("origin") == "10 20 30");
+
+		CHECK(!merge_radiant_map(edited_map, "garbage", zone_text, merged, error));
+	}
 
 	// a normal radiant map is refused
 	CHECK(!from_radiant_map("iwmap 4\n// entity 0\n{\n\"classname\" \"worldspawn\"\n}\n", exp, error));

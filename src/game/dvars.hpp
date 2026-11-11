@@ -153,6 +153,8 @@ namespace dvars
 	extern game::dvar_s* codol_reload_precheck_cwd;
 	extern game::dvar_s* codol_client_exe;
 	extern game::dvar_s* codol_launch_cmd;
+	extern game::dvar_s* codol_asset_tool;
+	extern game::dvar_s* codol_xanim_list;
 
 	// stock dvars (not registered but ptr assigned)
 	extern game::dvar_s* fs_homepath;

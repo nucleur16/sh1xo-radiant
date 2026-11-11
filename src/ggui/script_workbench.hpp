@@ -80,7 +80,7 @@ namespace ggui
 			codol::script::anim_index index;
 		};
 
-		static scan_result scan(std::vector<std::string> roots);
+		static scan_result scan(std::vector<std::string> roots, std::string xanim_list);
 
 		document* find_document(const std::string& abs_path);
 		bool save_document(document& doc);
@@ -123,12 +123,12 @@ namespace ggui
 		std::string m_selected_tree;
 		std::string m_selected_scene_file;
 		int m_goto_line_input = 1;
-		float m_left_width = 330.0f;
+		float m_left_width = 400.0f;
 		bool m_open_setup = false;
 		bool m_show_warnings = true;
 
 		// setup popup buffers
-		std::string m_cfg_script_root, m_cfg_ref_root, m_cfg_install, m_cfg_pw_file, m_cfg_precheck, m_cfg_precheck_cwd, m_cfg_launch, m_cfg_client_exe;
+		std::string m_cfg_script_root, m_cfg_ref_root, m_cfg_install, m_cfg_pw_file, m_cfg_precheck, m_cfg_precheck_cwd, m_cfg_launch, m_cfg_client_exe, m_cfg_asset_tool, m_cfg_xanim_list;
 		int m_cfg_port = 17733;
 	};
 

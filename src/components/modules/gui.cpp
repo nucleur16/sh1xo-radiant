@@ -36,6 +36,7 @@ namespace components
 		ImGui::MergeIconsWithLatestFont(18.0f, false);
 
 		// codol: monospace font for the script workbench ( font index 5 ), optional
+		if (!GetEnvironmentVariableA("CODOL_NO_MONO_FONT", nullptr, 0))
 		{
 			char windir[MAX_PATH] = {};
 			if (GetWindowsDirectoryA(windir, sizeof(windir)))
@@ -604,6 +605,9 @@ namespace components
 	{
 		ImGui::Render();
 		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+
+		// codol: optional frame dump for automated testing ( CODOL_AUTOSHOT )
+		components::codol_game::dev_capture_frame();
 	}
 
 	void on_map_load()

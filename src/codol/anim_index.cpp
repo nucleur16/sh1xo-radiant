@@ -1061,17 +1061,7 @@ namespace codol::script
 				diagnostics.push_back({ severity::warning, tree.path, std::atoi(warn.c_str() + 5), "animtree '" + name + "': " + warn });
 			}
 
-			if (!known_xanims_.empty())
-			{
-				for (const auto& node : tree.nodes)
-				{
-					if (!node.group && !is_known_xanim(node.name))
-					{
-						diagnostics.push_back({ severity::warning, tree.path, node.line,
-							"'" + node.name + "' is in animtree '" + name + "' but the game has no xanim with that name" });
-					}
-				}
-			}
+
 		}
 
 		if (has_player)
@@ -1093,6 +1083,12 @@ namespace codol::script
 				{
 					for (const auto& cmd : block.commands)
 					{
+						if (!cmd.anim.empty() && !known_xanims_.empty() && !is_known_xanim(cmd.anim))
+						{
+							diagnostics.push_back({ severity::warning, player.path, cmd.line,
+								"player animation '" + cmd.anim + "' is not an xanim of the game ( not in the xanim list )" });
+						}
+
 						if (!cmd.anim.empty() && !mp_tree->contains(cmd.anim))
 						{
 							// a warning, not an error: the client takes both files out of its zones, so a loose
@@ -1133,6 +1129,19 @@ namespace codol::script
 					}
 
 					continue;
+				}
+
+				// in the tree, but the game ships no such animation: it plays nothing ( T-pose )
+				if (!known_xanims_.empty() && tree->contains(ref.anim) && !is_known_xanim(ref.anim))
+				{
+					const auto node = tree->lookup.find(to_lower(ref.anim));
+					const bool group = node != tree->lookup.end() && node->second >= 0 && tree->nodes[node->second].group;
+
+					if (!group)
+					{
+						diagnostics.push_back({ severity::warning, file.path, ref.line,
+							"%" + ref.anim + " is in animtree '" + ref.tree + "' but is not an xanim of the game ( not in the xanim list )" });
+					}
 				}
 
 				if (!tree->contains(ref.anim))

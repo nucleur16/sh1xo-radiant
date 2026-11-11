@@ -52,6 +52,11 @@ namespace codol::mapents
 				&& std::isdigit(static_cast<unsigned char>((*model)[1]));
 		}
 
+		bool is_codol_key(std::string_view key)
+		{
+			return key.starts_with("codol_");
+		}
+
 		template <typename Fn>
 		void for_each_line(std::string_view text, Fn&& fn)
 		{
@@ -81,6 +86,203 @@ namespace codol::mapents
 			char buf[16];
 			std::snprintf(buf, sizeof(buf), "%08x", value);
 			return buf;
+		}
+
+		// entities of a radiant .map, worldspawn first. Brushes / patches are skipped ( has_brushes is set )
+		bool read_radiant_map(std::string_view map_text, std::vector<entity>& ents, std::string& error)
+		{
+			ents.clear();
+			entity current;
+			int depth = 0;
+
+			for_each_line(map_text, [&](std::string_view raw, const int line_no) -> bool
+			{
+				const auto line = trim(raw);
+
+				if (line.empty() || line.starts_with("//"))
+				{
+					return true;
+				}
+
+				if (depth == 0)
+				{
+					// header ( "iwmap 4", layer flags ) is ignored
+					if (line == "{")
+					{
+						depth = 1;
+						current = {};
+						current.line = line_no;
+					}
+
+					return true;
+				}
+
+				if (depth == 1)
+				{
+					if (line == "{")
+					{
+						depth = 2;
+						current.has_brushes = true;
+					}
+					else if (line == "}")
+					{
+						depth = 0;
+						ents.push_back(std::move(current));
+					}
+					else
+					{
+						std::string key, value;
+						if (parse_pair(line, key, value))
+						{
+							current.pairs.emplace_back(std::move(key), std::move(value));
+						}
+					}
+
+					return true;
+				}
+
+				// inside a brush / patch
+				if (line == "{")
+				{
+					depth++;
+				}
+				else if (line == "}")
+				{
+					depth--;
+				}
+
+				return true;
+			});
+
+			if (depth != 0)
+			{
+				error = "the map file ends inside an entity";
+				return false;
+			}
+
+			if (ents.empty())
+			{
+				error = "the map has no entities";
+				return false;
+			}
+
+			const auto world = std::find_if(ents.begin(), ents.end(), [](const entity& e)
+			{
+				const auto* cls = e.find("classname");
+				return cls && *cls == "worldspawn";
+			});
+
+			if (world == ents.end())
+			{
+				error = "the map has no worldspawn";
+				return false;
+			}
+
+			// worldspawn first, like the game expects
+			std::rotate(ents.begin(), world, world + 1);
+			return true;
+		}
+
+		bool read_map_identity(const entity& world, export_result& out, std::string& error)
+		{
+			const auto* crc = world.find(KEY_BASE_CRC);
+			const auto* name = world.find(KEY_MAP_NAME);
+
+			if (!crc || !name || name->empty())
+			{
+				error = "this map was not imported from a CoDOL map ( the worldspawn has no \""
+					+ std::string(KEY_BASE_CRC) + "\" / \"" + std::string(KEY_MAP_NAME) + "\" keys )";
+				return false;
+			}
+
+			char* end = nullptr;
+			out.base_crc = static_cast<std::uint32_t>(std::strtoul(crc->c_str(), &end, 16));
+			if (!end || *end != '\0' || crc->empty())
+			{
+				error = "\"" + std::string(KEY_BASE_CRC) + "\" is not a hex number";
+				return false;
+			}
+
+			out.map_name = *name;
+			return true;
+		}
+
+		// checks on an entity ( not the worldspawn ) that is about to be exported. false: skip it, a warning was added
+		bool exportable(const entity& ent, const std::string& cls_name, std::vector<std::string>& warnings)
+		{
+			const auto where = "line " + std::to_string(ent.line) + ": ";
+
+			if (cls_name.empty())
+			{
+				warnings.push_back(where + "entity without a classname skipped");
+				return false;
+			}
+
+			if (cls_name == "worldspawn")
+			{
+				warnings.push_back(where + "second worldspawn skipped");
+				return false;
+			}
+
+			if (cls_name == CLASS_BMODEL)
+			{
+				warnings.push_back(where + "codol_bmodel without its \"" + KEY_ORIG_CLASS + "\" / \"model\" keys skipped");
+				return false;
+			}
+
+			if (ent.has_brushes)
+			{
+				// a brush entity drawn in radiant has no compiled hull in the zone
+				warnings.push_back(where + "brush entity '" + cls_name
+					+ "' skipped ( brush models can not be added without recompiling the map )");
+				return false;
+			}
+
+			if (cls_name == "misc_model" || cls_name == "misc_prefab")
+			{
+				warnings.push_back(where + cls_name
+					+ " skipped ( static geometry is baked into the zone, use script_model for placed models )");
+				return false;
+			}
+
+			return true;
+		}
+
+		// codol_bmodel -> its real class, and all editor-only keys removed
+		void restore_game_keys(entity& ent)
+		{
+			const auto* cls = ent.find("classname");
+			const auto* original = ent.find(KEY_ORIG_CLASS);
+
+			if (cls && *cls == CLASS_BMODEL && original && !original->empty() && is_model_reference(ent.find("model")))
+			{
+				const std::string restored = *original;
+				ent.set("classname", restored);
+			}
+
+			ent.pairs.erase(std::remove_if(ent.pairs.begin(), ent.pairs.end(), [](const auto& p) { return is_codol_key(p.first); }), ent.pairs.end());
+		}
+
+		void finish_export(export_result& out, const std::vector<entity>& result)
+		{
+			out.exported = static_cast<int>(result.size());
+			out.text = "// " + out.map_name + ": map entity override, exported from radiant ( iw3xo-radiant-codol ).\n"
+				"// The server uses it in place of the zone's entity string while the zone's string has this CRC-32.\n"
+				"// base_crc32 " + hex8(out.base_crc) + "\n"
+				+ serialize_entity_string(result) + "\n";
+		}
+
+		int entity_id(const entity& ent)
+		{
+			const auto* id = ent.find(KEY_ID);
+			if (!id || id->empty())
+			{
+				return -1;
+			}
+
+			char* end = nullptr;
+			const long value = std::strtol(id->c_str(), &end, 10);
+			return (end && *end == '\0' && value >= 0) ? static_cast<int>(value) : -1;
 		}
 	}
 
@@ -314,6 +516,8 @@ namespace codol::mapents
 				ent.set("classname", CLASS_BMODEL);
 			}
 
+			ent.set(KEY_ID, std::to_string(i));
+
 			out += "// entity " + std::to_string(i) + "\n{\n";
 
 			for (const auto& [k, v] : ent.pairs)
@@ -333,114 +537,10 @@ namespace codol::mapents
 		error.clear();
 
 		std::vector<entity> ents;
-		entity current;
-		int depth = 0;
-
-		for_each_line(map_text, [&](std::string_view raw, const int line_no) -> bool
+		if (!read_radiant_map(map_text, ents, error) || !read_map_identity(ents.front(), out, error))
 		{
-			const auto line = trim(raw);
-
-			if (line.empty() || line.starts_with("//"))
-			{
-				return true;
-			}
-
-			if (depth == 0)
-			{
-				// header ( "iwmap 4", layer flags ) is ignored
-				if (line == "{")
-				{
-					depth = 1;
-					current = {};
-					current.line = line_no;
-				}
-
-				return true;
-			}
-
-			if (depth == 1)
-			{
-				if (line == "{")
-				{
-					depth = 2;
-					current.has_brushes = true;
-				}
-				else if (line == "}")
-				{
-					depth = 0;
-					ents.push_back(std::move(current));
-				}
-				else
-				{
-					std::string key, value;
-					if (parse_pair(line, key, value))
-					{
-						current.pairs.emplace_back(std::move(key), std::move(value));
-					}
-				}
-
-				return true;
-			}
-
-			// inside a brush / patch
-			if (line == "{")
-			{
-				depth++;
-			}
-			else if (line == "}")
-			{
-				depth--;
-			}
-
-			return true;
-		});
-
-		if (depth != 0)
-		{
-			error = "the map file ends inside an entity";
 			return false;
 		}
-
-		if (ents.empty())
-		{
-			error = "the map has no entities";
-			return false;
-		}
-
-		// worldspawn first, like the game expects
-		const auto world = std::find_if(ents.begin(), ents.end(), [](const entity& e)
-		{
-			const auto* cls = e.find("classname");
-			return cls && *cls == "worldspawn";
-		});
-
-		if (world == ents.end())
-		{
-			error = "the map has no worldspawn";
-			return false;
-		}
-
-		std::rotate(ents.begin(), world, world + 1);
-
-		const auto* crc = ents.front().find(KEY_BASE_CRC);
-		const auto* name = ents.front().find(KEY_MAP_NAME);
-
-		if (!crc || !name || name->empty())
-		{
-			error = "this map was not imported from a CoDOL map ( the worldspawn has no \""
-				+ std::string(KEY_BASE_CRC) + "\" / \"" + std::string(KEY_MAP_NAME) + "\" keys )";
-			return false;
-		}
-
-		char* end = nullptr;
-		out.base_crc = static_cast<std::uint32_t>(std::strtoul(crc->c_str(), &end, 16));
-		if (!end || *end != '\0' || crc->empty())
-		{
-			error = "\"" + std::string(KEY_BASE_CRC) + "\" is not a hex number";
-			return false;
-		}
-
-		out.map_name = *name;
 
 		std::vector<entity> result;
 		result.reserve(ents.size());
@@ -448,55 +548,13 @@ namespace codol::mapents
 		for (std::size_t i = 0; i < ents.size(); i++)
 		{
 			entity ent = ents[i];
+			restore_game_keys(ent);
 
-			if (i == 0)
-			{
-				ent.erase(KEY_BASE_CRC);
-				ent.erase(KEY_MAP_NAME);
-				ent.has_brushes = false; // worldspawn brushes are reference geometry only
-			}
-			else
+			if (i != 0)
 			{
 				const auto* cls = ent.find("classname");
-				const std::string cls_name = cls ? *cls : std::string();
-
-				if (cls_name.empty())
+				if (!exportable(ent, cls ? *cls : std::string(), out.warnings))
 				{
-					out.warnings.push_back("line " + std::to_string(ent.line) + ": entity without a classname skipped");
-					continue;
-				}
-
-				if (cls_name == "worldspawn")
-				{
-					out.warnings.push_back("line " + std::to_string(ent.line) + ": second worldspawn skipped");
-					continue;
-				}
-
-				if (cls_name == CLASS_BMODEL)
-				{
-					const auto* original = ent.find(KEY_ORIG_CLASS);
-					if (!original || original->empty() || !is_model_reference(ent.find("model")))
-					{
-						out.warnings.push_back("line " + std::to_string(ent.line)
-							+ ": codol_bmodel without its \"" + KEY_ORIG_CLASS + "\" / \"model\" keys skipped");
-						continue;
-					}
-
-					const std::string restored = *original;
-					ent.set("classname", restored);
-					ent.erase(KEY_ORIG_CLASS);
-				}
-				else if (ent.has_brushes)
-				{
-					// a brush entity drawn in radiant has no compiled hull in the zone
-					out.warnings.push_back("line " + std::to_string(ent.line) + ": brush entity '" + cls_name
-						+ "' skipped ( brush models can not be added without recompiling the map )");
-					continue;
-				}
-				else if (cls_name == "misc_model" || cls_name == "misc_prefab")
-				{
-					out.warnings.push_back("line " + std::to_string(ent.line) + ": " + cls_name
-						+ " skipped ( static geometry is baked into the zone, use script_model for placed models )");
 					continue;
 				}
 			}
@@ -504,13 +562,156 @@ namespace codol::mapents
 			result.push_back(std::move(ent));
 		}
 
-		out.exported = static_cast<int>(result.size());
+		finish_export(out, result);
+		return true;
+	}
 
-		out.text = "// " + out.map_name + ": map entity override, exported from radiant ( iw3xo-radiant-codol ).\n"
-			"// The server uses it in place of the zone's entity string while the zone's string has this CRC-32.\n"
-			"// base_crc32 " + hex8(out.base_crc) + "\n"
-			+ serialize_entity_string(result) + "\n";
+	bool merge_radiant_map(std::string_view current_map, std::string_view baseline_map, std::string_view original_ents,
+		export_result& out, std::string& error)
+	{
+		out = {};
+		error.clear();
 
+		std::vector<entity> current, baseline;
+		entity_set original;
+
+		if (!read_radiant_map(current_map, current, error) || !read_map_identity(current.front(), out, error))
+		{
+			return false;
+		}
+
+		std::string sub_error;
+		if (!read_radiant_map(baseline_map, baseline, sub_error))
+		{
+			error = "baseline map: " + sub_error;
+			return false;
+		}
+
+		if (!parse_entity_string(original_ents, original, sub_error))
+		{
+			error = "original entity string: " + sub_error;
+			return false;
+		}
+
+		// baseline entity by id ( the first one wins if radiant ever wrote duplicates )
+		std::unordered_map<int, const entity*> baseline_by_id;
+		for (std::size_t i = 0; i < baseline.size(); i++)
+		{
+			const int id = (i == 0) ? 0 : entity_id(baseline[i]);
+			if (id >= 0)
+			{
+				baseline_by_id.emplace(id, &baseline[i]);
+			}
+		}
+
+		std::vector<entity> result;
+		result.reserve(current.size());
+
+		for (std::size_t i = 0; i < current.size(); i++)
+		{
+			const entity& cur = current[i];
+			const int id = (i == 0) ? 0 : entity_id(cur);
+
+			const entity* orig = (id >= 0 && id < static_cast<int>(original.ents.size())) ? &original.ents[id] : nullptr;
+			const entity* base = nullptr;
+
+			if (const auto it = baseline_by_id.find(id); it != baseline_by_id.end())
+			{
+				base = it->second;
+			}
+
+			entity ent;
+			ent.line = cur.line;
+			ent.has_brushes = (i == 0) ? false : cur.has_brushes; // worldspawn brushes are reference geometry only
+
+			if (!orig || !base)
+			{
+				// new entity ( or a map without a usable baseline ): take it as radiant saved it
+				ent.pairs = cur.pairs;
+				restore_game_keys(ent);
+			}
+			else
+			{
+				// 1. keys of the original entity, in their original order
+				for (const auto& [key, orig_value] : orig->pairs)
+				{
+					// the class of a hull entity is carried by codol_classname while it is in radiant
+					if (key == "classname")
+					{
+						const auto* cur_cls = cur.find("classname");
+						const auto* base_cls = base->find("classname");
+
+						if (cur_cls && *cur_cls == CLASS_BMODEL)
+						{
+							const auto* cur_real = cur.find(KEY_ORIG_CLASS);
+							const auto* base_real = base->find(KEY_ORIG_CLASS);
+							const bool edited = cur_real && !cur_real->empty() && (!base_real || *cur_real != *base_real);
+							ent.pairs.emplace_back(key, edited ? *cur_real : orig_value);
+						}
+						else if (cur_cls && (!base_cls || *cur_cls != *base_cls))
+						{
+							ent.pairs.emplace_back(key, *cur_cls);	// class changed by the user
+						}
+						else
+						{
+							ent.pairs.emplace_back(key, orig_value);
+						}
+
+						continue;
+					}
+
+					const auto* cur_value = cur.find(key);
+					const auto* base_value = base->find(key);
+
+					if (!cur_value)
+					{
+						// gone: deleted by the user if the baseline still had it, otherwise radiant dropped it on load
+						if (!base_value)
+						{
+							ent.pairs.emplace_back(key, orig_value);
+						}
+					}
+					else if (base_value && *cur_value == *base_value)
+					{
+						ent.pairs.emplace_back(key, orig_value);	// untouched: exactly what the zone had
+					}
+					else
+					{
+						ent.pairs.emplace_back(key, *cur_value);	// edited
+					}
+				}
+
+				// 2. keys the original entity did not have
+				for (const auto& [key, cur_value] : cur.pairs)
+				{
+					if (is_codol_key(key) || orig->find(key))
+					{
+						continue;
+					}
+
+					const auto* base_value = base->find(key);
+					if (base_value && *base_value == cur_value)
+					{
+						continue; // added by radiant itself ( eg. "origin" "0.0 0.0 0.0" on a hull entity )
+					}
+
+					ent.pairs.emplace_back(key, cur_value);
+				}
+			}
+
+			if (i != 0)
+			{
+				const auto* cls = ent.find("classname");
+				if (!exportable(ent, cls ? *cls : std::string(), out.warnings))
+				{
+					continue;
+				}
+			}
+
+			result.push_back(std::move(ent));
+		}
+
+		finish_export(out, result);
 		return true;
 	}
 }

@@ -69,8 +69,17 @@ namespace components
 		// start the client using codol_launch_cmd
 		static bool launch_game();
 
+		// helpers for other codol code
+		static void post_to_gui(std::function<void()> func);	// run on the gui thread ( next frame ), callable from any thread
+		static int run_command(const std::string& command_line, const std::string& working_dir, std::string& output); // blocking, -1: could not start
+
 		// called once per gui frame
 		static void frame();
+
+		// development aids, driven by environment variables so radiant can be tested unattended:
+		//   CODOL_STARTUP_CMDS = "cmd one;wait 5;cmd two"  console commands that run once the gui is up
+		//   CODOL_AUTOSHOT     = <file.png>           the rendered gui frame is saved there every 2 seconds
+		static void dev_capture_frame();
 
 		// last line(s) reported by the server / the bridge, shown in the workbench status bar
 		static std::string status();

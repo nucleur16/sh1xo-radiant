@@ -153,6 +153,8 @@ namespace dvars
 	game::dvar_s* codol_reload_precheck_cwd = nullptr;
 	game::dvar_s* codol_client_exe = nullptr;
 	game::dvar_s* codol_launch_cmd = nullptr;
+	game::dvar_s* codol_asset_tool = nullptr;
+	game::dvar_s* codol_xanim_list = nullptr;
 
 	// stock dvars (not registered but ptr assigned)
 	game::dvar_s* fs_homepath = nullptr;
