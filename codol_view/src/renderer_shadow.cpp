@@ -210,6 +210,8 @@ namespace codol::view
 			device->SetViewport(&viewport);
 			constants->begin_shadow_pass(partition.view, partition.projection);
 			constants->set("shadowmapPolygonOffset", render::sun_shadow_polygon_offset(opts.settings, partition.depth_scale));
+			constants_light = -2;
+			constants_instance = nullptr;
 			// GameMapRenderer.SunShadow.cs:163-177 ( SidePlanes ): the four sides of the partition, world space
 			const mat4& m = partition.view_projection;
 			const auto column = [&](const int c) { return float4{ m.m[0][c], m.m[1][c], m.m[2][c], m.m[3][c] }; };

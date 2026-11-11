@@ -101,6 +101,8 @@ namespace codol::view
 		applied_samplers.fill({});
 		applied_state_bits = nullptr;
 		current_light_def = nullptr;
+		constants_light = -2;
+		constants_instance = nullptr;
 	}
 
 	IDirect3DTexture9* map_renderer::impl::render(const camera& cam, const int width, const int height, const frame_options& options)
@@ -127,6 +129,15 @@ namespace codol::view
 		com_ptr<IDirect3DSurface9> host_target, host_depth;
 		device->GetRenderTarget(0, host_target.put());
 		device->GetDepthStencilSurface(host_depth.put());
+		// MEASURED with codol_viewtool statetest: IDirect3DStateBlock9::Apply restores the buffer and stride of a
+		// stream but not its offset, so the two streams the renderer uses are saved by hand
+		com_ptr<IDirect3DVertexBuffer9> host_streams[2];
+		UINT host_stream_offsets[2] = {}, host_stream_strides[2] = {};
+		bool host_stream_known[2] = {};
+		for (UINT i = 0; i < 2; i++)
+		{
+			host_stream_known[i] = SUCCEEDED(device->GetStreamSource(i, host_streams[i].put(), &host_stream_offsets[i], &host_stream_strides[i]));
+		}
 
 		bool end_scene = false;
 		if (options.scene != scene_mode::inside_scene)
@@ -167,19 +178,19 @@ namespace codol::view
 		}
 
 		// ---- restore. The targets first: SetRenderTarget resets the viewport, which the state block then restores.
-		for (DWORD s = 0; s < 16; s++)
-		{
-			device->SetTexture(s, nullptr);
-		}
-		device->SetStreamSource(0, nullptr, 0, 0);
-		device->SetStreamSource(1, nullptr, 0, 0);
-		device->SetIndices(nullptr);
 		if (host_target)
 		{
 			device->SetRenderTarget(0, host_target.get());
 		}
 		device->SetDepthStencilSurface(host_depth.get());
 		saved_state->Apply();
+		for (UINT i = 0; i < 2; i++)
+		{
+			if (host_stream_known[i])
+			{
+				device->SetStreamSource(i, host_streams[i].get(), host_stream_offsets[i], host_stream_strides[i]);
+			}
+		}
 		frame = nullptr;
 
 		// keep the load numbers, replace the frame numbers
@@ -260,6 +271,8 @@ namespace codol::view
 			info.pixel_adjust = current_sun_shadow->pixel_adjust;
 			constants->set_sun_shadow(info);
 		}
+		constants_light = -2;
+		constants_instance = nullptr;
 		device->SetDepthStencilSurface(depth);
 		const D3DVIEWPORT9 viewport{ 0, 0, static_cast<DWORD>(width), static_cast<DWORD>(height), 0.0f, 1.0f };
 		if (frame->float_z && float_z_surface && float_z_width == width && float_z_height == height)
@@ -569,6 +582,7 @@ namespace codol::view
 
 	void map_renderer::impl::draw_brush_surfaces(const float3& eye, const std::vector<brush_surface_instance>& draws)
 	{
+		constants_instance = nullptr;
 		for (const brush_surface_instance& draw : draws)
 		{
 			mat4 world = draw.instance->placement;
@@ -588,6 +602,7 @@ namespace codol::view
 	void map_renderer::impl::draw_model_surfaces(const float3& eye, const std::vector<model_surface_instance>& draws, const int forced_technique)
 	{
 		// GameMapRenderer.cs:1244-1270
+		constants_instance = nullptr;
 		for (std::size_t i = 0; i < draws.size();)
 		{
 			const model_surface_instance& draw = draws[i];
@@ -616,19 +631,24 @@ namespace codol::view
 		material_draw& material, const int technique_type, const int triangles, const int vertex_span)
 	{
 		// GameMapRenderer.cs:1217-1240
-		mat4 world = instance.placement;
-		world.m[3][0] -= eye.x;
-		world.m[3][1] -= eye.y;
-		world.m[3][2] -= eye.z;
-		constants->set_world(world);
-		set_primary_light(instance.primary_light);
-		if (lighting_volume && instance.lighting_handle > 0)
+		if (constants_instance != &instance)
 		{
-			constants->set("baseLightingCoords", lighting_volume->base_coords(instance.lighting_handle));
+			// the same values again for the next surface of an instance would only cost time
+			constants_instance = &instance;
+			mat4 world = instance.placement;
+			world.m[3][0] -= eye.x;
+			world.m[3][1] -= eye.y;
+			world.m[3][2] -= eye.z;
+			constants->set_world(world);
+			set_primary_light(instance.primary_light);
+			if (lighting_volume && instance.lighting_handle > 0)
+			{
+				constants->set("baseLightingCoords", lighting_volume->base_coords(instance.lighting_handle));
+			}
+			const std::uint32_t ground = instance.ground_lighting;
+			const auto channel = [&](const int shift) { return static_cast<float>(std::pow(static_cast<double>((ground >> shift) & 0xFF) * 0.0078431377, 2.0)); };
+			constants->set("lightprobeAmbient", { channel(0), channel(8), channel(16), static_cast<float>(static_cast<double>(ground >> 24) * 0.00098039221) });
 		}
-		const std::uint32_t ground = instance.ground_lighting;
-		const auto channel = [&](const int shift) { return static_cast<float>(std::pow(static_cast<double>((ground >> shift) & 0xFF) * 0.0078431377, 2.0)); };
-		constants->set("lightprobeAmbient", { channel(0), channel(8), channel(16), static_cast<float>(static_cast<double>(ground >> 24) * 0.00098039221) });
 		frame_stat.model_surfaces++;
 		surface_draw draw;
 		draw.vertex_buffer = lod.vertex_buffer.get();
@@ -710,6 +730,11 @@ namespace codol::view
 	void map_renderer::impl::set_primary_light(const int index)
 	{
 		// GameMapRenderer.cs:1431-1452
+		if (index == constants_light)
+		{
+			return;
+		}
+		constants_light = index;
 		const map_light* light = primary_light(index);
 		current_light_def = nullptr;
 		if (light && light->type != 1 && !light->def_name.empty())

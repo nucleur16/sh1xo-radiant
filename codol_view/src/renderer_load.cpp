@@ -1450,9 +1450,11 @@ namespace codol::view
 			}
 		}
 
-		// ---- fog. The C# renderer never sets fog ( GameFog.None ). In this engine family the fog of a map is not
-		// part of its fastfile assets: the level script calls setExpFog / the vision set file sets it at run time.
-		fog_source = "none: 1.1.1.13 maps carry no fog in GfxWorld / ComWorld; the game sets it from the level script ( setExpFog ) at run time";
+		// ---- fog. The C# renderer never sets fog ( GameFog.None ). MEASURED on the install: GfxWorld / ComWorld carry no
+		// fog; a level sets it from its art script at run time ( maps/createart/<map>_art.gsc:
+		// setExpFog( startDist, halfwayDist, r, g, b, maxOpacity, transitionTime ) ), and that script is in none of the
+		// map, level or shared fastfiles the client loads for rendering. So there is nothing to read here.
+		fog_source = "none: 1.1.1.13 maps carry no fog in their zones; the level's art script ( maps/createart/<map>_art.gsc, setExpFog ) sets it at run time";
 		has_fog = false;
 
 		stat.world_surface_count = surface_count;

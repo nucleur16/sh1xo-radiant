@@ -686,7 +686,12 @@ namespace
 		if (a.fvf != b.fvf) { report("FVF", 0); }
 		for (std::size_t i = 0; i < 2; i++)
 		{
-			if (a.streams[i] != b.streams[i] || a.stream_offsets[i] != b.stream_offsets[i] || a.stream_strides[i] != b.stream_strides[i]) { report("stream source", i); }
+			if (a.streams[i] != b.streams[i] || a.stream_offsets[i] != b.stream_offsets[i] || a.stream_strides[i] != b.stream_strides[i])
+			{
+				report("stream source", i);
+				std::printf("    buffer %p -> %p, offset %u -> %u, stride %u -> %u\n", static_cast<void*>(a.streams[i]), static_cast<void*>(b.streams[i]),
+					a.stream_offsets[i], b.stream_offsets[i], a.stream_strides[i], b.stream_strides[i]);
+			}
 			if (a.stream_freq[i] != b.stream_freq[i]) { report("stream source frequency", i); }
 		}
 		if (a.indices != b.indices) { report("indices", 0); }

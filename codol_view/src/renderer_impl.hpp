@@ -356,6 +356,9 @@ namespace codol::view
 		bool sun_shadows_active = false;
 		std::unique_ptr<sun_shadow> current_sun_shadow;
 		const light_def* current_light_def = nullptr;
+		// what the per object constants were last set for; reset whenever the eye or the shadow state changes
+		int constants_light = -2;
+		const static_model_instance* constants_instance = nullptr;
 		material_draw* bound_material = nullptr;
 		IDirect3DVertexShader9* bound_vertex_shader = nullptr;
 		IDirect3DPixelShader9* bound_pixel_shader = nullptr;
