@@ -30,10 +30,14 @@ add_library(codol_zone STATIC
 	include/codol_zone/fastfile.hpp
 	include/codol_zone/zone.hpp
 	include/codol_zone/assets.hpp
+	include/codol_zone/zone_editor.hpp
 	src/crypto_win.cpp
 	src/crypto_win.hpp
 	src/fastfile.cpp
 	src/inflate.cpp
+	src/deflate.cpp
+	src/fastfile_write.cpp
+	src/zone_editor.cpp
 	src/vmem.hpp
 	src/zone.cpp
 	src/zone_impl.hpp
@@ -61,6 +65,10 @@ if(CODOL_ZONE_BUILD_TOOLS)
 	add_executable(codol_zonetool tools/codol_zonetool.cpp)
 	target_link_libraries(codol_zonetool PRIVATE codol_zone)
 	codol_zone_warnings(codol_zonetool)
+
+	add_executable(codol_linker tools/codol_linker.cpp)
+	target_link_libraries(codol_linker PRIVATE codol_zone)
+	codol_zone_warnings(codol_linker)
 endif()
 
 if(CODOL_ZONE_BUILD_TESTS)

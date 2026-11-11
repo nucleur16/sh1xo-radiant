@@ -276,4 +276,36 @@ namespace codol::zone::crypto
 		plain.resize(written);
 		return true;
 	}
+
+	bool Rsa::encrypt_oaep_sha256(const std::span<const std::uint8_t> plain, std::vector<std::uint8_t>& block) const
+	{
+		if (!key_)
+		{
+			return false;
+		}
+		BCRYPT_OAEP_PADDING_INFO padding{};
+		padding.pszAlgId = BCRYPT_SHA256_ALGORITHM;
+
+		ULONG needed = 0;
+		if (!ok(BCryptEncrypt(key_, const_cast<PUCHAR>(plain.data()), static_cast<ULONG>(plain.size()), &padding, nullptr, 0, nullptr, 0, &needed,
+			BCRYPT_PAD_OAEP)))
+		{
+			return false;
+		}
+		block.resize(needed);
+		ULONG written = 0;
+		if (!ok(BCryptEncrypt(key_, const_cast<PUCHAR>(plain.data()), static_cast<ULONG>(plain.size()), &padding, nullptr, 0, block.data(),
+			static_cast<ULONG>(block.size()), &written, BCRYPT_PAD_OAEP)))
+		{
+			block.clear();
+			return false;
+		}
+		block.resize(written);
+		return true;
+	}
+
+	bool random_bytes(const std::span<std::uint8_t> out)
+	{
+		return ok(BCryptGenRandom(nullptr, out.data(), static_cast<ULONG>(out.size()), BCRYPT_USE_SYSTEM_PREFERRED_RNG));
+	}
 }

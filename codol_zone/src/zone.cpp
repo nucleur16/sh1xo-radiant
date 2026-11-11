@@ -56,13 +56,17 @@ namespace codol::zone
 
 	Status Zone::load(std::vector<std::uint8_t> zoneBytes, std::string name)
 	{
+		return load_traced(zoneBytes, std::move(name), nullptr);
+	}
+
+	Status Zone::load_traced(const std::vector<std::uint8_t>& zoneBytes, std::string name, LoadTracer* tracer)
+	{
 		impl_.reset();
 		try
 		{
 			auto impl = std::make_unique<Impl>();
 			impl->name = std::move(name);
-			run_zone_loaders(*impl, zoneBytes);
-			std::vector<std::uint8_t>().swap(zoneBytes);
+			run_zone_loaders(*impl, zoneBytes, tracer);
 
 			impl->loaded = true;
 			impl_ = std::move(impl);

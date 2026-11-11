@@ -142,6 +142,19 @@ namespace codol::zone
 		return {};
 	}
 
+	Status ClientKey::wrap(const std::span<const std::uint8_t> plain, std::vector<std::uint8_t>& block) const
+	{
+		if (!valid())
+		{
+			return Status::error("no client key loaded");
+		}
+		if (!impl_->rsa.encrypt_oaep_sha256(plain, block) || block.size() != FASTFILE_KEY_BLOCK_SIZE)
+		{
+			return Status::error("RSA-OAEP wrap of the key block failed");
+		}
+		return {};
+	}
+
 	// ------------------------------------------------------------------------------------------
 
 	Status read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data)

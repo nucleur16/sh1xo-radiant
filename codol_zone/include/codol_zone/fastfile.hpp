@@ -89,6 +89,9 @@ namespace codol::zone
 		// RSA-OAEP( SHA-256 ) decryption of one 256 byte block
 		Status unwrap(std::span<const std::uint8_t> block, std::vector<std::uint8_t>& plain) const;
 
+		// the inverse ( public key operation ): the 256 byte key block of a new fast file
+		Status wrap(std::span<const std::uint8_t> plain, std::vector<std::uint8_t>& block) const;
+
 	private:
 		struct Impl;
 		std::unique_ptr<Impl> impl_;
@@ -118,4 +121,32 @@ namespace codol::zone
 		std::size_t* consumed = nullptr);
 
 	Status read_file(const std::filesystem::path& path, std::vector<std::uint8_t>& data);
+
+	// ---- writing ------------------------------------------------------------------------------
+	//
+	// Only the unsigned container ( IWffu100 ) can be produced: header | RSA-OAEP key block | zlib stream, of which the
+	// bytes inside the first 0x40000 bytes of the file are AES-CTR encrypted ( CODOL-AssetExplorer FastFileWriter.cs ).
+	// The signed container ( IWff0100 ) needs an RSA signature over the auth sub header made with a private key that is
+	// not in the client: C1.exe only holds the public half ( DER at 0x00C3D138, checked by 0x004B55C0 .. 0x004B56A0 ).
+
+	// bytes -> zlib ( RFC 1950 ) stream. level 0 stores, 1 .. 9 trade time for size
+	Status zlib_deflate(std::span<const std::uint8_t> data, std::vector<std::uint8_t>& out, int level = 6);
+
+	struct FastFileWriteOptions
+	{
+		int compression = 6;					// zlib_deflate level
+		std::uint8_t allowOnlineUpdate = 1;		// header byte 12, as FastFileWriter.cs writes it
+		std::uint32_t fileTimeHigh = 0;			// FILETIME of the build; 0 / 0 = now
+		std::uint32_t fileTimeLow = 0;
+		std::vector<std::uint8_t> keyIv;		// 24 byte AES key + 16 byte IV; empty = random
+	};
+
+	// inflated zone ( XFileHeader + data ) -> IWffu100 fast file
+	Status encode_fastfile(std::span<const std::uint8_t> zone, const ClientKey& key, std::vector<std::uint8_t>& file,
+		const FastFileWriteOptions& options = {});
+
+	Status write_fastfile(const std::filesystem::path& path, std::span<const std::uint8_t> zone, const ClientKey& key,
+		const FastFileWriteOptions& options = {});
+
+	Status write_file(const std::filesystem::path& path, std::span<const std::uint8_t> data);
 }

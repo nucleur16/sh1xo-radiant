@@ -23,6 +23,14 @@ namespace codol::zone
 		using std::runtime_error::runtime_error;
 	};
 
+	// observer of the loaders' memory traffic ( zone capture and zone writing, zone_editor.cpp ); null for a plain load
+	struct MemWatch
+	{
+		virtual ~MemWatch() = default;
+		virtual void on_write32(std::uint32_t address, std::uint32_t value) = 0;	// before the store
+		virtual void on_read32(std::uint32_t address) = 0;							// only inside the read window
+	};
+
 	class VMem
 	{
 	public:
@@ -104,6 +112,10 @@ namespace codol::zone
 
 		std::uint32_t U32(const std::uint32_t a)
 		{
+			if (watch_ && a - readWindow_ < readWindowSize_)
+			{
+				watch_->on_read32(a);
+			}
 			std::uint32_t v;
 			std::memcpy(&v, at(a, 4), 4);
 			return v;
@@ -127,6 +139,10 @@ namespace codol::zone
 		}
 		std::uint32_t WU32(const std::uint32_t a, const std::uint32_t v)
 		{
+			if (watch_)
+			{
+				watch_->on_write32(a, v);
+			}
 			std::memcpy(at(a, 4), &v, 4);
 			return v;
 		}
@@ -180,6 +196,13 @@ namespace codol::zone
 			return n;
 		}
 
+		void set_watch(MemWatch* watch) { watch_ = watch; }
+		void set_read_window(const std::uint32_t address, const std::uint32_t size)
+		{
+			readWindow_ = address;
+			readWindowSize_ = size;
+		}
+
 		std::uint32_t StackEnter(const std::uint32_t frameSize)
 		{
 			const std::uint32_t frame = stackTop_;
@@ -224,6 +247,9 @@ namespace codol::zone
 
 		std::vector<std::uint8_t> regions_[REGION_COUNT];
 		std::uint32_t stackTop_ = STACK_BASE;
+		MemWatch* watch_ = nullptr;
+		std::uint32_t readWindow_ = 0;
+		std::uint32_t readWindowSize_ = 0;
 	};
 
 	struct StackGuard

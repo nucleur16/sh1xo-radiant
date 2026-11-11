@@ -3,6 +3,7 @@
 // when it is not there. CODOL_ZONE_TEST_ALL=1 also loads every fast file of the install.
 
 #include "codol_zone/assets.hpp"
+#include "codol_zone/zone_editor.hpp"
 #include "crypto_win.hpp"
 
 #include <cmath>
@@ -380,6 +381,209 @@ namespace
 		}
 	}
 
+	// ---- writing ---------------------------------------------------------------------------------
+
+	void test_deflate()
+	{
+		std::printf("deflate\n");
+		std::vector<std::vector<std::uint8_t>> inputs;
+		inputs.emplace_back();
+		inputs.push_back({ 'x' });
+		{
+			const std::string text = make_text(300000);
+			inputs.emplace_back(text.begin(), text.end());
+		}
+		inputs.emplace_back(200000, std::uint8_t(0));
+		{
+			std::vector<std::uint8_t> noise(150000);
+			std::uint32_t state = 7;
+			for (auto& b : noise)
+			{
+				state = state * 1664525u + 1013904223u;
+				b = static_cast<std::uint8_t>(state >> 24);
+			}
+			inputs.push_back(noise);
+			// noise, then the same noise again further away than the window, then text
+			std::vector<std::uint8_t> mixed = noise;
+			mixed.insert(mixed.end(), noise.begin(), noise.begin() + 70000);
+			const std::string text = make_text(5000);
+			mixed.insert(mixed.end(), text.begin(), text.end());
+			inputs.push_back(mixed);
+		}
+		for (const auto& input : inputs)
+		{
+			for (const int level : { 0, 1, 4, 6, 9 })
+			{
+				std::vector<std::uint8_t> packed, unpacked;
+				std::size_t consumed = 0;
+				CHECK(zlib_deflate(input, packed, level));
+				CHECK(zlib_inflate(packed, unpacked, 0, &consumed));
+				CHECK(unpacked == input);
+				CHECK_EQ(consumed, packed.size());
+				if (level >= 4 && (&input == &inputs[2] || &input == &inputs[3]))
+				{
+					CHECK(packed.size() < input.size() / 3);	// the text and the zeros compress
+				}
+			}
+		}
+	}
+
+	std::vector<std::uint8_t> bytes_of(const char* text)
+	{
+		return std::vector<std::uint8_t>(text, text + std::strlen(text));
+	}
+
+	std::string rawfile_text(const Zone& zone, const char* name)
+	{
+		RawFileView raw;
+		std::vector<std::uint8_t> contents;
+		if (!read_rawfile(zone, zone.find_asset(c1::ASSET_TYPE_RAWFILE, name), raw) || !rawfile_contents(raw, contents))
+		{
+			return "<missing>";
+		}
+		return as_string(contents);
+	}
+
+	void test_zone_editor()
+	{
+		std::printf("zone editor\n");
+		const std::vector<std::uint8_t> bytes = make_synthetic_zone();
+
+		// read -> write is the identity
+		ZoneEditor editor;
+		CHECK(editor.load(bytes, "synthetic"));
+		CHECK(editor.loaded() && editor.zone().loaded());
+		CHECK_EQ(editor.asset_count(), 1);
+		CHECK_EQ(editor.find_asset(c1::ASSET_TYPE_RAWFILE, "test/hello.txt"), 0);
+		CHECK(editor.find_asset(c1::ASSET_TYPE_RAWFILE, "nope") == ZoneEditor::npos);
+		CHECK_EQ(editor.asset(0).chunks, 3);
+		const std::uint64_t helloPrint = editor.asset_fingerprint(0);
+		std::vector<std::uint8_t> written;
+		ZoneWriteReport report;
+		CHECK(editor.write(written, &report));
+		CHECK(written == bytes);
+		CHECK_EQ(report.streamSize, bytes.size());
+
+		// a longer rawfile, a new compressed one, a string table: everything after them moves
+		const std::string longText = make_text(5000);
+		CHECK(editor.set_rawfile("test/hello.txt", bytes_of("hello, this is longer than before"), false));
+		CHECK(editor.set_rawfile("test/packed.gsc", { reinterpret_cast<const std::uint8_t*>(longText.data()), longText.size() }, true));
+		StringTableData table;
+		table.columns = 2;
+		table.rows = 2;
+		table.cells = { "Key", "Value", "weapon", "" };
+		CHECK(editor.set_string_table("mp/test.csv", table));
+		CHECK(!editor.set_string_table("mp/bad.csv", StringTableData{ 2, 2, { "one" } }));
+		CHECK(editor.set_rawfile("test/tail.txt", bytes_of("tail"), false));
+		CHECK_EQ(editor.asset_count(), 4);
+		CHECK(editor.asset_fingerprint(0) != helloPrint);
+		CHECK(editor.write(written, &report));
+		{
+			Zone zone;
+			const Status s = zone.load(written, "edited");
+			if (!s)
+			{
+				std::printf("  load: %s\n", s.message.c_str());
+			}
+			CHECK(s.ok);
+			CHECK_EQ(zone.assets().size(), 4);
+			CHECK(zone.warnings().empty());
+			CHECK(rawfile_text(zone, "test/hello.txt") == "hello, this is longer than before");
+			CHECK(rawfile_text(zone, "test/packed.gsc") == longText);
+			CHECK(rawfile_text(zone, "test/tail.txt") == "tail");
+			RawFileView packed;
+			CHECK(read_rawfile(zone, zone.find_asset(c1::ASSET_TYPE_RAWFILE, "test/packed.gsc"), packed));
+			CHECK(packed.raw.compressedLen > 0 && packed.raw.compressedLen < packed.raw.len);
+			StringTableView view;
+			CHECK(read_stringtable(zone, zone.find_asset(c1::ASSET_TYPE_STRINGTABLE, "mp/test.csv"), view));
+			CHECK_EQ(view.raw.columnCount, 2);
+			CHECK_EQ(view.raw.rowCount, 2);
+			CHECK(view.cell(0, 0) == "Key" && view.cell(1, 0) == "weapon" && view.cell(1, 1).empty());
+			CHECK(zone.script_strings().size() == 1 && zone.script_strings()[0] == "tag_origin");
+			CHECK_EQ(zone.header().size + 40, written.size());
+		}
+		CHECK_EQ(string_table_hash("AbC"), string_table_hash("abc"));
+		CHECK_EQ(string_table_hash(""), 0);
+		CHECK_EQ(string_table_hash("a"), 97);
+		CHECK_EQ(string_table_hash("ab"), 97 * 31 + 98);
+
+		// a written zone captures again to the same graph, and writes to the same bytes
+		ZoneEditor second;
+		CHECK(second.load(written, "second"));
+		CHECK_EQ(second.asset_count(), 4);
+		for (std::size_t i = 0; i < 4; i++)
+		{
+			CHECK(second.asset_fingerprint(i) == editor.asset_fingerprint(i));
+		}
+		std::vector<std::uint8_t> again;
+		CHECK(second.write(again));
+		CHECK(again == written);
+
+		// removing and replacing assets
+		CHECK(second.remove_asset(second.find_asset(c1::ASSET_TYPE_RAWFILE, "test/packed.gsc")));
+		CHECK(!second.remove_asset(17));
+		CHECK(second.set_string_table("mp/test.csv", StringTableData{ 1, 3, { "a", "b", "c" } }));
+		CHECK(second.write(again));
+		{
+			Zone zone;
+			CHECK(zone.load(again, "removed"));
+			CHECK_EQ(zone.assets().size(), 3);
+			CHECK_EQ(zone.find_asset(c1::ASSET_TYPE_RAWFILE, "test/packed.gsc"), 0);
+			CHECK(rawfile_text(zone, "test/tail.txt") == "tail");
+			StringTableView view;
+			CHECK(read_stringtable(zone, zone.find_asset(c1::ASSET_TYPE_STRINGTABLE, "mp/test.csv"), view));
+			CHECK_EQ(view.raw.rowCount, 3);
+			CHECK(view.cell(2, 0) == "c");
+		}
+
+		// a zone from nothing, and assets taken from another zone
+		ZoneEditor fresh;
+		CHECK(fresh.create("fresh"));
+		CHECK(fresh.loaded() && !fresh.zone().loaded());
+		CHECK(!fresh.set_map_ents("{}"));
+		CHECK(fresh.write(again));
+		{
+			Zone zone;
+			CHECK(zone.load(again, "empty"));
+			CHECK_EQ(zone.assets().size(), 0);
+			CHECK_EQ(again.size(), 40 + 16);
+		}
+		CHECK(fresh.set_rawfile("mod/a.gsc", bytes_of("a()"), false));
+		CHECK(fresh.add_asset(editor, editor.find_asset(c1::ASSET_TYPE_RAWFILE, "test/packed.gsc")));
+		CHECK(fresh.add_asset(editor, editor.find_asset(c1::ASSET_TYPE_STRINGTABLE, "mp/test.csv"), 0));
+		CHECK(!fresh.add_asset(editor, 99));
+		CHECK(fresh.replace_asset(fresh.find_asset(c1::ASSET_TYPE_RAWFILE, "mod/a.gsc"), editor, editor.find_asset(c1::ASSET_TYPE_RAWFILE, "test/tail.txt")));
+		CHECK(!fresh.replace_asset(0, editor, editor.find_asset(c1::ASSET_TYPE_RAWFILE, "test/tail.txt")));	// a string table is not a rawfile
+		CHECK_EQ(fresh.asset_count(), 3);
+		CHECK(fresh.asset(0).type == c1::ASSET_TYPE_STRINGTABLE);
+		CHECK(fresh.write(again));
+		{
+			Zone zone;
+			const Status s = zone.load(again, "fresh");
+			if (!s)
+			{
+				std::printf("  load: %s\n", s.message.c_str());
+			}
+			CHECK(s.ok);
+			CHECK_EQ(zone.assets().size(), 3);
+			CHECK(rawfile_text(zone, "test/packed.gsc") == longText);
+			CHECK(rawfile_text(zone, "test/tail.txt") == "tail");
+			CHECK_EQ(zone.find_asset(c1::ASSET_TYPE_RAWFILE, "mod/a.gsc"), 0);
+			CHECK_EQ(zone.block_usage(0).declared, zone.block_usage(0).used + 0x10);
+			CHECK_EQ(zone.block_usage(3).declared, zone.block_usage(3).used);
+		}
+
+		// an asset whose data does not match its header is refused, not written
+		{
+			std::vector<std::uint8_t> broken = bytes;
+			ZoneEditor e;
+			CHECK(!e.load(std::vector<std::uint8_t>(bytes.begin(), bytes.end() - 2), "truncated"));
+			CHECK(!e.loaded());
+			CHECK(!e.write(again));
+			CHECK(!e.set_rawfile("x", bytes_of("y")));
+		}
+	}
+
 	// ---- against a real install -----------------------------------------------------------------
 
 	std::filesystem::path game_dir()
@@ -648,6 +852,84 @@ namespace
 			CHECK(found);
 		}
 
+		// ---- writing: acceptance tests of the zone writer -----------------------------------------
+		{
+			std::printf("  writer: mp_killhouse_sh\n");
+			std::vector<std::uint8_t> original;
+			CHECK(read_fastfile(zones / "mp_killhouse_sh.ff", key, original));
+			ZoneEditor editor;
+			CHECK(editor.load(original, "mp_killhouse_sh"));
+
+			// read -> write gives the same bytes
+			std::vector<std::uint8_t> written;
+			CHECK(editor.write(written));
+			CHECK(written == original);
+
+			// container: write, read back
+			FastFileWriteOptions options;
+			options.compression = 1;
+			std::vector<std::uint8_t> file, reread;
+			FastFileInfo writtenInfo;
+			CHECK(encode_fastfile(written, key, file, options));
+			CHECK(file.size() > FASTFILE_UNSIGNED_ENCRYPTED_SPAN);		// more than the encrypted first chunk
+			CHECK(decode_fastfile(file, key, reread, &writtenInfo));
+			CHECK(writtenInfo.header.is_unsigned());
+			CHECK_EQ(writtenInfo.header.version, FASTFILE_VERSION);
+			CHECK(reread == original);
+			std::vector<std::uint8_t>().swap(reread);
+			std::vector<std::uint8_t>().swap(file);
+
+			// an entity string of another length: every asset still loads, all others are unchanged
+			MapEntsView baseEnts;
+			CHECK(read_map_ents(editor.zone(), find_map_ents(editor.zone()), baseEnts));
+			std::string text(baseEnts.entityString);
+			text += "{\n\"classname\" \"script_origin\"\n\"targetname\" \"codol_zone_writer_test\"\n\"origin\" \"1 2 3\"\n}\n";
+			std::vector<std::uint64_t> before;
+			for (std::size_t i = 0; i < editor.asset_count(); i++)
+			{
+				before.push_back(editor.asset_fingerprint(i));
+			}
+			CHECK(editor.set_map_ents(text));
+			CHECK(editor.set_rawfile("maps/mp/codol_zone_writer_test.gsc", bytes_of("main() {}")));
+			CHECK(editor.write(written));
+			CHECK(written.size() > original.size());
+
+			ZoneEditor check;
+			const Status loaded = check.load(written, "mp_killhouse_sh");
+			if (!loaded)
+			{
+				std::printf("  %s\n", loaded.message.c_str());
+			}
+			CHECK(loaded.ok);
+			CHECK(check.zone().warnings().empty());
+			CHECK_EQ(check.asset_count(), before.size() + 1);
+			CHECK_EQ(check.zone().all_assets().size(), editor.zone().all_assets().size() + 1);
+			MapEntsView newEnts;
+			CHECK(read_map_ents(check.zone(), find_map_ents(check.zone()), newEnts));
+			CHECK(newEnts.entityString == text);
+			CHECK_EQ(newEnts.raw.numEntityChars, text.size() + 1);
+			CHECK_EQ(newEnts.triggerModelCount, baseEnts.triggerModelCount);
+			CHECK(rawfile_text(check.zone(), "maps/mp/codol_zone_writer_test.gsc") == "main() {}");
+			int changed = 0;
+			for (std::size_t i = 0; i < before.size(); i++)
+			{
+				if (check.asset_fingerprint(i) != before[i])
+				{
+					changed++;
+					CHECK_EQ(check.asset(i).type, c1::ASSET_TYPE_CLIPMAP_MP);	// the MapEnts is nested in the clip map
+				}
+			}
+			CHECK_EQ(changed, 1);
+
+			// the geometry the renderer reads is where the pointers say it is
+			GfxWorldView oldWorld, newWorld;
+			CHECK(read_gfx_world(editor.zone(), editor.zone().find_asset(c1::ASSET_TYPE_GFXWORLD, "maps/mp/mp_killhouse_sh.d3dbsp"), oldWorld));
+			CHECK(read_gfx_world(check.zone(), check.zone().find_asset(c1::ASSET_TYPE_GFXWORLD, "maps/mp/mp_killhouse_sh.d3dbsp"), newWorld));
+			CHECK_EQ(newWorld.surfaces.size(), oldWorld.surfaces.size());
+			CHECK_EQ(newWorld.staticModels.size(), oldWorld.staticModels.size());
+			CHECK_EQ(newWorld.raw.draw.vertexCount, oldWorld.raw.draw.vertexCount);
+		}
+
 		// an unsigned ( rebuilt ) zone from the patch folder
 		{
 			const std::filesystem::path patch = game / "client_shipRetail" / "patch" / "codol_common.ff";
@@ -694,6 +976,8 @@ int main()
 	test_decoders();
 	test_container_errors();
 	test_synthetic_zone();
+	test_deflate();
+	test_zone_editor();
 	test_real_zones();
 	std::printf("%d checks, %d failed\n", g_checks, g_failures);
 	return g_failures ? 1 : 0;
