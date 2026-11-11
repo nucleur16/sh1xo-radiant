@@ -22,9 +22,12 @@
 //
 // What the editor does not know is the meaning of the non pointer bytes of a chunk: except for the asset types with
 // an explicit edit below ( MapEnts, RawFile, StringTable ) an asset can be kept, removed, or taken whole from another
-// zone, not modified field by field.
+// zone, not modified field by field - unless the caller knows the layout: the typed editing functions ( data_at,
+// set_data, patch_data, set_pointer, insert_data .. ) change any piece of data and keep every pointer valid.
 
 #include "codol_zone/zone.hpp"
+
+#include <type_traits>
 
 namespace codol::zone
 {
@@ -65,6 +68,73 @@ namespace codol::zone
 		int columns = 0;
 		int rows = 0;
 		std::vector<std::string> cells;			// rows * columns, row major
+	};
+
+	// ---- typed, relocation aware editing ---------------------------------------------------------
+	// A piece of stream data of the asset graph ( one read of the loaders: a struct, an array, a string ). The id
+	// stays valid across edits of the editor it came from; 0 is "none".
+	using ZoneDataId = std::uint32_t;
+
+	// What a pointer field of the asset graph points at.
+	struct ZoneTarget
+	{
+		enum class Kind : std::uint8_t
+		{
+			none,			// not a zone pointer: the field is plain bytes ( 0, 0xFFFFFFFF "data follows", a number )
+			data,			// `offset` bytes into the stream data `data`
+			allocation,		// memory the loader allocates without reading the stream ( opaque: copy it, do not build it )
+			asset,			// the XAsset table entry of top level asset `asset` ( offset 8: its header slot )
+			raw,			// a value the loaders convert although it points at nothing they placed; written as it is
+		};
+		Kind kind = Kind::none;
+		ZoneDataId data = 0;
+		std::uint32_t offset = 0;
+		std::size_t asset = static_cast<std::size_t>(-1);
+		std::uint32_t allocation = 0;
+		std::uint32_t raw = 0;
+
+		static ZoneTarget to_data(const ZoneDataId id, const std::uint32_t offset = 0)
+		{
+			ZoneTarget t;
+			t.kind = Kind::data;
+			t.data = id;
+			t.offset = offset;
+			return t;
+		}
+		// a pointer to a top level asset, as the zone linker writes it: at the header slot of its XAsset entry
+		static ZoneTarget to_asset(const std::size_t index)
+		{
+			ZoneTarget t;
+			t.kind = Kind::asset;
+			t.asset = index;
+			t.offset = 8;
+			return t;
+		}
+	};
+
+	struct ZonePointer
+	{
+		std::uint32_t offset = 0;		// of the 32 bit field inside its data
+		ZoneTarget target;
+	};
+
+	// a pointer field somewhere in the zone that leads into a piece of data
+	struct ZoneInbound
+	{
+		ZoneDataId from = 0;			// data that holds the field
+		std::uint32_t offset = 0;		// of the field
+		std::uint32_t targetOffset = 0;	// where in the target it points
+	};
+
+	struct ZoneDataInfo
+	{
+		ZoneDataId id = 0;
+		std::size_t asset = static_cast<std::size_t>(-1);	// top level asset that owns it; npos: the XAssetList
+		std::uint32_t index = 0;		// position in the asset's stream order
+		std::uint32_t size = 0;			// current size ( strings: including the terminator )
+		zaddr address = 0;				// where the loaded zone ( zone() ) has it; 0 for data made by an edit
+		bool string = false;
+		std::uint32_t pointers = 0;		// zone pointers inside it
 	};
 
 	class ZoneEditor
@@ -132,6 +202,64 @@ namespace codol::zone
 		// Replaces a top level asset with one of another zone ( same type ); pointers of other assets to the
 		// replaced asset's header keep working. Same rules as add_asset.
 		Status replace_asset(std::size_t index, const ZoneEditor& donor, std::size_t donorIndex);
+
+		// ---- typed, relocation aware editing --------------------------------------------------
+		// The asset graph below an asset, piece by piece. Every piece of stream data has an id; a pointer field is a
+		// ( data, offset ) pair with a target, never a number, so it stays right wherever the zone is laid out.
+		//
+		// What the loaders read, and in which order, is decided by the data itself ( counts, pointer fields that hold
+		// 0xFFFFFFFF = "the data follows" ). An edit therefore has to leave the graph in a state the loaders agree
+		// with: a count that matches the array it describes, a piece of data for every pointer that says "follows",
+		// in the order the loader visits the fields. write() checks exactly that and fails with a message that names
+		// the asset and the piece when it does not hold; nothing is written then.
+		//
+		// The loaded zone ( zone() ) is not updated by edits: addresses always refer to the zone as it was loaded.
+
+		// the data that holds image address `address` of the loaded zone ( block addresses, not the header pool );
+		// 0 when the loaders read nothing there ( null, runtime allocations, another zone's asset )
+		ZoneDataId data_at(zaddr address, std::uint32_t* offset = nullptr) const;
+		// the stream data an asset header of the loaded zone ( pool address: XAssetEntry::header, a nested asset ) was
+		// read as. Fields of the header are edited through it.
+		ZoneDataId header_data(zaddr pooledHeader) const;
+		// index-th piece of a top level asset, in stream order ( 0 is its header )
+		ZoneDataId asset_data(std::size_t asset, std::uint32_t index) const;
+
+		bool data_info(ZoneDataId id, ZoneDataInfo& info) const;
+		// current bytes ( pointer fields hold the stream value of the source zone ); valid until the next edit
+		std::span<const std::uint8_t> data_bytes(ZoneDataId id) const;
+		std::vector<ZonePointer> data_pointers(ZoneDataId id) const;
+		// target of the pointer field at `offset`; Kind::none when the field is not a zone pointer
+		ZoneTarget pointer_at(ZoneDataId id, std::uint32_t offset) const;
+		// every pointer field of the zone that leads into `id`
+		std::vector<ZoneInbound> pointers_to(ZoneDataId id) const;
+
+		// Replaces the contents of a piece of data: any length, with the zone pointers it holds ( all former ones are
+		// dropped ). Pointers of other data into it keep their offset; fails when one of them would point past the
+		// new end. The array "resize": set_data + patch of the count field in the owner.
+		Status set_data(ZoneDataId id, std::span<const std::uint8_t> bytes, std::span<const ZonePointer> pointers = {});
+		// Overwrites bytes in place ( a struct field ). Fails when the range touches a zone pointer field.
+		Status patch_data(ZoneDataId id, std::uint32_t offset, std::span<const std::uint8_t> bytes);
+		template <typename T>
+		Status patch_value(const ZoneDataId id, const std::uint32_t offset, const T& value)
+		{
+			static_assert(std::is_trivially_copyable_v<T>);
+			return patch_data(id, offset, { reinterpret_cast<const std::uint8_t*>(&value), sizeof(T) });
+		}
+		// Makes the 32 bit field at `offset` a pointer to `target`, or with Kind::none plain bytes holding `plain`
+		// ( 0: null, 0xFFFFFFFF: the data follows in the stream ).
+		Status set_pointer(ZoneDataId id, std::uint32_t offset, const ZoneTarget& target, std::uint32_t plain = 0);
+		// Adds a piece of data to the asset that owns `anchor`, directly behind ( or in front of ) it in stream
+		// order. The caller picks the place where the loader will read it ( behind the struct whose pointer says
+		// "follows", after the data of the pointer fields before it ).
+		Status insert_data(ZoneDataId anchor, bool after, std::span<const std::uint8_t> bytes, std::span<const ZonePointer> pointers,
+			ZoneDataId& created, bool string = false);
+		// Removes a piece of data. Fails when a pointer field of the zone still leads into it.
+		Status remove_data(ZoneDataId id);
+		// Removes the pieces `first` .. `last` of one asset ( stream order ) with all pointers, script string fields,
+		// nested asset headers and loader allocations inside them: a whole sub tree, such as a nested asset. Fails,
+		// changing nothing, when a pointer of data outside the range leads into it or into an allocation the loader
+		// makes for it, or when it cannot be told which side of the range an allocation belongs to.
+		Status remove_data_range(ZoneDataId first, ZoneDataId last);
 
 		// ---- output -------------------------------------------------------------------------
 		// Lays the graph out again and returns the inflated zone ( XFileHeader + data ), ready for encode_fastfile.
