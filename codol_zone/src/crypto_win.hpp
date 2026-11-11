@@ -12,6 +12,9 @@ namespace codol::zone::crypto
 {
 	bool sha256(std::span<const std::uint8_t> data, std::uint8_t digest[32]);
 
+	// system random number generator
+	bool random_bytes(std::span<std::uint8_t> out);
+
 	// libtomcrypt style CTR with a little endian counter ( ctr_setiv 0x00A6A900, ctr_encrypt 0x00A6BD60 )
 	class AesCtr
 	{
@@ -53,6 +56,9 @@ namespace codol::zone::crypto
 		bool import(const RsaPrivateKey& key);
 		bool valid() const { return key_ != nullptr; }
 		bool decrypt_oaep_sha256(std::span<const std::uint8_t> block, std::vector<std::uint8_t>& plain) const;
+
+		// public key operation: plain -> one block of the modulus size
+		bool encrypt_oaep_sha256(std::span<const std::uint8_t> plain, std::vector<std::uint8_t>& block) const;
 
 	private:
 		void* alg_ = nullptr;

@@ -29,6 +29,8 @@
 
 namespace codol::zone
 {
+	struct LoadTracer;					// internal ( zone_impl.hpp )
+
 	using zaddr = std::uint32_t;		// address inside a loaded image; 0 is null
 
 	inline constexpr int BLOCK_COUNT = 8;
@@ -176,6 +178,9 @@ namespace codol::zone
 		struct Impl;
 
 	private:
+		friend class ZoneEditor;
+		Status load_traced(const std::vector<std::uint8_t>& zoneBytes, std::string name, LoadTracer* tracer);
+
 		std::unique_ptr<Impl> impl_;
 	};
 

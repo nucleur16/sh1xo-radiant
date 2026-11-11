@@ -15,12 +15,10 @@ namespace codol::zone
 	namespace
 	{
 		// globals of codoMP_client_shipRetail.exe 1.1.1.13 ( GameBuild.cs, V1_1_1_13 )
-		constexpr std::uint32_t G_STREAM_POS = 0x01EABC3Cu;
 		constexpr std::uint32_t G_STREAM_POS_INDEX = 0x01EBDC44u;
 		constexpr std::uint32_t G_STREAM_BLOCKS = 0x01EABBDCu;
 		constexpr std::uint32_t G_STREAM_POS_STACK_INDEX = 0x01DEA3CCu;
 		constexpr std::uint32_t G_STREAM_BLOCK_POS = 0x0203B2A4u;
-		constexpr std::uint32_t G_XASSET_LIST = 0x017203ECu;
 		constexpr std::uint32_t G_VAR_XASSET_LIST = 0x017C6B6Cu;
 		constexpr std::uint32_t G_VAR_SCRIPT_STRING_LIST = 0x017C6E08u;
 		constexpr std::uint32_t G_VAR_SCRIPT_STRING_ARRAY = 0x017C6B08u;
@@ -85,11 +83,15 @@ namespace codol::zone
 			std::int32_t currentAsset = -1;
 			std::int32_t currentType = -1;
 			std::unordered_map<std::string, std::uint16_t> scriptStringLookup;
+			LoadTracer* tracer = nullptr;
+			bool supplied = false;				// the tracer produces the stream
 
 			[[noreturn]] void fail(const std::string& detail) const
 			{
-				std::string where = format(" [zone stream 0x%llX of 0x%llX", static_cast<unsigned long long>(streamOffset),
-					static_cast<unsigned long long>(bytes.size()));
+				std::string where = supplied
+					? format(" [written zone stream 0x%llX", static_cast<unsigned long long>(streamOffset))
+					: format(" [zone stream 0x%llX of 0x%llX", static_cast<unsigned long long>(streamOffset),
+						static_cast<unsigned long long>(bytes.size()));
 				if (currentAsset >= 0)
 				{
 					where += format(", asset #%d %s", currentAsset, asset_type_name(currentType).c_str());
@@ -100,6 +102,20 @@ namespace codol::zone
 			// DB_LoadXFileData 0x004B69C0
 			void DB_LoadXFileData(const uint ptr, const uint size)
 			{
+				if (supplied)
+				{
+					if (size)
+					{
+						M.write(ptr, tracer->supply(ptr, size), size);
+						streamOffset += size;
+						track_temp(ptr, size);
+					}
+					return;
+				}
+				if (tracer && size)
+				{
+					tracer->on_stream_read(ptr, size, streamOffset, false);
+				}
 				if (streamOffset + size > bytes.size())
 				{
 					fail(format("read of %u bytes past the end of the zone", size));
@@ -113,6 +129,17 @@ namespace codol::zone
 			int Load_XStringData(const uint strPtrAddress)
 			{
 				const uint dest = M.U32(strPtrAddress);
+				if (supplied)
+				{
+					uint size = 0;
+					const std::uint8_t* text = tracer->supply_string(dest, size);
+					M.write(dest, text, size);
+					streamOffset += size;
+					track_temp(dest, size);
+					const uint end = M.U32(G_STREAM_POS) + size;
+					M.WU32(G_STREAM_POS, end);
+					return static_cast<int>(end);
+				}
 				const void* nul = streamOffset < bytes.size()
 					? std::memchr(bytes.data() + streamOffset, 0, static_cast<std::size_t>(bytes.size() - streamOffset))
 					: nullptr;
@@ -121,6 +148,10 @@ namespace codol::zone
 					fail("unterminated string at the end of the zone");
 				}
 				const uint length = static_cast<uint>(static_cast<const std::uint8_t*>(nul) - (bytes.data() + streamOffset));
+				if (tracer)
+				{
+					tracer->on_stream_read(dest, length + 1, streamOffset, true);
+				}
 				M.write(dest, bytes.data() + streamOffset, length + 1);
 				streamOffset += length + 1;
 				track_temp(dest, length + 1);
@@ -145,6 +176,10 @@ namespace codol::zone
 				}
 				const uint pooled = alloc_pool(size);
 				M.Memcpy(pooled, header, size);
+				if (tracer)
+				{
+					tracer->on_add_asset(static_cast<std::int32_t>(type), header, pooled);
+				}
 				if (type == static_cast<uint>(c1::ASSET_TYPE_IMAGE))
 				{
 					preserve_temp_image_load_def(pooled);
@@ -296,9 +331,11 @@ namespace codol::zone
 			Natives nat;
 			Loaders loaders;
 
-			Driver(Zone::Impl& z, const std::vector<std::uint8_t>& bytes)
+			Driver(Zone::Impl& z, const std::vector<std::uint8_t>& bytes, LoadTracer* tracer)
 				: zone(z), m(z.mem), nat{ z, z.mem, bytes }, loaders{ z.mem, nat }
 			{
+				nat.tracer = tracer;
+				nat.supplied = tracer && tracer->supplies_stream();
 			}
 
 			void push(const int block) { loaders.F_4CEE10(block); }	// DB_PushStreamPos
@@ -315,7 +352,8 @@ namespace codol::zone
 			void run()
 			{
 				const auto& bytes = nat.bytes;
-				if (bytes.size() < XFILE_HEADER_SIZE + 16)
+				const bool supplied = nat.supplied;
+				if (!supplied && bytes.size() < XFILE_HEADER_SIZE + 16)
 				{
 					throw LoadError("zone is shorter than the XFile header and the asset list");
 				}
@@ -326,14 +364,17 @@ namespace codol::zone
 					std::memcpy(&v, bytes.data() + offset, 4);
 					return v;
 				};
-				zone.header.size = u32(0);
-				zone.header.externalSize = u32(4);
-				for (int b = 0; b < BLOCK_COUNT; b++)
+				if (!supplied)
 				{
-					zone.header.blockSize[b] = u32(8 + 4 * static_cast<std::size_t>(b));
+					zone.header.size = u32(0);
+					zone.header.externalSize = u32(4);
+					for (int b = 0; b < BLOCK_COUNT; b++)
+					{
+						zone.header.blockSize[b] = u32(8 + 4 * static_cast<std::size_t>(b));
+					}
 				}
 				zone.streamSize = bytes.size();
-				if (static_cast<std::uint64_t>(zone.header.size) + XFILE_HEADER_SIZE != bytes.size())
+				if (!supplied && static_cast<std::uint64_t>(zone.header.size) + XFILE_HEADER_SIZE != bytes.size())
 				{
 					zone.warnings.push_back(format("XFile.size 0x%X + 0x28 does not match the inflated length 0x%llX", zone.header.size,
 						static_cast<unsigned long long>(bytes.size())));
@@ -345,12 +386,16 @@ namespace codol::zone
 
 				for (int b = 0; b < BLOCK_COUNT; b++)
 				{
-					const std::uint32_t size = zone.header.blockSize[b];
+					// a written zone: the blocks grow as the loaders fill them, their sizes are known at the end
+					const std::uint32_t size = supplied ? VMem::REGION_SIZE - 0x10 : zone.header.blockSize[b];
 					if (size >= VMem::REGION_SIZE)
 					{
 						throw LoadError(format("block %d size 0x%X exceeds the 256 MB block window", b, size));
 					}
-					m.reserve_region(static_cast<std::uint32_t>(b + 1), size);
+					if (!supplied)
+					{
+						m.reserve_region(static_cast<std::uint32_t>(b + 1), size);
+					}
 					m.WU32(XBLOCK_ARRAY + 8u * static_cast<std::uint32_t>(b), block_base(b));
 					m.WU32(XBLOCK_ARRAY + 8u * static_cast<std::uint32_t>(b) + 4, size);
 					m.WU32(G_STREAM_BLOCK_POS + 4u * static_cast<std::uint32_t>(b), block_base(b));
@@ -362,6 +407,11 @@ namespace codol::zone
 
 				nat.streamOffset = XFILE_HEADER_SIZE;
 				zone.scriptStringHandles.assign(1, std::string());
+				if (nat.tracer)
+				{
+					nat.tracer->attach(m);
+				}
+				m.set_watch(nat.tracer);
 
 				const std::uint32_t list = G_XASSET_LIST;
 				m.WU32(G_VAR_XASSET_LIST, list);
@@ -384,6 +434,12 @@ namespace codol::zone
 				}
 				pop();
 				pop();
+				if (nat.tracer && m.U32(list + 4) != 0)
+				{
+					// reads of the script string array: an asset that turns its string indices into handles
+					m.set_read_window(m.U32(list + 4), 4u * static_cast<std::uint32_t>(stringCount));
+					nat.tracer->on_script_strings(m.U32(list + 4), static_cast<std::uint32_t>(stringCount));
+				}
 
 				push(3);
 				if (m.U32(list + 12) != 0)
@@ -392,6 +448,8 @@ namespace codol::zone
 					load_asset_array(assetCount);
 				}
 				pop();
+				m.set_watch(nullptr);
+				m.set_read_window(0, 0);
 
 				if (const std::uint32_t strings = m.U32(list + 4); strings != 0)
 				{
@@ -403,7 +461,11 @@ namespace codol::zone
 					}
 				}
 
-				if (nat.streamOffset != bytes.size())
+				if (supplied)
+				{
+					zone.streamSize = nat.streamOffset;
+				}
+				else if (nat.streamOffset != bytes.size())
 				{
 					nat.currentAsset = -1;
 					nat.fail("zone stream not fully consumed");
@@ -413,7 +475,7 @@ namespace codol::zone
 				for (int b = 0; b < BLOCK_COUNT; b++)
 				{
 					const std::uint32_t pos = b == currentBlock ? m.U32(G_STREAM_POS) : m.U32(G_STREAM_BLOCK_POS + 4u * static_cast<std::uint32_t>(b));
-					zone.blocks[b].declared = zone.header.blockSize[b];
+					zone.blocks[b].declared = supplied ? 0 : zone.header.blockSize[b];
 					zone.blocks[b].used = b == 0 ? nat.tempHighWater : pos - block_base(b);
 				}
 			}
@@ -447,6 +509,15 @@ namespace codol::zone
 					nat.currentAsset = i;
 					nat.currentType = entry.type;
 
+					if (nat.supplied)
+					{
+						// the table is filled in by the writer once every asset is laid out
+						entry.dataOffset = static_cast<std::uint32_t>(nat.streamOffset - XFILE_HEADER_SIZE);
+					}
+					if (nat.tracer)
+					{
+						nat.tracer->on_asset_begin(i, nat.streamOffset);
+					}
 					const std::uint64_t expectedStart = static_cast<std::uint64_t>(XFILE_HEADER_SIZE) + entry.dataOffset;
 					if (nat.streamOffset != expectedStart)
 					{
@@ -468,6 +539,14 @@ namespace codol::zone
 					m.WU32(G_VAR_XASSET_HEADER, cursor + XASSET_HEADER_OFFSET);
 					loaders.F_4C8ED0(0);	// Load_XAsset
 
+					if (nat.supplied)
+					{
+						entry.dataSize = static_cast<std::uint32_t>(nat.streamOffset - expectedStart);
+					}
+					if (nat.tracer)
+					{
+						nat.tracer->on_asset_end(i, nat.streamOffset);
+					}
 					const std::uint64_t expectedEnd = expectedStart + entry.dataSize;
 					if (nat.streamOffset != expectedEnd)
 					{
@@ -486,11 +565,20 @@ namespace codol::zone
 		};
 	}
 
-	void run_zone_loaders(Zone::Impl& zone, const std::vector<std::uint8_t>& bytes)
+	void run_zone_loaders(Zone::Impl& zone, const std::vector<std::uint8_t>& bytes, LoadTracer* tracer)
 	{
 		// the driver holds ~13000 lines of loaders but no data of its own
-		Driver driver(zone, bytes);
-		driver.run();
+		Driver driver(zone, bytes, tracer);
+		try
+		{
+			driver.run();
+		}
+		catch (...)
+		{
+			zone.mem.set_watch(nullptr);
+			zone.mem.set_read_window(0, 0);
+			throw;
+		}
 
 		// only the blocks and the pool are part of the image
 		zone.mem.release_region(0);
