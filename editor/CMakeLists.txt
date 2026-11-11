@@ -15,7 +15,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
-set(DEPS ${ROOT}/deps)
+# third party sources; override when the submodules are checked out somewhere else ( -DDEPS=<path> )
+set(DEPS ${ROOT}/deps CACHE PATH "folder with imgui, ImGuizmo, rapidjson")
 
 # ---- native libraries
 set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
