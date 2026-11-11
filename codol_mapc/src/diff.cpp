@@ -164,21 +164,34 @@ namespace codol::mapc
 		}
 
 		// exact contents of a brush: plane points and material of every face
+		// What makes two brushes the same brush: the planes of their faces and the materials on them. Not the
+		// three points a plane is written with: an editor that moves a brush and moves it back writes other
+		// points for the same plane.
 		std::string brush_key(const edit::brush& b)
 		{
+			const auto rounded = [](const double v, const double step)
+			{
+				const double r = std::floor(v / step + 0.5) * step;
+				return r == 0.0 ? 0.0 : r;		// no "-0"
+			};
+
 			std::string key;
 			char text[256];
 			for (const auto& f : b.faces)
 			{
-				std::snprintf(text, sizeof(text), "%.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g ", f.points[0].x, f.points[0].y, f.points[0].z, f.points[1].x, f.points[1].y,
-					f.points[1].z, f.points[2].x, f.points[2].y, f.points[2].z);
+				edit::plane p;
+				if (!edit::plane_from_points(f.points[0], f.points[1], f.points[2], p))
+				{
+					p = {};
+				}
+				std::snprintf(text, sizeof(text), "%.4f %.4f %.4f %.2f ", rounded(p.normal.x, 1e-4), rounded(p.normal.y, 1e-4), rounded(p.normal.z, 1e-4),
+					rounded(p.dist, 0.01));
 				key += text;
 				key += f.texture.material;
 				key += ';';
 			}
 			return key;
 		}
-
 		// sub model of an entity: 0 worldspawn, N for "model" "*N", -1 otherwise
 		int sub_model_of(const edit::entity& e)
 		{

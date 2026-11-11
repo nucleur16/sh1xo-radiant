@@ -243,7 +243,9 @@ namespace codol::mapc
 				}
 				const std::string& name = source->faces[f].texture.material;
 				int material = solid_material;
-				if (const auto it = material_index.find(name); it != material_index.end())
+				// the editor names world materials "wc/<name>", the clip map without the prefix
+				const std::string_view bare = name.rfind("wc/", 0) == 0 ? std::string_view(name).substr(3) : std::string_view(name);
+				if (const auto it = material_index.find(bare); it != material_index.end())
 				{
 					material = it->second;
 				}

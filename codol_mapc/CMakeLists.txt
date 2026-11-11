@@ -75,6 +75,10 @@ target_link_libraries(codol_mapc PUBLIC codol_zone codol_edit PRIVATE codol_view
 codol_mapc_options(codol_mapc)
 
 if(CODOL_MAPC_BUILD_TOOLS)
+	# The tool is called codol_mapc.exe, and the linker names an exe's import library after it: codol_mapc.lib,
+	# the default name of the static library. With both names equal the build never relinks the tool when the
+	# library changes, so the library gets a name of its own.
+	set_target_properties(codol_mapc PROPERTIES OUTPUT_NAME codol_mapc_lib)
 	add_executable(codol_mapc_tool tools/codol_mapc.cpp)
 	set_target_properties(codol_mapc_tool PROPERTIES OUTPUT_NAME codol_mapc)
 	target_link_libraries(codol_mapc_tool PRIVATE codol_mapc)

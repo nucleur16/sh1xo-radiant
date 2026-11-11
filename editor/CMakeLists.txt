@@ -83,3 +83,13 @@ set_source_files_properties(${DEPS}/ImGuizmo/ImGuizmo.cpp PROPERTIES SKIP_PRECOM
 
 target_link_libraries(CoDOLRadiant PRIVATE imgui codol_edit codol_zone codol_render codol_view
 	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm comdlg32)
+
+# ---- the map compiler, next to the editor ( File > Compile map )
+set(CODOL_MAPC_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+set(CODOL_MAPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(CODOL_MAPC_BUILD_VIEWTOOL OFF CACHE BOOL "" FORCE)
+add_subdirectory(${ROOT}/codol_mapc ${CMAKE_BINARY_DIR}/codol_mapc)
+set_target_properties(codol_mapc_tool PROPERTIES
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
+	RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
+add_dependencies(CoDOLRadiant codol_mapc_tool)

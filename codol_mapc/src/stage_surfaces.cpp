@@ -257,7 +257,7 @@ namespace codol::mapc
 			for (const auto& [material, parts] : by_material)
 			{
 				// the template: the nearest static surface with this material ( a lightmapped one when there is one )
-				const std::string wanted = "wc/" + material;
+				const std::string wanted = material.rfind("wc/", 0) == 0 ? material : "wc/" + material;
 				int like = -1;
 				double best = 0;
 				for (std::uint32_t s = 0; s < static_now; s++)
@@ -464,7 +464,7 @@ namespace codol::mapc
 		}
 		for (const std::string& name : undrawn)
 		{
-			ctx.warn("surfaces: no surface of the world uses material 'wc/" + name + "' ( it would have to be added to GfxWorld.materialMemory and sorted in ); faces with it "
+			ctx.warn("surfaces: no surface of the world uses material '" + (name.rfind("wc/", 0) == 0 ? name : "wc/" + name) + "' ( it would have to be added to GfxWorld.materialMemory and sorted in ); faces with it "
 				"collide but are not drawn");
 		}
 		if (!ctx.rep.surfaces_added)

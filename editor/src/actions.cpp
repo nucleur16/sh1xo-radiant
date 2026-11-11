@@ -8,6 +8,8 @@
 #include "ui.hpp"
 
 #include <commdlg.h>
+#include <atomic>
+#include <optional>
 
 // Editing actions, shortcuts, the File / Edit menus and the console commands. Every action is one function that
 // the menu, the key and the command call - so anything the mouse can do can be driven ( and tested ) by command.
@@ -489,6 +491,190 @@ namespace editor::ui
 		}
 	}
 
+	// Compile: apply the edits of the map to its fastfile ( codol_mapc ). The map is saved first; the compiler runs
+	// as its own process so the editor stays usable, and writes <editor>\compiled\<map>.ff. Nothing is copied into
+	// the game: that is the user's step.
+	void compile_map()
+	{
+		auto& s = get_scene();
+
+		if (!s.open || s.map_name.empty())
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "Compile", "Open a map of the game first.");
+			return;
+		}
+
+		static std::atomic_bool busy = false;
+		if (busy)
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "Compile", "A compile is still running.");
+			return;
+		}
+
+		if (!save())
+		{
+			return;
+		}
+
+		const auto base_dir = std::filesystem::u8path(utils::fs::get_basepath());
+		const auto install = std::filesystem::u8path(components::codol_game::install_path());
+		const auto tool = base_dir / "codol_mapc.exe";
+
+		// the patch folder overrides the base zones, like in the game
+		std::filesystem::path base;
+		std::error_code ec;
+
+		for (const auto& dir : { install / "client_shipRetail" / "patch", install / "client_shipRetail" / "chinese" })
+		{
+			if (const auto candidate = dir / (s.map_name + ".ff"); std::filesystem::is_regular_file(candidate, ec))
+			{
+				base = candidate;
+				break;
+			}
+		}
+
+		std::filesystem::path exe = install / "C1.exe";
+		if (!std::filesystem::is_regular_file(exe, ec))
+		{
+			exe = install / "codoMP_client_shipRetail.exe";
+		}
+
+		std::string problem;
+		if (!std::filesystem::is_regular_file(tool, ec)) { problem = "codol_mapc.exe is not next to the editor."; }
+		else if (base.empty()) { problem = "The install has no " + s.map_name + ".ff."; }
+		else if (!std::filesystem::is_regular_file(exe, ec)) { problem = "The client exe was not found in the install."; }
+
+		if (!problem.empty())
+		{
+			game::printf_to_console("^1[CoDOL] compile: %s\n", problem.c_str());
+			ImGui::Toast(ImGuiToastType_Error, "Compile", problem.c_str(), 6000);
+			return;
+		}
+
+		const auto out_dir = base_dir / "compiled";
+		std::filesystem::create_directories(out_dir, ec);
+
+		const auto out = out_dir / (s.map_name + ".ff");
+		const auto report = out_dir / (s.map_name + ".report.txt");
+		const auto map_file = s.map_file;
+		const auto map_name = s.map_name;
+
+		// The editor keeps the brushes of brush models ( "model" "*N" ) in world space; the zone, and so the
+		// compiler, has them relative to their entity. The compiler gets a copy of the map with those brushes
+		// taken back, so that only real edits count as changes.
+		const auto compile_map_file = out_dir / (map_name + ".compile.map");
+		{
+			edit::document copy;
+			std::string error;
+
+			if (!copy.load_map_text(s.doc.save_map_text(), error))
+			{
+				game::printf_to_console("^1[CoDOL] compile: %s\n", error.c_str());
+				return;
+			}
+
+			std::vector<object_id> ids(copy.entities().begin(), copy.entities().end());
+
+			for (const auto id : ids)
+			{
+				const auto* e = copy.find_entity(id);
+				if (!e || e->children.empty() || e->value("model").rfind('*', 0) != 0)
+				{
+					continue;
+				}
+
+				const edit::vec3 origin = e->origin(), angles = e->angles();
+				if (origin == edit::vec3{} && angles == edit::vec3{})
+				{
+					continue;
+				}
+
+				const auto keep = [e](const char* key) { const auto* v = e->find(key); return v ? std::optional<std::string>(*v) : std::nullopt; };
+				const auto old_origin = keep("origin"), old_angles = keep("angles"), old_angle = keep("angle");
+
+				// the inverse of "rotate by the angles, then move to the origin"
+				const auto forward = edit::transform::rotation_angles({}, angles);
+				edit::transform back;
+
+				for (int r = 0; r < 3; r++)
+				{
+					for (int c = 0; c < 3; c++)
+					{
+						back.m[r][c] = forward.m[c][r];
+					}
+				}
+
+				copy.select(id);
+				copy.transform_selection(edit::transform::concat(edit::transform::translation(origin * -1.0), back), "Place");
+
+				const auto restore = [&](const char* key, const std::optional<std::string>& value)
+				{
+					if (value)
+					{
+						copy.set_key(id, key, *value);
+					}
+					else if (copy.find_entity(id)->find(key))
+					{
+						copy.remove_key(id, key);
+					}
+				};
+
+				restore("origin", old_origin);
+				restore("angles", old_angles);
+				restore("angle", old_angle);
+			}
+
+			if (!copy.save_map_file(compile_map_file, error))
+			{
+				game::printf_to_console("^1[CoDOL] compile: %s\n", error.c_str());
+				return;
+			}
+		}
+
+		// the state right after the import, saved next to the map
+		auto baseline = map_file;
+		baseline.replace_extension(".codol_base.map");
+
+		std::string command_line = "\"" + to_utf8(tool) + "\" --base \"" + to_utf8(base) + "\" --exe \"" + to_utf8(exe)
+			+ "\" --map \"" + to_utf8(compile_map_file) + "\" --out \"" + to_utf8(out) + "\" --report \"" + to_utf8(report) + "\"";
+
+		if (std::filesystem::is_regular_file(baseline, ec))
+		{
+			command_line += " --baseline \"" + to_utf8(baseline) + "\"";
+		}
+
+		busy = true;
+		game::printf_to_console("[CoDOL] compiling %s ..\n", map_name.c_str());
+		ImGui::Toast(ImGuiToastType_Info, "Compile", ("Compiling " + map_name + " ..").c_str());
+
+		std::thread([command_line, out, report, map_name, base_dir]
+		{
+			std::string output;
+			const int code = components::codol_game::run_command(command_line, to_utf8(base_dir), output);
+
+			components::codol_game::post_to_gui([code, output, out, report, map_name]
+			{
+				busy = false;
+
+				if (!output.empty())
+				{
+					game::printf_to_console("%s\n", output.c_str());
+				}
+
+				if (code != 0)
+				{
+					game::printf_to_console("^1[CoDOL] compile of %s failed ( exit code %d )\n", map_name.c_str(), code);
+					ImGui::Toast(ImGuiToastType_Error, "Compile", ("Compile of " + map_name + " failed, see the console.").c_str(), 8000);
+					return;
+				}
+
+				game::printf_to_console("[CoDOL] compiled: %s\n[CoDOL] report: %s\n", to_utf8(out).c_str(), to_utf8(report).c_str());
+				game::printf_to_console("[CoDOL] the fastfile is unsigned: a patched client ( Kernel33.dll ) or the dedicated server loads it from the install's zone folder under the map's name. Keep a copy of the original.\n");
+				ImGui::Toast(ImGuiToastType_Success, "Compile", ("Compiled " + map_name + ": compiled\\" + map_name + ".ff").c_str(), 8000);
+			});
+		}).detach();
+	}
+
 	void close_map(const bool force)
 	{
 		guarded(force, [] { get_scene().close(); });
@@ -590,6 +776,18 @@ namespace editor::ui
 		}
 
 		ImGui::MenuItem("Load the map on the server after the export", nullptr, &maps->m_reload_after_export);
+
+		ImGui::Separator();
+
+		if (ImGui::MenuItem("Compile map to a fastfile", nullptr, false, s.open))
+		{
+			compile_map();
+		}
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("Saves the map and applies its edits ( entities, static models, collision brushes, new brush faces )\nto the map's fastfile. The result is written to compiled\\<map>.ff next to the editor.");
+		}
 	}
 
 	void draw_edit_menu()
@@ -797,6 +995,11 @@ namespace editor::ui
 		command::register_command("map_export", [](args_t args)
 		{
 			if (need_map()) { export_entities(args.size() > 1 && args[1] == "reload"); }
+		});
+
+		command::register_command("map_compile", [](args_t)
+		{
+			if (need_map()) { compile_map(); }
 		});
 
 		command::register_command("map_close", [](args_t) { close_map(true); });
