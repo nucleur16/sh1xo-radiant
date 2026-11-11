@@ -131,7 +131,9 @@ namespace codol::script
 
 	bool animtree::contains(std::string_view anim) const
 	{
-		return lookup.contains(to_lower(anim));
+		// every tree has an implicit root node the engine names "root" ( self clearAnim( %root, 0 ) )
+		const auto key = to_lower(anim);
+		return key == "root" || lookup.contains(key);
 	}
 
 	bool parse_animtree(std::string_view text, animtree& out)

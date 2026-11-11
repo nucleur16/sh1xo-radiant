@@ -127,6 +127,7 @@ static void test_animtree()
 	CHECK(tree.contains("PT_STAND_SHOOT"));
 	CHECK(tree.contains("pb_stand_alert"));
 	CHECK(!tree.contains("inline"));
+	CHECK(tree.contains("root") && tree.contains("ROOT")); // implicit root of every tree
 	CHECK(tree.nodes[0].group && tree.nodes[0].name == "code" && tree.nodes[0].depth == 0);
 	CHECK(tree.nodes[3].name == "pt_stand_shoot" && tree.nodes[3].depth == 3 && !tree.nodes[3].group && tree.nodes[3].line == 6);
 	CHECK(tree.nodes[5].name == "pb_stand_alert" && tree.nodes[5].depth == 2 && tree.nodes[tree.nodes[5].parent].name == "main");
