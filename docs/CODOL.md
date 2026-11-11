@@ -68,7 +68,6 @@ The DLL hooks `bin/IW3xRadiant.exe` (a patched `CoD4Radiant.exe`, in `assets/bin
 | Game xanim list | `codol_xanim_list` | Optional text file, one animation name per line (first word of each line). |
 | CoDOL install folder | `codol_install_path` | Contains `main\` and `client_shipRetail\`. Used to list map zones and to find the rcon password file. |
 | Start command | `codol_launch_cmd` | Script or exe that starts the client (Launch button of the Game window). |
-| Asset tool | `codol_asset_tool` | `CodolSoundDumper.exe` of CODOL-AssetExplorer. Only needed to import entities straight from a `.ff`. |
 | Client process names | `codol_client_exe` | Used to find the game window. Default `codoMP_client_shipRetail.exe;C1.exe`. |
 | Port | `codol_rcon_port` | UDP port of the local server. Default 17733. |
 | Password file | `codol_rcon_password_file` | File with the rcon password. If empty: `<install>\main\k33_rcon.txt`, `<install>\p2p\state\native_server_rcon.txt`, `<install>\CODOL\1.1.1.13_server\alpha0022\native_server_rcon.txt`, `%CODOL_STATE_DIR%\native_server_rcon.txt`. |
@@ -123,7 +122,7 @@ radiant today.
 
 1. **Import** a map: pick a zone of the install or an override that already exists in the script
    folder, or give a file (`.ff`, a decrypted `.zone`, a `.d3dbsp.ents`, plain entity text).
-   A `.ff` is decrypted with the asset tool. The map is written to
+   The map is written to
    `<root>/map_source/codol/<map>.map` and opened.
    - A `.ff` is read natively: `bin/codol_mapconv.exe` loads the fastfile with the zone reader
      (`codol_zone/`, key taken from the client exe in the install folder) and writes the map: all
@@ -217,7 +216,7 @@ radiant map, a `.zone` has its `MapEnts` header validated against its entity str
 
 In the order that unlocks the most:
 
-1. **Brush texture alignment.** The asset tool recovers the UVs of brush sides from the coincident
+1. **Brush texture alignment.** The UVs of brush sides can be recovered from the coincident
    render surface (in its Cast export); read them and write the texture projection of each side.
 2. **Non-brush geometry.** Terrain, patches and decals from the render world as reference models.
 3. **Map compile.** Get an IW3 to IW4 map converter (iw3x-port) and wire the chain: `cod4map` /
