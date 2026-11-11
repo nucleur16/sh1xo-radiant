@@ -155,8 +155,8 @@ What this gives and what it does not:
   result again: all other assets have the same content and pointer structure ( `asset_fingerprint` ).
 * The non pointer bytes of a chunk are carried as they are. The editor knows the *structure* of every asset type,
   not the *meaning* of its fields. Assets can therefore be kept, removed, added or taken whole from another zone for
-  every type, but changed field by field only where an explicit edit exists: MapEnts ( entity string ), RawFile,
-  StringTable.
+  every type, but changed field by field only where an explicit edit exists ( MapEnts entity string, RawFile,
+  StringTable ) - or through the typed editing below, by a caller that knows the layout.
 
 ### API
 
@@ -209,6 +209,43 @@ Rules of the edits:
   not a string, e.g. a material that was nested in an earlier xmodel of the donor - fails with a message that names
   the other asset. Assets that are self contained in the donor ( their materials are by-name references `,name` or
   nested in the asset itself ) copy cleanly.
+
+### Typed editing
+
+For asset types without a dedicated edit the graph can be changed directly, by whoever knows the layout
+( `codol_mapc` does this for the GfxWorld and the clip map ). Every piece of stream data - one read of the loaders: a
+header, an array, a string - has a `ZoneDataId` that stays valid across edits, and a pointer field is a target, not a
+number:
+
+```cpp
+ZoneDataId header = editor.header_data(zone.find_asset(type, name));        // an asset header ( pool address )
+ZoneDataId array  = editor.data_at(view.raw.someArray);                     // the data behind a pointer of the loaded zone
+ZoneTarget t      = editor.pointer_at(header, offsetof(c1::clipMap_t, planes));   // .kind, .data, .offset, .asset
+std::vector<ZonePointer> inside = editor.data_pointers(array);              // the zone pointers the array holds
+std::vector<ZoneInbound> users  = editor.pointers_to(array);                // every pointer of the zone into it
+
+editor.set_data(array, newBytes, newPointers);       // any length; pointers given as { offset, ZoneTarget }
+editor.patch_value(header, offsetof(.., count), n);  // a field; refused when it touches a pointer field
+editor.set_pointer(id, offset, ZoneTarget::to_data(other, 8 * k));          // or to_asset( index ), or plain 0 / 0xFFFFFFFF
+editor.insert_data(anchor, /*after*/ true, bytes, pointers, created);       // new data where the loader will read it
+editor.remove_data(id);  editor.remove_data_range(first, last);             // refused while something points into it
+```
+
+* An array "resize" is `set_data` + `patch_value` of its count; a pointer that was null and now has data is
+  `set_pointer( .., {}, 0xFFFFFFFF )` + `insert_data` at the place the loader reads it ( behind the struct, after the
+  data of the pointer fields in front of it ).
+* Nothing is checked against a schema - there is none. `write()` runs the game's loaders over the graph and fails,
+  writing nothing, when it does not fit: a count that does not match its array, data the loaders do not ask for,
+  a pointer that says "follows" without data. The message names the asset and the piece.
+* `set_data` refuses to cut off data another pointer leads into; `remove_data_range` removes a whole sub tree ( a
+  nested asset ) with its pointers, script string fields and loader allocations, and refuses when anything outside
+  still uses it.
+* `zone()` stays the zone as loaded; addresses always mean that zone. To read what an edit made, write and load.
+* Loader allocations that are pointer targets ( `DB_InsertPointer` slots, runtime arrays ) are keyed by the piece of
+  data they follow, so inserting or removing data elsewhere in the asset does not move them. An allocation directly
+  at the place of an insertion cannot be told from one that belongs to the new data ( it is taken to come first ).
+* `asset_fingerprint` of an asset changes when an asset it points *into* gains or loses a piece of data ( the
+  position of the target in that asset's stream order is part of the hash ), although the asset itself is the same.
 
 Limits, stated plainly:
 
@@ -320,7 +357,8 @@ on, plus 7 more ( 5 in backup sub folders of `chinese`, 2 in `temp` ). 89 are si
 | an xmodel taken from mp_dome into mp_killhouse_sh ( script strings translated ) | same fingerprint as in the donor, same bone names, same `codol_zonetool model` output; all assets of the base unchanged |
 | a zone from nothing ( 2 rawfiles, 1 string table ) | loads, contents equal, `--verify` identical |
 | the string table hash against the 120 tables of common_gametype_mp | every cell equal |
-| unit tests ( `ctest` ): deflate against the inflater at 5 levels, editor on a synthetic zone, the cases above | 927 checks, 0 failed, Win32 and x64 |
+| unit tests ( `ctest` ): deflate against the inflater at 5 levels, editor on a synthetic zone, the cases above, typed editing ( the entity string replaced with `set_data` + `patch_value` gives the bytes `set_map_ents` gives; refused edits; insert + remove gives the original ) | 969 checks, 0 failed, Win32 and x64 |
+| `codol_mapc` ( static models, brushes, surfaces of mp_rust and mp_killhouse_sh edited through the typed editing ) | see `codol_mapc/README.md` |
 
 Time for `--roundtrip-all`: 133 s for everything ( load, capture, write, deflate, file write, read back ).
 

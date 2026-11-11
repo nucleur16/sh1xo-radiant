@@ -11,6 +11,7 @@
 //   options: --no-models --no-entity-models --no-brush-models --no-world --no-shadows --no-cell-culling --wireframe --lods
 //            --ex ( IDirect3DDevice9Ex )  --pool managed|default  --skip-mips n  --time seconds
 //            --keep-edit-data ( options::keep_pick_geometry + keep_light_grid )  --extra-zones a,b
+//            --zone-dirs "a;b" ( folders searched for <zone>.ff before the install's, e.g. the output of codol_mapc )
 //   render:  --box "x,y,z,half:material;.."  --model "x,y,z[,yaw[,scale]]:xmodel;.."  --hide "kind,id;.."
 //
 // The tool owns a hidden window and a Direct3D 9 device created the way the editor's host creates its own
@@ -276,6 +277,23 @@ namespace
 		if (const auto skip = args.value("skip-mips"))
 		{
 			options.texture_skip_mips = std::atoi(skip->c_str());
+		}
+		if (const auto dirs = args.value("zone-dirs"))
+		{
+			// folders searched for <zone>.ff ahead of the install's own ( a compiled map that is not in the install )
+			std::size_t at = 0;
+			while (at <= dirs->size())
+			{
+				std::size_t end = dirs->find(';', at);
+				end = end == std::string::npos ? dirs->size() : end;
+				if (end > at)
+				{
+					options.zone_directories.push_back(dirs->substr(at, end - at));
+				}
+				at = end + 1;
+			}
+			options.zone_directories.push_back(options.game_root / "client_shipRetail" / "chinese");
+			options.zone_directories.push_back(options.game_root / "client_shipRetail" / "patch");
 		}
 		options.load_model_lods = args.flag("lods");
 		options.keep_pick_geometry = options.keep_light_grid = edit || args.flag("keep-edit-data");

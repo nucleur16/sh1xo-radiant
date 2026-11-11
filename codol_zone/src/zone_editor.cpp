@@ -98,8 +98,22 @@ namespace codol::zone
 			std::uint64_t source = 0;		// offset into Unit::blob or Unit::local
 			std::uint32_t size = 0;			// strings include the terminator
 			std::uint32_t dest = 0;			// where the source zone's loader put it; 0 for data that was never loaded
+			std::uint32_t loadedSize = 0;	// size it had there
 			bool string = false;			// read by Load_XStringData
 			bool local = false;
+			bool foreign = false;			// taken from another zone: `dest` is an address of that zone
+			std::uint32_t uid = 0;			// ZoneDataId, assigned when the typed editing API first needs it
+		};
+
+		// An allocation the loader makes without reading the stream, as a relocation target: the g_streamPos store
+		// number `sub` after `anchor` chunks of the unit were read. Anchoring at the chunk keeps the key valid when
+		// chunks are inserted or removed elsewhere in the unit.
+		struct AllocKey
+		{
+			std::uint32_t anchor = 0;
+			std::uint32_t sub = 0;
+			bool operator<(const AllocKey& o) const { return anchor != o.anchor ? anchor < o.anchor : sub < o.sub; }
+			bool operator==(const AllocKey& o) const { return anchor == o.anchor && sub == o.sub; }
 		};
 
 		struct Unit
@@ -111,7 +125,7 @@ namespace codol::zone
 			std::vector<std::uint8_t> local;						// edited / new data
 			std::vector<Chunk> chunks;
 			std::vector<Reloc> relocs;								// sorted by ( chunk, offset )
-			std::vector<std::uint32_t> allocOrdinals;				// g_streamPos stores ( counted per unit ) that are relocation targets
+			std::vector<AllocKey> allocOrdinals;					// g_streamPos stores that are relocation targets
 			std::vector<ScriptRef> scriptRefs;						// u16 fields that hold an index into the zone's script string list
 			bool modified = false;
 
@@ -203,7 +217,8 @@ namespace codol::zone
 			};
 			struct CAlloc
 			{
-				std::uint32_t start, size, unit, ordinal;
+				std::uint32_t start, size, unit;
+				AllocKey key;
 			};
 
 			VMem* mem = nullptr;
@@ -219,7 +234,7 @@ namespace codol::zone
 			std::uint32_t pendingEntry = NONE;						// array entry the loader read last
 			std::vector<std::pair<std::uint32_t, std::uint32_t>> headers;	// pooled header -> chunk id
 			std::uint32_t unit = 0;
-			std::uint32_t posWrites = 0;
+			std::uint32_t posWrites = 0;							// g_streamPos stores since the last chunk of the unit
 			std::uint32_t lastDest = 0, lastSize = 0;
 
 			explicit Capture(const std::vector<std::uint8_t>& s) : stream(s) {}
@@ -260,6 +275,7 @@ namespace codol::zone
 				chunks.push_back(CChunk{ dest, size, offset, unit, string });
 				lastDest = dest;
 				lastSize = size;
+				posWrites = 0;
 				const int b = Zone::block_of(dest);
 				if (b == 0)
 				{
@@ -352,13 +368,13 @@ namespace codol::zone
 			{
 				if (address == G_STREAM_POS)
 				{
-					const std::uint32_t ordinal = posWrites++;
+					const AllocKey key{ static_cast<std::uint32_t>(chunks.size()) - unitFirst.back(), posWrites++ };
 					const std::uint8_t* p = mem->peek(address, 4);
 					const std::uint32_t old = p ? get_u32(p) : 0;
 					const int b = Zone::block_of(old);
 					if (b >= 1 && value > old && Zone::block_of(value) == b && !(old == lastDest && value - old == lastSize))
 					{
-						allocs[b].push_back(CAlloc{ old, value - old, unit, ordinal });
+						allocs[b].push_back(CAlloc{ old, value - old, unit, key });
 					}
 					return;
 				}
@@ -502,6 +518,7 @@ namespace codol::zone
 					relocCount++;
 				}
 				newDest[u][i] = dest;
+				posWrites = 0;
 				if (u == 0 && i == tableChunk)
 				{
 					tableDest = dest;
@@ -553,9 +570,9 @@ namespace codol::zone
 				{
 					return;
 				}
-				const std::uint32_t ordinal = posWrites++;
+				const AllocKey key{ i, posWrites++ };
 				const auto& ordinals = order[u]->allocOrdinals;
-				if (allocCursor < ordinals.size() && ordinals[allocCursor] == ordinal)
+				if (allocCursor < ordinals.size() && ordinals[allocCursor] == key)
 				{
 					const std::uint8_t* p = mem.peek(address, 4);
 					allocNew[u][allocCursor++] = p ? get_u32(p) : 0;
@@ -644,6 +661,227 @@ namespace codol::zone
 			return found;
 		}
 
+		// ---- typed editing: data ids ----------------------------------------------------------
+		struct Located
+		{
+			Unit* unit = nullptr;
+			std::size_t asset = npos;		// npos: the root
+			std::uint32_t index = 0;
+		};
+		struct AddressEntry
+		{
+			zaddr dest;
+			std::uint32_t size, uid;
+		};
+		std::uint32_t nextUid = 1;
+		bool idsDirty = true;
+		std::size_t idsTotal = 0;
+		std::unordered_map<std::uint32_t, std::pair<std::size_t, std::uint32_t>> hints;		// uid -> asset ( npos: root ), chunk index
+		std::vector<AddressEntry> addressIndex;
+		bool addressIndexed = false;
+
+		Unit* unit_of(const std::size_t asset) const
+		{
+			return asset == npos ? root.get() : asset < assets.size() ? assets[asset].get() : nullptr;
+		}
+
+		void ensure_ids()
+		{
+			std::size_t total = root->chunks.size();
+			for (const auto& unit : assets)
+			{
+				total += unit->chunks.size();
+			}
+			if (!idsDirty && total == idsTotal)
+			{
+				return;
+			}
+			bool fresh = false;
+			for_each_unit(root, assets, [&](Unit& unit, std::size_t)
+			{
+				for (Chunk& c : unit.chunks)
+				{
+					if (!c.uid)
+					{
+						c.uid = nextUid++;
+						fresh = true;
+					}
+				}
+			});
+			idsDirty = false;
+			idsTotal = total;
+			if (fresh)
+			{
+				addressIndexed = false;
+			}
+		}
+
+		bool locate(const ZoneDataId id, Located& out)
+		{
+			if (!id)
+			{
+				return false;
+			}
+			ensure_ids();
+			const auto check = [&](const std::size_t asset, const std::uint32_t index)
+			{
+				Unit* unit = unit_of(asset);
+				if (unit && index < unit->chunks.size() && unit->chunks[index].uid == id)
+				{
+					out = Located{ unit, asset, index };
+					return true;
+				}
+				return false;
+			};
+			if (const auto it = hints.find(id); it != hints.end() && check(it->second.first, it->second.second))
+			{
+				return true;
+			}
+			for (std::size_t a = 0; a <= assets.size(); a++)
+			{
+				const std::size_t asset = a == assets.size() ? npos : a;
+				const Unit* unit = unit_of(asset);
+				for (std::uint32_t k = 0; k < unit->chunks.size(); k++)
+				{
+					if (unit->chunks[k].uid == id)
+					{
+						hints[id] = { asset, k };
+						return check(asset, k);
+					}
+				}
+			}
+			return false;
+		}
+
+		std::uint32_t uid_of(const Unit* unit, const std::uint32_t index)
+		{
+			ensure_ids();
+			return unit && index < unit->chunks.size() ? unit->chunks[index].uid : 0;
+		}
+
+		ZoneTarget target_of(const Reloc& reloc)
+		{
+			ZoneTarget t;
+			t.offset = reloc.targetOffset;
+			t.raw = reloc.raw;
+			switch (reloc.kind)
+			{
+			case TargetKind::CHUNK:
+				t.kind = ZoneTarget::Kind::data;
+				t.data = uid_of(reloc.unit, reloc.index);
+				break;
+			case TargetKind::ALLOC:
+				t.kind = ZoneTarget::Kind::allocation;
+				t.asset = index_of(reloc.unit);
+				t.allocation = reloc.index;
+				break;
+			case TargetKind::SLOT:
+				t.kind = ZoneTarget::Kind::asset;
+				t.asset = index_of(reloc.unit);
+				break;
+			default:
+				t.kind = ZoneTarget::Kind::raw;
+				break;
+			}
+			return t;
+		}
+
+		Status make_reloc(const ZoneTarget& t, Reloc& reloc)
+		{
+			reloc.targetOffset = t.offset;
+			reloc.raw = t.raw;
+			switch (t.kind)
+			{
+			case ZoneTarget::Kind::data:
+			{
+				Located at;
+				if (!locate(t.data, at))
+				{
+					return Status::error("a pointer names data that is not part of the zone");
+				}
+				if (t.offset > at.unit->chunks[at.index].size)
+				{
+					return Status::error("a pointer leads past the end of its target");
+				}
+				reloc.kind = TargetKind::CHUNK;
+				reloc.unit = at.unit;
+				reloc.index = at.index;
+				return {};
+			}
+			case ZoneTarget::Kind::asset:
+				if (t.asset >= assets.size() || t.offset + 4 > XASSET_SIZE)
+				{
+					return Status::error("a pointer names an asset that is not part of the zone");
+				}
+				reloc.kind = TargetKind::SLOT;
+				reloc.unit = assets[t.asset].get();
+				return {};
+			case ZoneTarget::Kind::allocation:
+			{
+				const Unit* unit = unit_of(t.asset);
+				if (!unit || t.allocation >= unit->allocOrdinals.size())
+				{
+					return Status::error("a pointer names a loader allocation that does not exist");
+				}
+				reloc.kind = TargetKind::ALLOC;
+				reloc.unit = unit;
+				reloc.index = t.allocation;
+				return {};
+			}
+			case ZoneTarget::Kind::raw:
+				reloc.kind = TargetKind::RAW;
+				return {};
+			default:
+				return Status::error("a pointer without a target");
+			}
+		}
+
+		// relocations of other chunks follow a chunk that was inserted at / removed from `at` of `unit`
+		void renumber(Unit& unit, const std::uint32_t at, const bool inserted)
+		{
+			const auto shift = [&](std::uint32_t& index)
+			{
+				if (inserted ? index >= at : index > at)
+				{
+					index += inserted ? 1u : 0xFFFFFFFFu;
+				}
+			};
+			for (Reloc& reloc : unit.relocs)
+			{
+				shift(reloc.chunk);
+			}
+			for (ScriptRef& ref : unit.scriptRefs)
+			{
+				shift(ref.chunk);
+			}
+			for_each_unit(root, assets, [&](Unit& other, std::size_t)
+			{
+				for (Reloc& reloc : other.relocs)
+				{
+					if (reloc.unit == &unit && reloc.kind == TargetKind::CHUNK)
+					{
+						shift(reloc.index);
+					}
+				}
+			});
+			for (auto& [pooled, where] : headerChunk)
+			{
+				if (where.first == &unit)
+				{
+					shift(where.second);
+				}
+			}
+			// an allocation that follows the chunks before `at` stays with them
+			for (AllocKey& key : unit.allocOrdinals)
+			{
+				if (key.anchor > at)
+				{
+					key.anchor += inserted ? 1u : 0xFFFFFFFFu;
+				}
+			}
+			hints.clear();
+		}
+
 		void build(const Capture& capture);
 		Status import(const ZoneEditor::Impl& donor, std::size_t donorIndex, std::size_t position, bool withDependencies,
 			std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& strings, std::shared_ptr<Unit>& imported) const;
@@ -722,6 +960,7 @@ namespace codol::zone
 				chunk.source = c.source;
 				chunk.size = c.size;
 				chunk.dest = c.dest;
+				chunk.loadedSize = c.size;
 				chunk.string = c.string;
 				indexInUnit[gid] = static_cast<std::uint32_t>(unit->chunks.size());
 				unit->chunks.push_back(chunk);
@@ -773,7 +1012,8 @@ namespace codol::zone
 		{
 			Unit* unit;
 			std::size_t reloc;
-			std::uint32_t allocUnit, ordinal;
+			std::uint32_t allocUnit;
+			AllocKey ordinal;
 		};
 		std::vector<Pending> allocTargets;
 		for (const Capture::CReloc& cr : relocs)
@@ -820,8 +1060,8 @@ namespace codol::zone
 						reloc.kind = TargetKind::ALLOC;
 						reloc.unit = units[it->unit].get();
 						reloc.targetOffset = target - it->start;
-						allocTargets.push_back(Pending{ &unit, unit.relocs.size(), it->unit, it->ordinal });
-						units[it->unit]->allocOrdinals.push_back(it->ordinal);
+						allocTargets.push_back(Pending{ &unit, unit.relocs.size(), it->unit, it->key });
+						units[it->unit]->allocOrdinals.push_back(it->key);
 						stats.toAllocation++;
 					}
 				}
@@ -1045,7 +1285,15 @@ namespace codol::zone
 					number(static_cast<std::uint32_t>(reloc.unit->type));
 					bytes(reloc.unit->name.data(), reloc.unit->name.size());
 				}
-				number(reloc.kind == TargetKind::ALLOC ? reloc.unit->allocOrdinals[reloc.index] : reloc.index);
+				if (reloc.kind == TargetKind::ALLOC)
+					{
+						number(reloc.unit->allocOrdinals[reloc.index].anchor);
+						number(reloc.unit->allocOrdinals[reloc.index].sub);
+					}
+					else
+					{
+						number(reloc.index);
+					}
 				number(reloc.targetOffset);
 			}
 			for (; s < unit.scriptRefs.size() && unit.scriptRefs[s].chunk == k; s++)
@@ -1155,6 +1403,7 @@ namespace codol::zone
 		{
 			return Status::error("no zone loaded");
 		}
+		impl_->idsDirty = true;
 		if (name.empty() || contents.size() > 0x7FFFFFF0u)
 		{
 			return Status::error("rawfile needs a name and less than 2 GiB of contents");
@@ -1257,6 +1506,7 @@ namespace codol::zone
 		{
 			return Status::error("no zone loaded");
 		}
+		impl_->idsDirty = true;
 		if (name.empty() || table.columns < 0 || table.rows < 0
 			|| table.cells.size() != static_cast<std::size_t>(table.columns) * static_cast<std::size_t>(table.rows))
 		{
@@ -1331,6 +1581,8 @@ namespace codol::zone
 			return Status::error(describe(*unit, index) + " cannot be removed: " + who + " points to it or shares data with it");
 		}
 		impl_->assets.erase(impl_->assets.begin() + static_cast<std::ptrdiff_t>(index));
+		impl_->idsDirty = true;
+		impl_->hints.clear();
 		return {};
 	}
 	catch (const std::exception& e)
@@ -1347,6 +1599,11 @@ namespace codol::zone
 		auto unit = std::make_shared<Unit>(source);
 		unit->modified = true;
 		imported = unit;
+		for (Chunk& c : unit->chunks)
+		{
+			c.foreign = true;	// its addresses and data ids are those of the donor zone
+			c.uid = 0;
+		}
 
 		// script string indices: the donor's list -> this zone's list, which grows by what it does not have
 		for (const ScriptRef& ref : unit->scriptRefs)
@@ -1487,6 +1744,8 @@ namespace codol::zone
 		}
 		impl_->assets = std::move(working);
 		impl_->set_script_strings(strings);
+		impl_->idsDirty = true;
+		impl_->hints.clear();
 		return {};
 	}
 	catch (const std::exception& e)
@@ -1542,6 +1801,591 @@ namespace codol::zone
 		}
 		impl_->assets = std::move(working);
 		impl_->set_script_strings(strings);
+		impl_->idsDirty = true;
+		impl_->hints.clear();
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	// ---- typed, relocation aware editing ------------------------------------------------------------
+
+	ZoneDataId ZoneEditor::data_at(const zaddr address, std::uint32_t* offset) const
+	{
+		if (!loaded() || Zone::block_of(address) < 1)
+		{
+			return 0;
+		}
+		Impl& impl = *impl_;
+		impl.ensure_ids();
+		if (!impl.addressIndexed)
+		{
+			impl.addressIndex.clear();
+			for_each_unit(impl.root, impl.assets, [&](const Unit& unit, std::size_t)
+			{
+				for (const Chunk& c : unit.chunks)
+				{
+					if (!c.foreign && c.loadedSize && Zone::block_of(c.dest) >= 1)
+					{
+						impl.addressIndex.push_back(Impl::AddressEntry{ c.dest, c.loadedSize, c.uid });
+					}
+				}
+			});
+			std::sort(impl.addressIndex.begin(), impl.addressIndex.end(), [](const Impl::AddressEntry& a, const Impl::AddressEntry& b) { return a.dest < b.dest; });
+			impl.addressIndexed = true;
+		}
+		auto it = std::upper_bound(impl.addressIndex.begin(), impl.addressIndex.end(), address,
+			[](const zaddr a, const Impl::AddressEntry& e) { return a < e.dest; });
+		if (it == impl.addressIndex.begin())
+		{
+			return 0;
+		}
+		--it;
+		if (address - it->dest >= it->size)
+		{
+			return 0;
+		}
+		Impl::Located at;
+		if (!impl.locate(it->uid, at))
+		{
+			return 0;		// removed since
+		}
+		if (offset)
+		{
+			*offset = address - it->dest;
+		}
+		return it->uid;
+	}
+
+	ZoneDataId ZoneEditor::header_data(const zaddr pooledHeader) const
+	{
+		if (!loaded())
+		{
+			return 0;
+		}
+		const auto it = impl_->headerChunk.find(pooledHeader);
+		if (it == impl_->headerChunk.end() || (it->second.first != impl_->root.get() && impl_->index_of(it->second.first) == npos))
+		{
+			return 0;
+		}
+		return impl_->uid_of(it->second.first, it->second.second);
+	}
+
+	ZoneDataId ZoneEditor::asset_data(const std::size_t asset, const std::uint32_t index) const
+	{
+		if (!loaded() || asset >= impl_->assets.size())
+		{
+			return 0;
+		}
+		return impl_->uid_of(impl_->assets[asset].get(), index);
+	}
+
+	bool ZoneEditor::data_info(const ZoneDataId id, ZoneDataInfo& info) const
+	{
+		info = {};
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return false;
+		}
+		const Chunk& c = at.unit->chunks[at.index];
+		info.id = id;
+		info.asset = at.asset;
+		info.index = at.index;
+		info.size = c.size;
+		info.address = c.foreign ? 0 : c.dest;
+		info.string = c.string;
+		const auto& relocs = at.unit->relocs;
+		for (auto it = std::lower_bound(relocs.begin(), relocs.end(), at.index, [](const Reloc& r, const std::uint32_t chunk) { return r.chunk < chunk; });
+			it != relocs.end() && it->chunk == at.index; ++it)
+		{
+			info.pointers++;
+		}
+		return true;
+	}
+
+	std::span<const std::uint8_t> ZoneEditor::data_bytes(const ZoneDataId id) const
+	{
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return {};
+		}
+		const Chunk& c = at.unit->chunks[at.index];
+		return { at.unit->data(c), c.size };
+	}
+
+	std::vector<ZonePointer> ZoneEditor::data_pointers(const ZoneDataId id) const
+	{
+		std::vector<ZonePointer> out;
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return out;
+		}
+		const auto& relocs = at.unit->relocs;
+		auto it = std::lower_bound(relocs.begin(), relocs.end(), at.index, [](const Reloc& r, const std::uint32_t chunk) { return r.chunk < chunk; });
+		for (; it != relocs.end() && it->chunk == at.index; ++it)
+		{
+			out.push_back(ZonePointer{ it->offset, impl_->target_of(*it) });
+		}
+		return out;
+	}
+
+	ZoneTarget ZoneEditor::pointer_at(const ZoneDataId id, const std::uint32_t offset) const
+	{
+		Impl::Located at;
+		if (loaded() && impl_->locate(id, at))
+		{
+			const auto& relocs = at.unit->relocs;
+			const auto it = std::lower_bound(relocs.begin(), relocs.end(), std::make_pair(at.index, offset),
+				[](const Reloc& r, const std::pair<std::uint32_t, std::uint32_t>& key) { return r.chunk != key.first ? r.chunk < key.first : r.offset < key.second; });
+			if (it != relocs.end() && it->chunk == at.index && it->offset == offset)
+			{
+				return impl_->target_of(*it);
+			}
+		}
+		return {};
+	}
+
+	std::vector<ZoneInbound> ZoneEditor::pointers_to(const ZoneDataId id) const
+	{
+		std::vector<ZoneInbound> out;
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return out;
+		}
+		for_each_unit(impl_->root, impl_->assets, [&](const Unit& other, std::size_t)
+		{
+			for (const Reloc& reloc : other.relocs)
+			{
+				if (reloc.unit == at.unit && reloc.kind == TargetKind::CHUNK && reloc.index == at.index)
+				{
+					out.push_back(ZoneInbound{ other.chunks[reloc.chunk].uid, reloc.offset, reloc.targetOffset });
+				}
+			}
+		});
+		return out;
+	}
+
+	namespace
+	{
+		// the relocations of chunk `index` of `unit` are replaced by `fresh` ( sorted by offset )
+		void replace_relocs(Unit& unit, const std::uint32_t index, std::vector<Reloc> fresh)
+		{
+			auto& relocs = unit.relocs;
+			const auto first = std::lower_bound(relocs.begin(), relocs.end(), index, [](const Reloc& r, const std::uint32_t chunk) { return r.chunk < chunk; });
+			auto last = first;
+			while (last != relocs.end() && last->chunk == index)
+			{
+				++last;
+			}
+			const auto at = relocs.erase(first, last);
+			relocs.insert(at, fresh.begin(), fresh.end());
+		}
+	}
+
+	Status ZoneEditor::set_data(const ZoneDataId id, const std::span<const std::uint8_t> bytes, const std::span<const ZonePointer> pointers)
+	try
+	{
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return Status::error("no such data");
+		}
+		Unit& unit = *at.unit;
+		const Chunk& chunk = unit.chunks[at.index];
+		if (bytes.empty() || bytes.size() > 0xFFFFFFF0u)
+		{
+			return Status::error("data cannot be empty ( remove it instead )");
+		}
+		if (chunk.string && (bytes.back() != 0 || std::find(bytes.begin(), bytes.end() - 1, std::uint8_t{ 0 }) != bytes.end() - 1))
+		{
+			return Status::error("a string has to end with its terminator and hold no other");
+		}
+		for (const ScriptRef& ref : unit.scriptRefs)
+		{
+			if (ref.chunk == at.index)
+			{
+				return Status::error("the data holds script string indices and cannot be replaced");
+			}
+		}
+		const std::uint32_t size = static_cast<std::uint32_t>(bytes.size());
+		std::string problem;
+		for_each_unit(impl_->root, impl_->assets, [&](const Unit& other, const std::size_t k)
+		{
+			for (const Reloc& reloc : other.relocs)
+			{
+				if (problem.empty() && reloc.unit == &unit && reloc.kind == TargetKind::CHUNK && reloc.index == at.index && reloc.targetOffset > size
+					&& !(&other == &unit && reloc.chunk == at.index))
+				{
+					problem = describe(other, k) + " points past the new end of the data";
+				}
+			}
+		});
+		if (!problem.empty())
+		{
+			return Status::error(problem);
+		}
+		std::vector<Reloc> fresh;
+		fresh.reserve(pointers.size());
+		for (const ZonePointer& p : pointers)
+		{
+			if (p.offset > size || size - p.offset < 4 || (!fresh.empty() && p.offset < fresh.back().offset + 4))
+			{
+				return Status::error("the pointer fields have to lie inside the data, in ascending order");
+			}
+			Reloc reloc;
+			reloc.chunk = at.index;
+			reloc.offset = p.offset;
+			if (const Status s = impl_->make_reloc(p.target, reloc); !s)
+			{
+				return s;
+			}
+			if (reloc.kind == TargetKind::CHUNK && reloc.unit == &unit && reloc.index == at.index && reloc.targetOffset > size)
+			{
+				return Status::error("a pointer leads past the end of its target");
+			}
+			fresh.push_back(reloc);
+		}
+		replace_relocs(unit, at.index, std::move(fresh));
+		unit.set_data(at.index, bytes);
+		unit.modified = true;
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::patch_data(const ZoneDataId id, const std::uint32_t offset, const std::span<const std::uint8_t> bytes)
+	try
+	{
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return Status::error("no such data");
+		}
+		Unit& unit = *at.unit;
+		const Chunk& chunk = unit.chunks[at.index];
+		if (offset > chunk.size || bytes.size() > chunk.size - offset)
+		{
+			return Status::error("the patch does not lie inside the data");
+		}
+		for (const Reloc& reloc : unit.relocs)
+		{
+			if (reloc.chunk == at.index && reloc.offset < offset + bytes.size() && offset < reloc.offset + 4)
+			{
+				return Status::error("the patch touches a zone pointer field ( use set_pointer )");
+			}
+		}
+		if (!bytes.empty())
+		{
+			std::memcpy(unit.make_local(at.index) + offset, bytes.data(), bytes.size());
+			unit.modified = true;
+		}
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::set_pointer(const ZoneDataId id, const std::uint32_t offset, const ZoneTarget& target, const std::uint32_t plain)
+	try
+	{
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return Status::error("no such data");
+		}
+		Unit& unit = *at.unit;
+		const Chunk& chunk = unit.chunks[at.index];
+		if (offset > chunk.size || chunk.size - offset < 4)
+		{
+			return Status::error("the pointer field does not lie inside the data");
+		}
+		Reloc fresh;
+		fresh.chunk = at.index;
+		fresh.offset = offset;
+		if (target.kind != ZoneTarget::Kind::none)
+		{
+			if (const Status s = impl_->make_reloc(target, fresh); !s)
+			{
+				return s;
+			}
+		}
+		auto& relocs = unit.relocs;
+		auto it = std::lower_bound(relocs.begin(), relocs.end(), fresh,
+			[](const Reloc& a, const Reloc& b) { return a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset; });
+		for (auto k = it; k != relocs.end() && k->chunk == at.index && k->offset < offset + 4; ++k)
+		{
+			if (k->offset != offset)
+			{
+				return Status::error("the field overlaps another zone pointer field");
+			}
+		}
+		if (it != relocs.begin() && std::prev(it)->chunk == at.index && std::prev(it)->offset + 4 > offset)
+		{
+			return Status::error("the field overlaps another zone pointer field");
+		}
+		const bool exists = it != relocs.end() && it->chunk == at.index && it->offset == offset;
+		if (target.kind == ZoneTarget::Kind::none)
+		{
+			if (exists)
+			{
+				relocs.erase(it);
+			}
+			put_u32(unit.make_local(at.index) + offset, plain);
+		}
+		else
+		{
+			if (exists)
+			{
+				*it = fresh;
+			}
+			else
+			{
+				relocs.insert(it, fresh);
+			}
+			put_u32(unit.make_local(at.index) + offset, fresh.raw);
+		}
+		unit.modified = true;
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::insert_data(const ZoneDataId anchor, const bool after, const std::span<const std::uint8_t> bytes,
+		const std::span<const ZonePointer> pointers, ZoneDataId& created, const bool string)
+	try
+	{
+		created = 0;
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(anchor, at))
+		{
+			return Status::error("no such data");
+		}
+		if (at.asset == npos)
+		{
+			return Status::error("data cannot be added to the XAssetList");
+		}
+		if (bytes.empty() || (string && bytes.back() != 0))
+		{
+			return Status::error("data cannot be empty, a string has to end with its terminator");
+		}
+		Unit& unit = *at.unit;
+		const std::uint32_t index = at.index + (after ? 1u : 0u);
+		Chunk c;
+		c.string = string;
+		c.uid = impl_->nextUid++;
+		unit.chunks.insert(unit.chunks.begin() + index, c);
+		unit.set_data(index, bytes);
+		impl_->renumber(unit, index, true);
+		impl_->idsTotal++;
+		unit.modified = true;
+		created = c.uid;
+		if (!pointers.empty())
+		{
+			if (const Status s = set_data(created, bytes, pointers); !s)
+			{
+				unit.chunks.erase(unit.chunks.begin() + index);
+				impl_->renumber(unit, index, false);
+				impl_->idsTotal--;
+				created = 0;
+				return s;
+			}
+		}
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::remove_data(const ZoneDataId id)
+	try
+	{
+		Impl::Located at;
+		if (!loaded() || !impl_->locate(id, at))
+		{
+			return Status::error("no such data");
+		}
+		if (at.asset == npos)
+		{
+			return Status::error("data of the XAssetList cannot be removed");
+		}
+		Unit& unit = *at.unit;
+		std::string problem;
+		for_each_unit(impl_->root, impl_->assets, [&](const Unit& other, const std::size_t k)
+		{
+			for (const Reloc& reloc : other.relocs)
+			{
+				if (problem.empty() && reloc.unit == &unit && reloc.kind == TargetKind::CHUNK && reloc.index == at.index
+					&& !(&other == &unit && reloc.chunk == at.index))
+				{
+					problem = describe(other, k) + " still points into the data";
+				}
+			}
+		});
+		if (!problem.empty())
+		{
+			return Status::error(problem);
+		}
+		for (const ScriptRef& ref : unit.scriptRefs)
+		{
+			if (ref.chunk == at.index)
+			{
+				return Status::error("the data holds script string indices and cannot be removed");
+			}
+		}
+		for (const auto& [pooled, where] : impl_->headerChunk)
+		{
+			if (where.first == &unit && where.second == at.index)
+			{
+				return Status::error("an asset header cannot be removed");
+			}
+		}
+		replace_relocs(unit, at.index, {});
+		unit.chunks.erase(unit.chunks.begin() + at.index);
+		impl_->renumber(unit, at.index, false);
+		impl_->idsTotal--;
+		unit.modified = true;
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::remove_data_range(const ZoneDataId first, const ZoneDataId last)
+	try
+	{
+		Impl::Located from, to;
+		if (!loaded() || !impl_->locate(first, from) || !impl_->locate(last, to))
+		{
+			return Status::error("no such data");
+		}
+		if (from.asset == npos || from.unit != to.unit || from.index > to.index)
+		{
+			return Status::error("a range has to lie inside one asset, first piece first");
+		}
+		Unit& unit = *from.unit;
+		const std::uint32_t a = from.index, b = to.index, count = b - a + 1;
+		const auto inside = [&](const Unit& holder, const std::uint32_t chunk) { return &holder == &unit && chunk >= a && chunk <= b; };
+
+		// allocations: one that only pointers of the range lead to goes with it, any other one has to be outside
+		auto& keys = unit.allocOrdinals;
+		std::vector<std::uint8_t> used_inside(keys.size(), 0), used_outside(keys.size(), 0);
+		std::string problem;
+		for_each_unit(impl_->root, impl_->assets, [&](const Unit& other, const std::size_t k)
+		{
+			for (const Reloc& reloc : other.relocs)
+			{
+				if (reloc.unit != &unit || reloc.kind == TargetKind::RAW || reloc.kind == TargetKind::SLOT)
+				{
+					continue;
+				}
+				const bool in_range = inside(other, reloc.chunk);
+				if (reloc.kind == TargetKind::ALLOC)
+				{
+					(in_range ? used_inside : used_outside)[reloc.index] = 1;
+				}
+				else if (!in_range && reloc.index >= a && reloc.index <= b && problem.empty())
+				{
+					problem = describe(other, k) + " points into the data";
+				}
+			}
+		});
+		if (!problem.empty())
+		{
+			return Status::error(problem);
+		}
+		std::vector<std::uint32_t> remap(keys.size(), 0);
+		std::vector<AllocKey> kept;
+		for (std::size_t k = 0; k < keys.size(); k++)
+		{
+			const bool boundary = keys[k].anchor == a || keys[k].anchor == b + 1;
+			const bool within = keys[k].anchor > a && keys[k].anchor <= b;
+			if (used_inside[k] && !used_outside[k] && (within || boundary))
+			{
+				remap[k] = NONE;
+				continue;
+			}
+			if (within || (boundary && used_outside[k]))
+			{
+				return Status::error("a loader allocation at the range is used by data outside of it");
+			}
+			if (used_inside[k] && !within && !boundary)
+			{
+				// pointers of the range to an allocation elsewhere go away with the range; the allocation stays
+			}
+			remap[k] = static_cast<std::uint32_t>(kept.size());
+			AllocKey key = keys[k];
+			if (key.anchor > b)
+			{
+				key.anchor -= count;
+			}
+			kept.push_back(key);
+		}
+
+		// from here on nothing fails
+		for (auto it = impl_->headerChunk.begin(); it != impl_->headerChunk.end();)
+		{
+			it = it->second.first == &unit && it->second.second >= a && it->second.second <= b ? impl_->headerChunk.erase(it) : std::next(it);
+		}
+		std::erase_if(unit.relocs, [&](const Reloc& r) { return r.chunk >= a && r.chunk <= b; });
+		std::erase_if(unit.scriptRefs, [&](const ScriptRef& r) { return r.chunk >= a && r.chunk <= b; });
+		unit.chunks.erase(unit.chunks.begin() + a, unit.chunks.begin() + b + 1);
+		const auto shift = [&](std::uint32_t& index)
+		{
+			if (index > b)
+			{
+				index -= count;
+			}
+		};
+		for (Reloc& reloc : unit.relocs)
+		{
+			shift(reloc.chunk);
+		}
+		for (ScriptRef& ref : unit.scriptRefs)
+		{
+			shift(ref.chunk);
+		}
+		for_each_unit(impl_->root, impl_->assets, [&](Unit& other, std::size_t)
+		{
+			for (Reloc& reloc : other.relocs)
+			{
+				if (reloc.unit != &unit)
+				{
+					continue;
+				}
+				if (reloc.kind == TargetKind::CHUNK)
+				{
+					shift(reloc.index);
+				}
+				else if (reloc.kind == TargetKind::ALLOC)
+				{
+					reloc.index = remap[reloc.index];
+				}
+			}
+		});
+		for (auto& [pooled, where] : impl_->headerChunk)
+		{
+			if (where.first == &unit)
+			{
+				shift(where.second);
+			}
+		}
+		keys = std::move(kept);
+		impl_->hints.clear();
+		impl_->idsTotal -= count;
+		unit.modified = true;
 		return {};
 	}
 	catch (const std::exception& e)
