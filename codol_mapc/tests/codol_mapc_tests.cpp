@@ -1,6 +1,6 @@
 // codol_mapc_tests: acceptance tests of the map compiler against the 1.1.1.13 install.
 //
-//   codol_mapc_tests [--game <install>] [--out <folder>] [--maps a,b] [--only identity|entities|models|brushes|all]
+//   codol_mapc_tests [--game <install>] [--out <folder>] [--maps a,b] [--only identity|entities|models|brushes|trees|donor|all]
 //
 // For every map ( mp_rust, mp_killhouse_sh ) and stage an edited map is made with codol_edit from the import of the
 // shipped fast file, compiled, and the result is checked by reading it back:
@@ -8,11 +8,14 @@
 //     it has in the base zone;
 //   - with document::import_fastfile: the import of the compiled zone equals the edited document;
 //   - for collision, with the trace of codol_mapc/trace.hpp ( this library's own walk of the clip map, not the
-//     game's code ).
+//     game's code );
+//   - with codol_mapc/server_check.hpp: the collision data of every compiled zone is what a dedicated server
+//     ( CoD4x_Server ) decodes and accepts, and the leaf brush trees it reads are sound.
 // The edited maps, the compiled fast files and a views.txt with camera arguments for codol_viewtool are left in
 // <out>/<map>/<stage>/ ; tests/run_e2e.ps1 renders them.
 
 #include "codol_mapc/mapc.hpp"
+#include "codol_mapc/server_check.hpp"
 #include "codol_mapc/trace.hpp"
 #include "codol_zone/assets.hpp"
 
@@ -23,6 +26,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <tuple>
 
 using namespace codol;
 namespace c1 = codol::c1;
@@ -43,6 +47,7 @@ namespace
 		std::vector<std::uint8_t> base_zone;
 		std::string baseline_text;
 		std::map<std::string, std::uint64_t> fingerprints;		// "type:name" -> fingerprint in the base zone
+		mapc::server_collision_info server_base;				// the base zone's collision data as a dedicated server reads it
 	};
 
 	std::string asset_key(const zone::EditorAsset& a)
@@ -274,6 +279,184 @@ namespace
 		return out;
 	}
 
+	// ---- the collision data as a dedicated server reads it ( codol_mapc/server_check.hpp ) ---------------------
+	// CoD4x_Server decodes the clip map from the zone stream with a reader of its own and refuses what is not shaped
+	// like the output of the game's map compiler. check_server_collision is that reading; what it returns is walked
+	// here once more, the way the engine walks the trees.
+
+	struct tree_stats
+	{
+		bool sound = true;					// every tree ends in lists, children lie behind their node, nothing leads outside
+		int trees = 0;						// leafs and brush models with brush contents
+		int rootless = 0;					// .. whose root is node 0
+		int brushes_outside = 0;			// ( leaf, brush ) pairs where the brush's box does not touch the leaf's box
+		int contents_missing = 0;			// lists whose node lacks contents of a brush it names
+		int unreachable = 0;				// brushes no tree names
+		std::multiset<std::tuple<int, float, float>> splits;	// axis, dist, range of every node that splits
+		int splits_with_list = 0;
+	};
+
+	tree_stats walk_trees(const mapc::server_collision_info& info)
+	{
+		tree_stats out;
+		std::vector<std::uint8_t> reached(info.brush_list.size(), 0);
+		for (const mapc::server_leaf_brush_node& n : info.nodes)
+		{
+			if (n.count <= 0 && n.child[0])
+			{
+				out.splits.insert({ n.axis, n.dist, n.range });
+				out.splits_with_list += n.count < 0;
+			}
+		}
+		const auto walk_leaf = [&](const mapc::server_leaf& leaf)
+		{
+			if (!leaf.brush_contents)
+			{
+				return;
+			}
+			out.trees++;
+			if (!leaf.node)
+			{
+				out.rootless++;
+				return;
+			}
+			std::vector<std::pair<std::uint32_t, int>> stack{ { leaf.node, 0 } };
+			int steps = 0;
+			while (!stack.empty())
+			{
+				const auto [n, depth] = stack.back();
+				stack.pop_back();
+				if (n >= info.nodes.size() || depth > 256 || ++steps > 200000)
+				{
+					out.sound = false;
+					return;
+				}
+				const mapc::server_leaf_brush_node& node = info.nodes[n];
+				if (node.count > 0)
+				{
+					int all = 0;
+					for (const std::uint16_t b : node.brushes)
+					{
+						if (b >= info.brush_list.size())
+						{
+							out.sound = false;
+							return;
+						}
+						reached[b] = 1;
+						const mapc::server_brush& brush = info.brush_list[b];
+						all |= brush.contents;
+						bool touches = true;
+						for (int k = 0; k < 3; k++)
+						{
+							touches = touches && brush.mins[k] <= leaf.maxs[k] + 0.01f && brush.maxs[k] >= leaf.mins[k] - 0.01f;
+						}
+						out.brushes_outside += !touches;
+					}
+					out.contents_missing += (all & ~node.contents) != 0;
+					continue;
+				}
+				// a split: both children lie behind it; with -1 the node behind it is entered as well
+				if (!node.child[0] || node.child[0] <= n || node.child[1] <= n)
+				{
+					out.sound = false;
+					return;
+				}
+				if (node.count < 0)
+				{
+					stack.push_back({ n + 1, depth + 1 });
+				}
+				stack.push_back({ node.child[0], depth + 1 });
+				stack.push_back({ node.child[1], depth + 1 });
+			}
+		};
+		for (const mapc::server_leaf& leaf : info.leaf_list)
+		{
+			walk_leaf(leaf);
+		}
+		for (const mapc::server_leaf& leaf : info.model_list)
+		{
+			walk_leaf(leaf);
+		}
+		out.unreachable = static_cast<int>(std::count(reached.begin(), reached.end(), std::uint8_t{ 0 }));
+		return out;
+	}
+
+	// brushes the trees of `leafs` name ( the leaf brush trees walked from their roots )
+	std::set<int> brushes_below(const mapc::server_collision_info& info, const std::uint32_t root)
+	{
+		std::set<int> out;
+		std::vector<std::uint32_t> stack{ root };
+		int steps = 0;
+		while (!stack.empty() && ++steps < 200000)
+		{
+			const std::uint32_t n = stack.back();
+			stack.pop_back();
+			if (!n || n >= info.nodes.size())
+			{
+				continue;
+			}
+			const mapc::server_leaf_brush_node& node = info.nodes[n];
+			if (node.count > 0)
+			{
+				out.insert(node.brushes.begin(), node.brushes.end());
+				continue;
+			}
+			if (node.count < 0)
+			{
+				stack.push_back(n + 1);
+			}
+			stack.push_back(node.child[0]);
+			stack.push_back(node.child[1]);
+		}
+		return out;
+	}
+
+	// The server finds the XModel of a collision static model by the place its pointer leads to: the model field of
+	// the GfxWorld instance that carries the model ( "follows" in the stream ), or the header slot of a top level
+	// xmodel. A pointer to anything else ( an instance that itself only points at the model ) is a model it cannot
+	// resolve, and the map is refused. Returns how many entries do not lead to such a place.
+	int unresolvable_collision_models(const zone::ZoneEditor& editor)
+	{
+		const zone::Zone& z = editor.zone();
+		zone::ClipMapView clip;
+		const std::uint32_t address = zone::first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP);
+		if (!address || !zone::read_clip_map(z, address, clip))
+		{
+			return -1;
+		}
+		if (!clip.raw.numStaticModels)
+		{
+			return 0;
+		}
+		const zone::ZoneDataId list = editor.data_at(clip.raw.staticModelList);
+		if (!list)
+		{
+			return -1;
+		}
+		int bad = 0;
+		for (std::uint32_t i = 0; i < clip.raw.numStaticModels; i++)
+		{
+			const zone::ZoneTarget t = editor.pointer_at(list, 76 * i);
+			bool ok = false;
+			if (t.kind == zone::ZoneTarget::Kind::asset)
+			{
+				ok = t.asset < editor.asset_count() && editor.asset(t.asset).type == c1::ASSET_TYPE_XMODEL && t.offset == 8;
+			}
+			else if (t.kind == zone::ZoneTarget::Kind::data)
+			{
+				const auto bytes = editor.data_bytes(t.data);
+				std::uint32_t value = 0;
+				if (t.offset + 4 <= bytes.size())
+				{
+					std::memcpy(&value, bytes.data() + t.offset, 4);
+				}
+				ok = value >= 0xFFFFFFFEu;		// the model is stored right there
+			}
+			bad += !ok;
+		}
+		return bad;
+	}
+
 	bool load_fixture(fixture& f, const std::filesystem::path& game, const std::filesystem::path& out, const std::string& map)
 	{
 		f.map = map;
@@ -309,6 +492,19 @@ namespace
 		{
 			f.fingerprints[asset_key(editor.asset(i))] = content_fingerprint(editor, i);
 		}
+		// the shipped zone as a dedicated server reads it: accepted, and the measure for every compiled zone
+		{
+			std::string why;
+			const bool accepted = mapc::check_server_collision(f.base_zone, why, &f.server_base);
+			CHECK_MSG(accepted, why);
+			const tree_stats stats = walk_trees(f.server_base);
+			CHECK(stats.sound);
+			CHECK(unresolvable_collision_models(editor) == 0);
+			std::printf("  base zone as a server reads it: %u brushes, %u leaf brush nodes ( %zu split ), %u + %u leaf brushes, %d trees ( %d without a root ), "
+				"%d brushes outside their leaf's box, %d lists whose node lacks contents, %d brushes in no tree\n", f.server_base.brushes, f.server_base.leaf_brush_nodes,
+				stats.splits.size(), f.server_base.leaf_brushes, f.server_base.inline_leaf_brushes, stats.trees, stats.rootless, stats.brushes_outside, stats.contents_missing,
+				stats.unreachable);
+		}
 		return true;
 	}
 
@@ -324,6 +520,9 @@ namespace
 		bool imported_ok = false;
 		std::set<std::string> changed;		// assets whose fingerprint differs from the base zone, "+" in front of new ones
 	};
+
+	struct compiled;
+	void check_server_view(const fixture& f, const compiled& c);
 
 	void compile_case(const fixture& f, const std::string& stage, const edit::document& edited, compiled& out, const bool reimport = true, const mapc::options& opts = {})
 	{
@@ -370,6 +569,48 @@ namespace
 			out.imported_ok = out.imported.import_fastfile(out.fastfile, f.exe, error);
 			CHECK_MSG(out.imported_ok, error);
 		}
+		check_server_view(f, out);
+	}
+
+	// every compiled zone: a dedicated server takes its collision data, and the leaf brush trees are still trees
+	void check_server_view(const fixture& f, const compiled& c)
+	{
+		mapc::server_collision_info info;
+		std::string why;
+		const bool accepted = mapc::check_server_collision(c.zone_bytes, why, &info);
+		CHECK_MSG(accepted, why);
+		if (!accepted)
+		{
+			return;
+		}
+		const mapc::report& r = c.report;
+		const bool brushes_changed = r.brushes_added + r.brushes_replaced + r.brushes_deleted > 0;
+		const tree_stats base = walk_trees(f.server_base), now = walk_trees(info);
+		CHECK(now.sound);
+		CHECK(info.map == f.map);
+		CHECK(info.brushes == f.server_base.brushes + static_cast<std::uint32_t>(r.brushes_added) - static_cast<std::uint32_t>(r.brushes_deleted));
+		CHECK(info.leafs == f.server_base.leafs && info.sub_models == f.server_base.sub_models);
+		// no split was invented and none lost its numbers ( a zone pointer and a float can look alike to a writer )
+		CHECK(std::includes(base.splits.begin(), base.splits.end(), now.splits.begin(), now.splits.end()));
+		CHECK(now.rootless <= base.rootless);
+		CHECK(now.brushes_outside <= base.brushes_outside);
+		CHECK(now.contents_missing <= base.contents_missing);
+		CHECK(now.unreachable <= base.unreachable);
+		if (!brushes_changed)
+		{
+			CHECK(now.splits == base.splits && now.splits_with_list == base.splits_with_list);
+			CHECK(info.leaf_brush_nodes == f.server_base.leaf_brush_nodes && info.leaf_brushes == f.server_base.leaf_brushes);
+			CHECK(info.brush_sides == f.server_base.brush_sides && info.brush_edges == f.server_base.brush_edges && info.planes == f.server_base.planes);
+		}
+		else
+		{
+			std::printf("    as a server reads it: %u brushes, %u sides, %u edge bytes, %u leaf brush nodes ( %zu split, %d of them with brushes on the split ), %u + %u leaf brushes; "
+				"%d trees, %d brushes outside their leaf's box ( base %d ), %d brushes in no tree ( base %d )\n", info.brushes, info.brush_sides, info.brush_edges, info.leaf_brush_nodes,
+				now.splits.size(), now.splits_with_list, info.leaf_brushes, info.inline_leaf_brushes, now.trees, now.brushes_outside, base.brushes_outside, now.unreachable, base.unreachable);
+		}
+		// static models with collision: the server has to find the XModel of every entry
+		CHECK(unresolvable_collision_models(c.editor) == 0);
+		CHECK(info.static_models == f.server_base.static_models + static_cast<std::uint32_t>(r.clip_models_added) - static_cast<std::uint32_t>(r.clip_models_deleted));
 	}
 
 	std::string camera_line(const std::string& what, const edit::vec3& target, const edit::vec3& from)
@@ -1043,9 +1284,19 @@ namespace
 			if (e && !e->is_worldspawn() && e->value("model").size() > 1 && e->value("model")[0] == '*' && e->children.size() == 1 && edited.find_brush(e->children[0])
 				&& !edited.find_brush(e->children[0])->opaque)
 			{
-				model_brush = e->children[0];
-				sub_model = std::atoi(std::string(e->value("model").substr(1)).c_str());
-				break;
+				// the first one that stops a player ( a server run can show the edit with a player sized trace ), else the first
+				const int number = std::atoi(std::string(e->value("model").substr(1)).c_str());
+				const bool stops_players = number > 0 && static_cast<std::size_t>(number) < base_clip.subModels.size()
+					&& (base_clip.subModels[static_cast<std::size_t>(number)].leaf.brushContents & 0x10011) != 0;
+				if (model_brush == edit::no_object || stops_players)
+				{
+					model_brush = e->children[0];
+					sub_model = number;
+				}
+				if (stops_players)
+				{
+					break;
+				}
 			}
 		}
 		edit::bounds model_box_after;
@@ -1081,6 +1332,14 @@ namespace
 		views += "# material: " + material + "\n# box: " + edit::format_key_vec3(box_mins) + " .. " + edit::format_key_vec3(box_maxs) + "\n# wedge: " + edit::format_key_vec3(wedge_mins)
 			+ " .. " + edit::format_key_vec3(wedge_maxs) + "\n# moved up 160: brush at " + edit::format_key_vec3(to_move.box.center()) + "\n# deleted: brush at "
 			+ edit::format_key_vec3(to_delete.box.center()) + "\n";
+		views += "# moved brush: box " + edit::format_key_vec3(to_move.box.mins) + " .. " + edit::format_key_vec3(to_move.box.maxs) + "\n# deleted brush: box "
+			+ edit::format_key_vec3(to_delete.box.mins) + " .. " + edit::format_key_vec3(to_delete.box.maxs) + "\n";
+		if (model_brush != edit::no_object)
+		{
+			// in the map file the brush of a brush model stands where its entity is
+			views += "# brush model *" + std::to_string(sub_model) + ": its brush made 8 taller, now " + edit::format_key_vec3(model_box_after.mins) + " .. "
+				+ edit::format_key_vec3(model_box_after.maxs) + "\n";
+		}
 
 		compiled c;
 		compile_case(f, "brushes", edited, c);
@@ -1213,6 +1472,41 @@ namespace
 			CHECK(tree.brush >= 0 && tree.brush == all.brush && std::fabs(tree.fraction - all.fraction) < 1e-5f);
 			CHECK(std::fabs(a[2] + tree.fraction * (b[2] - a[2]) - static_cast<float>(model_box_after.maxs.z)) < 0.01f);
 			std::printf("    brush model *%d: top of its brush at %.2f, was %.2f\n", sub_model, a[2] + tree.fraction * (b[2] - a[2]), old.leaf.bounds.midPoint[2] + old.leaf.bounds.halfSize[2]);
+		}
+
+		// (e) the same through the server's reading of the stream: the new brushes are in a tree of a leaf whose box
+		// holds them, the brush model's tree names its brush
+		{
+			mapc::server_collision_info info;
+			std::string why;
+			CHECK_MSG(mapc::check_server_collision(c.zone_bytes, why, &info), why);
+			const auto leafs_naming = [&](const int brush)
+			{
+				int found = 0;
+				if (brush < 0 || static_cast<std::size_t>(brush) >= info.brush_list.size())
+				{
+					return found;
+				}
+				const mapc::server_brush& b = info.brush_list[static_cast<std::size_t>(brush)];
+				for (const mapc::server_leaf& leaf : info.leaf_list)
+				{
+					bool holds = leaf.brush_contents != 0 && (leaf.brush_contents & b.contents) == b.contents;
+					for (int k = 0; k < 3 && holds; k++)
+					{
+						holds = b.mins[k] >= leaf.mins[k] - 0.01f && b.maxs[k] <= leaf.maxs[k] + 0.01f;
+					}
+					found += holds && brushes_below(info, leaf.node).count(brush) != 0;
+				}
+				return found;
+			};
+			CHECK(leafs_naming(box_index) > 0);
+			CHECK(leafs_naming(wedge_index) > 0);
+			CHECK(leafs_naming(moved_index) > 0);
+			if (model_brush != edit::no_object && sub_model > 0 && static_cast<std::size_t>(sub_model) < info.model_list.size())
+			{
+				const int index = brush_with_box(clip, model_box_after);
+				CHECK(index >= 0 && brushes_below(info, info.model_list[static_cast<std::size_t>(sub_model)].node) == std::set<int>{ index });
+			}
 		}
 
 		// stage 4: the render geometry of the new world brushes
@@ -1348,6 +1642,175 @@ namespace
 	}
 }
 
+namespace
+{
+	// ---- stage 3 once more: the leaf brush trees under many edits ------------------------------------------------
+	// Deletes every `every`-th world brush around the spawn point ( lists run empty, splits lose a side; with every
+	// brush gone whole trees go ) and adds boxes on a grid through the map and above it ( lists grow, trees that split
+	// get brushes on their root's split, leafs left without brushes get a tree of their own ). Collision only.
+	void test_brush_trees(const fixture& f, const int every, const std::string& stage)
+	{
+		std::printf("  leaf brush trees under many edits ( every %s brush around the spawn point deleted )\n", every == 1 ? "" : "third");
+		edit::document edited;
+		std::string error;
+		CHECK_MSG(edited.load_map_text(f.baseline_text, error), error);
+		const edit::vec3 spawn = spawn_origin(edited);
+		const edit::entity* world = edited.find_entity(edited.worldspawn());
+		CHECK(world != nullptr);
+		if (!world)
+		{
+			return;
+		}
+		// a material that is solid for a player ( a name can stand for several clip materials: all of them )
+		std::set<std::string> solid_names, other_names;
+		{
+			zone::Zone base;
+			zone::ClipMapView base_clip;
+			std::vector<std::uint8_t> copy = f.base_zone;
+			CHECK(base.load(std::move(copy), f.map));
+			CHECK(zone::read_clip_map(base, zone::first_asset(base, c1::ASSET_TYPE_CLIPMAP_MP), base_clip));
+			for (const auto& m : base_clip.materials)
+			{
+				((m.contents & 1) != 0 && m.name.find("clip") == std::string_view::npos ? solid_names : other_names).insert(std::string(m.name));
+			}
+			for (const std::string& name : other_names)
+			{
+				solid_names.erase(name);
+			}
+		}
+		std::string material;
+		std::vector<edit::object_id> to_delete;
+		std::vector<edit::bounds> deleted_boxes;
+		int seen = 0;
+		for (const edit::object_id child : world->children)
+		{
+			const edit::brush* b = edited.find_brush(child);
+			if (!b || b->opaque)
+			{
+				continue;
+			}
+			if (material.empty() && !b->faces.empty() && solid_names.count(b->faces[0].texture.material))
+			{
+				material = b->faces[0].texture.material;
+			}
+			const edit::bounds box = edited.object_bounds(child);
+			const edit::vec3 d = box.center() - spawn;
+			if (edit::dot(d, d) < 1200.0 * 1200.0 && seen++ % every == 0)
+			{
+				to_delete.push_back(child);
+				deleted_boxes.push_back(box);
+			}
+		}
+		CHECK(!material.empty() && to_delete.size() > 20);
+		for (const edit::object_id id : to_delete)
+		{
+			edited.select(id);
+			CHECK(edited.delete_selection());
+		}
+		std::vector<edit::bounds> added;
+		for (int x = -3; x <= 3; x++)
+		{
+			for (int y = -3; y <= 3; y++)
+			{
+				for (int level = 0; level < 2; level++)
+				{
+					// on the ground grid, and far above everything
+					const edit::vec3 mins = spawn + edit::vec3(x * 310.0 + 20.0, y * 290.0 + 20.0, level ? 6000.0 + 100.0 * (x + 3) : 24.0);
+					const edit::vec3 maxs = mins + edit::vec3(48, 40, 56);
+					CHECK(edited.create_box(mins, maxs, material) != edit::no_object);
+					added.push_back({ mins, maxs });
+				}
+			}
+		}
+		mapc::options opts;
+		opts.surfaces = false;
+		compiled c;
+		compile_case(f, stage, edited, c, true, opts);
+		if (!c.ok)
+		{
+			return;
+		}
+		const mapc::report& r = c.report;
+		for (const std::string& note : r.notes)
+		{
+			if (note.find("leaf brush nodes") != std::string::npos)
+			{
+				std::printf("    %s\n", note.c_str());
+			}
+		}
+		CHECK(r.brushes_added + r.brushes_replaced == static_cast<int>(added.size()));
+		CHECK(r.brushes_added - r.brushes_deleted == static_cast<int>(added.size()) - static_cast<int>(to_delete.size()));
+
+		mapc::server_collision_info info;
+		std::string why;
+		CHECK_MSG(mapc::check_server_collision(c.zone_bytes, why, &info), why);
+		// every added box: a brush of that box, in a tree of every leaf it can be met in ( checked with the trace
+		// below ) - and at least in one leaf whose box holds it
+		int found = 0, in_tree = 0;
+		for (const edit::bounds& box : added)
+		{
+			for (std::size_t b = 0; b < info.brush_list.size(); b++)
+			{
+				const mapc::server_brush& brush = info.brush_list[b];
+				bool same = true;
+				for (int k = 0; k < 3; k++)
+				{
+					same = same && std::fabs(brush.mins[k] - box.mins[k]) < 0.05 && std::fabs(brush.maxs[k] - box.maxs[k]) < 0.05;
+				}
+				if (!same)
+				{
+					continue;
+				}
+				found++;
+				CHECK((brush.contents & 1) != 0);
+				for (const mapc::server_leaf& leaf : info.leaf_list)
+				{
+					bool holds = leaf.brush_contents != 0;
+					for (int k = 0; k < 3 && holds; k++)
+					{
+						holds = brush.mins[k] >= leaf.mins[k] - 0.01f && brush.maxs[k] <= leaf.maxs[k] + 0.01f;
+					}
+					if (holds && brushes_below(info, leaf.node).count(static_cast<int>(b)))
+					{
+						in_tree++;
+						break;
+					}
+				}
+				break;
+			}
+		}
+		CHECK(found == static_cast<int>(added.size()));
+		CHECK(in_tree == static_cast<int>(added.size()));
+
+		// the trace of this library: tree walk == brute force everywhere, the new boxes are met from above, the deleted
+		// brushes are gone
+		const mapc::clip_trace trace(c.editor);
+		CHECK(trace.valid());
+		int hits = 0;
+		CHECK(trace_disagreements(trace, spawn, 1500.0f, 4000, 1, hits) == 0);
+		CHECK(trace_disagreements(trace, spawn + edit::vec3(0, 0, 6000), 1500.0f, 2000, 1, hits) == 0);
+		int met = 0;
+		for (const edit::bounds& box : added)
+		{
+			const edit::vec3 centre = box.center();
+			const float a[3] = { static_cast<float>(centre.x), static_cast<float>(centre.y), static_cast<float>(box.maxs.z) + 30.0f };
+			const float b[3] = { a[0], a[1], static_cast<float>(box.mins.z) + 1.0f };
+			const mapc::trace_result tree = trace.trace(a, b, 1), all = trace.trace_all(a, b, 1);
+			CHECK(tree.brush == all.brush && std::fabs(tree.fraction - all.fraction) < 1e-5f);
+			met += tree.brush >= 0 && !tree.start_solid && std::fabs(a[2] + tree.fraction * (b[2] - a[2]) - static_cast<float>(box.maxs.z)) < 0.01f;
+		}
+		// a box on the ground grid can lie in or under another brush; the ones in the sky cannot
+		CHECK(met >= static_cast<int>(added.size()) / 2);
+		std::printf("    %zu brushes deleted, %zu boxes added: %d found, %d in the tree of a leaf that holds them, %d entered at their top by a ray from above\n", to_delete.size(),
+			added.size(), found, in_tree, met);
+		if (c.imported_ok)
+		{
+			const auto want = brush_sets(edited), have = brush_sets(c.imported);
+			CHECK(want == have);
+		}
+	}
+}
+
 int main(const int argc, char** argv)
 {
 	std::filesystem::path game = CODOL_MAPC_GAME_DIR, out = "mapc_test";
@@ -1388,6 +1851,11 @@ int main(const int argc, char** argv)
 		if (only == "all" || only == "entities") { test_entities(f); }
 		if (only == "all" || only == "models") { test_models(f); }
 		if (only == "all" || only == "brushes") { test_brushes(f); }
+		if (only == "all" || only == "trees")
+		{
+			test_brush_trees(f, 3, "brush_trees");
+			test_brush_trees(f, 1, "brush_trees_all");
+		}
 		if ((only == "all" || only == "donor") && map == "mp_rust" && std::filesystem::exists(game / "client_shipRetail" / "chinese" / "mp_dome.ff", ec))
 		{
 			test_donor(f, game / "client_shipRetail" / "chinese" / "mp_dome.ff", "machinery_windmill");

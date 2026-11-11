@@ -2,6 +2,8 @@
 
 #include "mapc_impl.hpp"
 
+#include "codol_mapc/server_check.hpp"
+
 namespace codol::mapc
 {
 	ZoneDataId context::data(const zaddr address, const char* what) const
@@ -149,11 +151,29 @@ namespace codol::mapc
 		context ctx{ editor, key, opts, rep, baseline, edited };
 		ctx.refresh();
 
+		// The collision data as a dedicated server reads it ( server_check.hpp ): when the base zone is something the
+		// server takes, the compiled zone has to be as well - otherwise a stage wrote a shape the game's map compiler
+		// never does, and that is this compiler's error, not the map's.
+		const map_diff& d = rep.diff;
+		const bool collision_edited = (opts.models && (!d.models_moved.empty() || !d.models_deleted.empty() || !d.models_added.empty()))
+			|| (opts.brushes && (!d.brushes.empty() || !d.brushes_deleted.empty()));
+		bool base_accepted = false;
+		if (collision_edited)
+		{
+			std::vector<std::uint8_t> base_bytes;
+			std::string why;
+			check(editor.write(base_bytes), "writing the base zone");
+			base_accepted = check_server_collision(base_bytes, why);
+			if (!base_accepted)
+			{
+				ctx.warn("the collision data of the base zone is not what a dedicated server ( CoD4x_Server ) takes: " + why + ". The compiled zone is not checked against it");
+			}
+		}
+
 		if (opts.entities)
 		{
 			stage_entities(ctx);
 		}
-		const map_diff& d = rep.diff;
 		if (opts.models && (!d.models_moved.empty() || !d.models_deleted.empty() || !d.models_added.empty()))
 		{
 			if (rep.entities_changed)
@@ -175,6 +195,18 @@ namespace codol::mapc
 
 		check(editor.write(zone_bytes), "writing the zone");
 		rep.zone_bytes_after = zone_bytes.size();
+		if (base_accepted)
+		{
+			std::string why;
+			server_collision_info info;
+			if (!check_server_collision(zone_bytes, why, &info))
+			{
+				throw compile_error("the compiled collision data is not what a dedicated server takes ( an error of the compiler; nothing was written ): " + why);
+			}
+			ctx.note(format("collision data read back the way a dedicated server reads it: %u brushes ( %u sides, %u edge bytes ), %u planes, %u leaf brush nodes, %u + %u leaf brushes, "
+				"%u static models - accepted", info.brushes, info.brush_sides, info.brush_edges, info.planes, info.leaf_brush_nodes, info.leaf_brushes, info.inline_leaf_brushes,
+				info.static_models));
+		}
 		rep.identical = !rep.entities_changed && rep.models_moved + rep.models_deleted + rep.models_added + rep.models_hidden == 0
 			&& rep.brushes_replaced + rep.brushes_deleted + rep.brushes_added + rep.surfaces_added == 0;
 		// leave the editor on the compiled zone, so that the caller can read the result back

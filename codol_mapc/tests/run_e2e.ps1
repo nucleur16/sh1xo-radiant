@@ -6,6 +6,7 @@
 #    through the library and checks the result ( see the header of codol_mapc_tests.cpp ).
 # 2. The command line tool on the same maps: its zone has to be, byte for byte, the zone the library call gave
 #    ( and for the unedited map the zone of the shipped fast file ).
+#    codol_mapc --check on every fast file written: its collision data is what a dedicated server takes.
 # 3. codol_linker --verify on every fast file written: it decodes, every asset loads, read -> write is identical.
 # 4. codol_viewtool: a picture of the shipped map and of the compiled one from the cameras in views.txt, to
 #    <Out>\png\<map>_<stage>_<view>_before.png / _after.png. Look at them: nothing here judges a picture.
@@ -44,7 +45,7 @@ if ($LASTEXITCODE -ne 0) { Fail "codol_mapc_tests" }
 New-Item -ItemType Directory -Force (Join-Path $Out "png") | Out-Null
 foreach ($map in "mp_rust", "mp_killhouse_sh")
 {
-	foreach ($stage in "identity", "entities", "models", "brushes", "donor")
+	foreach ($stage in "identity", "entities", "models", "brushes", "brush_trees", "brush_trees_all", "donor")
 	{
 		$folder = Join-Path $Out "$map\$stage"
 		if (-not (Test-Path (Join-Path $folder "edited.map"))) { continue }
@@ -56,6 +57,7 @@ foreach ($map in "mp_rust", "mp_killhouse_sh")
 		Write-Host "== 2. codol_mapc  $map / $stage"
 		$arguments = @("--base", $base, "--exe", $exe, "--map", (Join-Path $folder "edited.map"), "--out", $written, "--report", (Join-Path $cli "report.txt"), "--zone-out", (Join-Path $cli "zone.bin"))
 		if ($stage -eq "donor") { $arguments += @("--donor", (Join-Path $zones "mp_dome.ff")) }
+		if ($stage -like "brush_trees*") { $arguments += "--no-surfaces" }		# the tests compile these for collision only
 		& $mapc @arguments | Out-Null
 		if ($LASTEXITCODE -ne 0) { Fail "codol_mapc $map $stage"; continue }
 
@@ -67,6 +69,10 @@ foreach ($map in "mp_rust", "mp_killhouse_sh")
 		if ($ours -ne $theirs) { Fail "${map} ${stage}: the tool's zone differs from the reference zone" }
 		if ($ours -ne $reread) { Fail "${map} ${stage}: the fast file does not decode to the zone that was written" }
 		Remove-Item (Join-Path $cli "reference.bin"), (Join-Path $cli "reread.bin"), (Join-Path $cli "zone.bin") -ErrorAction SilentlyContinue
+
+		# the collision data as a dedicated server reads it ( codol_mapc/server_check.hpp )
+		& $mapc --check $written --exe $exe | Out-Null
+		if ($LASTEXITCODE -ne 0) { Fail "${map} ${stage}: a dedicated server would refuse the collision data" }
 
 		Write-Host "== 3. codol_linker --verify"
 		$verify = & $linker --verify $written --exe $exe

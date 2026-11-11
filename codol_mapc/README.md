@@ -10,8 +10,9 @@ Static library `codol_mapc` ( namespace `codol::mapc` ) + the tools `codol_mapc`
 `codol_zone` ( reading and writing zones ), `codol_edit` ( the map document ) and, privately, on `codol_view` for the
 light grid code the renderer lights models with.
 
-**Nothing here has been loaded by the game.** No game, server or editor process was started in this work. What is
-verified is listed under [Verification](#verification), what a person has to test in the game first under
+**Nothing here has been loaded by the game client.** A dedicated server ( CoD4x_Server, `codol_dedrun` ) has loaded
+compiled zones and run matches with bots on them: see [On a dedicated server](#on-a-dedicated-server). What is
+verified offline is listed under [Verification](#verification), what a person has to test in the game first under
 [What to test in the game](#what-to-test-in-the-game-first).
 
 ## Build
@@ -33,6 +34,7 @@ Static CRT, `/std:c++latest`, `/W4 /WX`. Builds `codol_zone`, `codol_edit`, `cod
 codol_mapc --base <map.ff> --exe <C1.exe> --map <edited.map> [--baseline <map.codol_base.map>] --out <new.ff>
            [--report <file>] [--zone-out <file>] [--donor <zone.ff>]... [--level 0..9]
            [--no-entities] [--no-models] [--no-brushes] [--no-surfaces]
+codol_mapc --check <map.ff> --exe <C1.exe>
 ```
 
 * `--base` the fast file the map was imported from, `--exe` the client ( fast file key ).
@@ -42,7 +44,11 @@ codol_mapc --base <map.ff> --exe <C1.exe> --map <edited.map> [--baseline <map.co
 * `--out` an unsigned `IWffu100` fast file ( see `codol_zone/README.md` for who loads those ). `--zone-out` the
   inflated zone. `--report` what was done, what was approximated, what was left out ( also printed ).
 * `--donor` a fast file a new static model may be taken from when the map zone does not have it ( repeatable ).
+* `--no-brushes` also leaves out the surfaces: render surfaces are only made for brushes the brush stage compiled.
 * Exit code 0: written. 1: failed, nothing written. A map without differences gives the base zone, byte for byte.
+* A compile that changes collision data reads the result back the way a dedicated server does ( below ) and fails,
+  writing nothing, when the server would refuse it although it takes the base zone.
+* `--check` does that reading for any fast file and says what the server would object to ( exit code 1 ).
 
 ```
 > codol_mapc --base mp_rust.ff --exe C1.exe --map mp_rust.map --out out/mp_rust.ff
@@ -90,6 +96,7 @@ namespace codol::mapc
 }
 
 #include "codol_mapc/trace.hpp"          // clip_trace: this library's own trace through a zone's brushes ( for checks )
+#include "codol_mapc/server_check.hpp"   // check_server_collision: the clip map of an inflated zone as a dedicated server decodes it
 ```
 
 Typical use from the editor: `doc.save_map_file( "x.map" )`, write `doc.import_baseline_map()` to `x.codol_base.map`,
@@ -164,13 +171,22 @@ everything ends up when the zone is written. See `codol_zone/README.md`, "Typed 
   reproduced ). Contents = the contents of the sides' clip materials together ( true for 3226 of 3226 brushes of
   mp_rust, 3075 of 3075 sampled of mp_killhouse_sh ).
 * **Where it collides**: a world brush goes into the leaf brush tree of every collision leaf its box touches, found
-  by walking the clip map's BSP; a brush model's brush into that model's tree. The trees are **not rebuilt**: a tree
-  that is one list gets the brush appended; in front of any other root a node with `leafBrushCount` -1 is inserted,
-  followed by a list node with the new brushes, both children leading to the old root ( with `range` 1e30, so every
-  trace takes child 0 and tests the old tree exactly as before ). A leaf without brushes gets a one node tree. The
-  leaf's box grows by the brush's box + 0.125, its contents by the brush's.
-* A deleted or replaced brush leaves every list ( a list left empty becomes a node no trace enters ), the brush arrays
-  are compacted and all lists renumbered. Its sides, planes and edge bytes stay in their arrays, unreferenced.
+  by walking the clip map's BSP; a brush model's brush into that model's tree. The trees keep their splits: a tree
+  that is one list gets the brush appended; in a tree that splits the brush joins the brushes *on the split of the
+  root* - the tree a node with `leafBrushCount` -1 has right behind it ( mostly one list ), which every trace that
+  enters the tree tests before it picks a side. A root without one ( `leafBrushCount` 0 ) becomes -1 and gets a list
+  behind it. So no node is made up and nothing depends on reading `dist` / `range` right. A leaf without brushes
+  gets a one node tree. The leaf's box grows by the brush's box + 0.125, its contents by the brush's.
+* A deleted or replaced brush leaves every list. A list left empty is removed, and so is every split that has
+  nothing left on one side and nothing on its split ( what is on the other side takes its place ); a leaf whose tree
+  is gone points at node 0 and has no brush contents. The child offsets are written again for where the nodes are.
+* **The arrays are written whole, in the shape the game's map compiler gives them**: `brushsides` and `brushEdges`
+  are the runs of the brushes in brush order, `leafbrushes` the lists of the nodes in node order, each back to back
+  with nothing else in them ( the base zones are exactly that; lists the base zone stores behind the node array stay
+  there ). A dedicated server reads these arrays by walking the brushes and the nodes and refuses a zone where a run
+  is appended behind the others or left behind by a removed brush - see [On a dedicated server](#on-a-dedicated-server).
+  The planes of removed brushes stay in the plane array ( it is the GfxWorld's ), unreferenced. New planes get unit
+  normals in single precision.
 * Brush models: box of the leaf = box of its brushes + 0.125, box of the model + 1.0, radius = distance of the far
   corner - the relations measured on the brush models of the base zone ( 26 in mp_rust, 269 in mp_killhouse_sh ).
 
@@ -218,12 +234,16 @@ everything ends up when the zone is written. See `codol_zone/README.md`, "Typed 
 * **`cLeafBrushNode` and the loader.** The translated loader of `codol_zone` converts the `data` field of every node
   whose `leafBrushCount` is not zero as a zone pointer - also for nodes with count -1, where the field is the split
   distance. In the loaded image those distances are therefore garbage; `codol_mapc` reads the nodes from the zone
-  *stream*. Whether the client really does this, or the translation is off by a sign extension, is not known. The
-  node this compiler adds does not depend on it: both its children are the old root, whatever its `dist` becomes.
+  *stream*. Whether the client really does this, or the translation is off by a sign extension, is not known ( the
+  server's reader takes `dist` as a float for every node that lists nothing, so it reads it as this compiler does ).
+  The compiler does not depend on it: it never computes with `dist`, and the tests check that every split of a
+  compiled zone has the axis, `dist` and `range` of a split of the base zone, in the stream.
 * The semantics of the leaf brush tree ( child 0 above `dist + range`, child 1 below `dist - range`, count -1: the next
   node holds the straddling brushes ) are those of the Quake 3 / IW engine family, confirmed on the data ( for every
   inner node of mp_killhouse_sh with a readable distance, child 0's brushes lie at `dist + range` or above ) and by
-  the trace test below - not by reading the 1.1.1.13 client's code.
+  the trace test below - not by reading the 1.1.1.13 client's code. Of these the compiler uses one: a trace that
+  enters a node with count -1 enters the node behind it. In the base zones that node is a list for most splits and
+  a tree of its own for some.
 * `cplane_s.signbits` of new planes is 0 and `type` 3, as the planes of the base zones' brush sides have them.
 * Layouts not in `c1_layouts.hpp` come from CODOL-AssetExplorer ( `MapEdits.cs`, `WorldCells.cs` ): `GfxAabbTree`
   ( 44 bytes ), `SModelAabbNode` ( 28 ), `GfxShadowGeometry` ( 12 ), `cNode_t` ( 8 ), `XModel.radius / bounds` at +316.
@@ -232,7 +252,7 @@ everything ends up when the zone is written. See `codol_zone/README.md`, "Typed 
 
 All on the 1.1.1.13 install of this machine, x64 Release. `codol_mapc_tests` makes the edited maps with `codol_edit`
 from the imports of **mp_rust** and **mp_killhouse_sh**, compiles the *saved* `.map` and reads the result back.
-40057 checks, 0 failed. `tests/run_e2e.ps1` then runs the command line tool on the same maps ( its zone is byte for
+45752 checks, 0 failed. `tests/run_e2e.ps1` then runs the command line tool on the same maps ( its zone is byte for
 byte the zone of the library call ), `codol_linker --verify` on every fast file ( decodes, every asset loads, read ->
 write identical ), and renders pictures.
 
@@ -243,6 +263,12 @@ write identical ), and renders pictures.
 | static models | 3 moved ( one raised, one turned 90 degrees and raised, one scaled x2 ), 3 deleted ( incl. the map's first instance, which carries its XModel ), 1 added | counts; every instance has a model; every instance is in a cell list and in the shadow list of its primary light; all node lists are runs of the root's list; collision entries follow ( moved / deleted / added ), the collision AABB tree names every entry once and its boxes hold their children; only `gfx_map` and `col_map_mp` differ; **the import of the compiled zone has exactly the static models of the edited document** ( model, origin, axes, scale ) and the same brushes |
 | donor | 1 instance of `machinery_windmill`, which mp_rust does not have, from mp_dome | without `--donor`: left out, zone unchanged; with: the xmodel is a new top level asset in front of the gfx_map with its surfaces, the instance exists, import equal |
 | brushes + surfaces | a box and a wedge added in a material the world uses, one world brush moved 160 up, one deleted, the brush of a brush model made 8 units taller | brush count, sides ( box 0, wedge 1 ), contents, both plane counts; the traces below; surface / vertex / index counts; every static surface is in exactly one leaf run, identically in both halves, inside its leaf's box; new surfaces index their own vertices and lie where the brushes are; the base zone's surfaces, vertices and indices are all still there in order; only `gfx_map` and `col_map_mp` differ; **the import of the compiled zone has exactly the brushes of the edited document** ( planes and materials, per sub model ) |
+| leaf brush trees ( collision only ) | around the spawn point every third world brush deleted ( mp_rust 334, mp_killhouse_sh 722 ), then all of them ( 1001 / 2166 ); 98 boxes added on a grid through the map and 6000 units above it | every way a tree changes: lists that run empty and splits that lose a side are removed ( up to 2072 nodes ), new brushes join a list, the brushes on a root's split, a new list on a root's split, a tree of their own; every new box is in the tree of a leaf whose box holds it; tree walk == brute force on 6000 segments; import equal |
+
+Every compiled zone of every case is also read back **the way a dedicated server reads it** ( `check_server_collision`,
+below ): accepted; every leaf brush tree walked from its leaf ends in lists; no brush outside its leaf's box, no list
+whose node lacks a brush's contents, no brush in no tree ( all 0 in the base zones ); every split has the axis, `dist`
+and `range` of a split of the base zone; every collision static model's pointer leads to where its XModel is stored.
 
 "Differs" is judged by content ( bytes + what every pointer leads to ). `ZoneEditor::asset_fingerprint` is stricter:
 it also changes for an asset that only *points into* an asset that gained a piece of data.
@@ -274,7 +300,7 @@ files of the install is still byte identical.
 
 ## What to test in the game first
 
-Nobody has loaded a compiled zone in the client or on a server. In this order:
+Nobody has loaded a compiled zone in the client. In this order:
 
 1. **The unedited map** compiled with the tool ( = the base zone in an unsigned container ): proves the container and
    the install's way of loading unsigned zones, before any edit is blamed.
@@ -294,7 +320,55 @@ Nobody has loaded a compiled zone in the client or on a server. In this order:
 8. A **brush model's brush** edited ( a door, a platform ): collision of the entity in game.
 9. A model from a **donor zone**: drawn, with the right materials ( its techsets and images have to be loadable from
    the map's or the common zones ).
-10. On a **dedicated server** ( CoD4x_Server ): the same zone, traces of players and bullets against the new brush.
+10. On a **dedicated server** ( CoD4x_Server ): the zones load and matches run ( next section ). Still open: traces of
+    players and bullets against the new brush, with the server's `codol_sweepprobe` / `codol_floorprobe` /
+    `codol_solidprobe` ( `developer 1`, rcon with a password of 8 characters or more ).
+
+## On a dedicated server
+
+CoD4x_Server ( `codol_dedrun` ) does not run the game's loaders on a map zone. It decodes the clip map from the zone
+stream with a reader of its own ( `src/codol/collision` ), and that reader takes the shape the game's map compiler
+gives the data, not everything the loaders would follow. What it insists on, beyond valid indices and finite numbers:
+
+| data | rule | reader |
+|---|---|---|
+| `brushsides`, `brushEdges` | walking the brushes in order, the sides ( edge bytes ) of each brush are the *next* run of the array, and after the last brush the array is used up. No run behind the others, no entries nobody names, nothing stored behind a brush | `codol_collision_brushes.c` |
+| `leafbrushes` | the same for the lists of the leaf brush nodes, in node order ( a list may instead be stored behind the node array ) | `codol_collision_brush_tree.c` |
+| `leafbrushNodes` | a node lists brushes ( count > 0 ) or splits: axis 0 .. 2, finite `dist`, `range` >= 0, both child offsets > 0 and inside the array; count -1 needs a node behind it. Only node 0 may be all zero: there is no empty node | `codol_collision_brush_tree.c` |
+| planes | the clip map points at the GfxWorld's plane array, both counts equal; unit normals ( length^2 within 0.001 ) | `codol_world_planes.c`, `codol_collision_brushes.c` |
+| side / node planes | pointers into that array ( never a plane stored behind the side ) | `codol_collision_brushes.c` |
+| `staticModelList` | the model is a pointer, and it leads to where the XModel is stored: the model field of the GfxWorld instance that carries it, or the header slot of a top level xmodel | `codol_collision_stream.c`, `codol_load_blocks.c` |
+| BSP nodes | children lead forward or to a leaf | `codol_collision_brushes.c` |
+
+`cplane_s.type` / `signbits` are recomputed by the server, `smodelNodes` is not read, the checksum in the clip map
+header ( +0xCC ) is taken as it is - the compiler leaves it alone, so an edited map reports the checksum of the
+base map.
+
+The brush stage used to append: the list of a tree that got a brush moved to the end of `leafbrushes`, the sides and
+edge bytes of a replaced brush to the end of their arrays, the old runs stayed behind unreferenced, an emptied list
+became a node with nothing in it. Each of these is a zone the loaders follow and the server refuses
+( `CoDOL collision <map>: source decode failed (-1)` ); with one new box it was the first. The stage now writes the
+three arrays whole and edits the trees as trees ( above ), and `check_server_collision` ( `codol_mapc/server_check.hpp`,
+`codol_mapc --check` ) is that reader's set of rules, used by the tests on every compiled zone and by the compiler on
+its own output. All 42 map zones of the install pass it as shipped.
+
+Runs with `codol_dedrun`, dedicated, loopback, `+map mp_rust`, 12 bots, 80 s each, on a copy of the install with the
+compiled `mp_rust.ff` in it. For every zone the server logged `CoDOL native collision installed: maps/mp/mp_rust.d3dbsp,
+758 leaves ..`, all 12 bots played ( 48 .. 55 kills ), and the log has no error-like line the run on the shipped zone
+does not have:
+
+| zone | edits | brushes the server built |
+|---|---|---|
+| one new box in the world ( from the editor's Compile map ) | + entities | 3227 |
+| `brushes` test | box, wedge, world brush moved, world brush deleted, the brush of brush model `*2` made taller, 3 render surfaces | 3227 |
+| `models` test | 3 static models moved / turned / scaled, 3 deleted, 1 added | 3226 |
+| `donor` test | a static model from another zone, with collision | 3226 |
+| `brushes` + `models` in one map | all of the above | 3227 |
+| `brush_trees_all` test | 1001 brushes deleted, 98 boxes added | 2323 |
+
+Not shown by these runs: that a player or a bullet is stopped by a new brush and passes where one was deleted. The
+server has commands for exactly that ( `codol_sweepprobe`, `codol_floorprobe`, `codol_solidprobe` ), behind
+`developer 1`, and its rcon refuses passwords shorter than 8 characters; the runs above had neither.
 
 ## How the layouts were established
 
