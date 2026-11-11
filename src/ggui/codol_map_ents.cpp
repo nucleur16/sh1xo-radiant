@@ -174,7 +174,7 @@ namespace ggui
 		});
 	}
 
-	void codol_map_ents_dialog::finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin)
+	void codol_map_ents_dialog::finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin, const int trigger_models)
 	{
 		mapents::entity_set set;
 		std::string error;
@@ -184,6 +184,8 @@ namespace ggui
 			log("import of " + origin + " failed: " + error, true);
 			return;
 		}
+
+		set.trigger_models = trigger_models;
 
 		if (!set.has_crc)
 		{
@@ -210,7 +212,8 @@ namespace ggui
 		std::snprintf(crc, sizeof(crc), "%08x", set.base_crc);
 
 		log(map_name + ": " + std::to_string(set.ents.size()) + " entities ( " + std::to_string(bmodels)
-			+ " use a compiled brush model / trigger hull ), base_crc32 " + crc + " -> " + out_path);
+			+ " use a compiled brush model / trigger hull" + (trigger_models >= 0 ? ", the map has " + std::to_string(trigger_models) + " trigger hulls" : "")
+			+ " ), base_crc32 " + crc + " -> " + out_path);
 
 		// what the map was imported from: the export restores untouched values from it
 		write_binary(sidecar_original(out_path), entity_text);
@@ -285,12 +288,13 @@ namespace ggui
 				const int code = components::codol_game::run_command(command, "", output);
 
 				std::string zone, text;
-				const bool ok = code == 0 && read_binary(zone_path, zone) && mapents::extract_from_zone(zone, text);
+				int trigger_models = -1;
+				const bool ok = code == 0 && read_binary(zone_path, zone) && mapents::extract_from_zone(zone, text, &trigger_models);
 
 				std::error_code ec;
 				std::filesystem::remove(std::filesystem::u8path(zone_path), ec);
 
-				components::codol_game::post_to_gui([this, ok, code, output, text, map_name, path]
+				components::codol_game::post_to_gui([this, ok, code, output, text, map_name, path, trigger_models]
 				{
 					m_busy = false;
 
@@ -305,7 +309,7 @@ namespace ggui
 						return;
 					}
 
-					finish_import(map_name, text, path);
+					finish_import(map_name, text, path, trigger_models);
 				});
 
 			}).detach();
@@ -323,13 +327,14 @@ namespace ggui
 		if (ext.ends_with(".zone"))
 		{
 			std::string text;
-			if (!mapents::extract_from_zone(data, text))
+			int trigger_models = -1;
+			if (!mapents::extract_from_zone(data, text, &trigger_models))
 			{
 				log(path + " does not contain a map entity string", true);
 				return;
 			}
 
-			finish_import(map_name, text, path);
+			finish_import(map_name, text, path, trigger_models);
 			return;
 		}
 

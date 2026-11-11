@@ -33,7 +33,7 @@ namespace ggui
 
 		void refresh_sources();
 		void import_source(const source& src);
-		void finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin);
+		void finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin, int trigger_models = -1);
 		void log(const std::string& line, bool error = false);
 
 		std::vector<source> m_sources;

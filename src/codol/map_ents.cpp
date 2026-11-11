@@ -208,9 +208,23 @@ namespace codol::mapents
 		}
 
 		// checks on an entity ( not the worldspawn ) that is about to be exported. false: skip it, a warning was added
-		bool exportable(const entity& ent, const std::string& cls_name, std::vector<std::string>& warnings)
+		bool exportable(const entity& ent, const std::string& cls_name, std::vector<std::string>& warnings, const int trigger_models)
 		{
 			const auto where = "line " + std::to_string(ent.line) + ": ";
+
+			// the server rejects the whole override if one "?N" names a hull the zone does not have
+			if (const auto* model = ent.find("model"); trigger_models >= 0 && model && model->size() >= 2 && (*model)[0] == '?')
+			{
+				char* end = nullptr;
+				const long index = std::strtol(model->c_str() + 1, &end, 10);
+
+				if (!end || *end != '\0' || index < 0 || index >= trigger_models)
+				{
+					warnings.push_back(where + "'" + cls_name + "' skipped: \"model\" \"" + *model + "\" is not one of the "
+						+ std::to_string(trigger_models) + " trigger hulls of the map");
+					return false;
+				}
+			}
 
 			if (cls_name.empty())
 			{
@@ -261,6 +275,19 @@ namespace codol::mapents
 			}
 
 			ent.pairs.erase(std::remove_if(ent.pairs.begin(), ent.pairs.end(), [](const auto& p) { return is_codol_key(p.first); }), ent.pairs.end());
+		}
+
+		int read_trigger_models(const entity& world)
+		{
+			const auto* value = world.find(KEY_TRIGGER_MODELS);
+			if (!value || value->empty())
+			{
+				return -1;
+			}
+
+			char* end = nullptr;
+			const long count = std::strtol(value->c_str(), &end, 10);
+			return (end && *end == '\0' && count >= 0) ? static_cast<int>(count) : -1;
 		}
 
 		void finish_export(export_result& out, const std::vector<entity>& result)
@@ -464,8 +491,91 @@ namespace codol::mapents
 		return true;
 	}
 
-	bool extract_from_zone(std::string_view zone_bytes, std::string& ent_text)
+	bool find_map_ents(std::string_view zone_bytes, zone_map_ents& out)
 	{
+		static constexpr std::string_view needle = "\"classname\" \"worldspawn\"";
+		out = {};
+
+		for (auto hit = zone_bytes.find(needle); hit != std::string_view::npos; hit = zone_bytes.find(needle, hit + 1))
+		{
+			const auto start = zone_bytes.rfind('{', hit);
+			if (start == std::string_view::npos || start < sizeof(c1::MapEnts))
+			{
+				continue;
+			}
+
+			auto end = zone_bytes.find('\0', hit);
+			if (end == std::string_view::npos)
+			{
+				end = zone_bytes.size();
+			}
+
+			const auto length = end - start;
+
+			// the strings of an asset follow its header in field order: [ name ] entity string.
+			// The name is usually a reference to the name of the render world, which was loaded earlier.
+			std::size_t candidates[2] = { start - sizeof(c1::MapEnts), 0 };
+			int candidate_count = 1;
+
+			if (zone_bytes[start - 1] == '\0')
+			{
+				// inline name: "maps/mp/<map>.d3dbsp\0" sits between the header and the entity string
+				std::size_t name_start = start - 1;
+				while (name_start > 0 && start - name_start < 256 && zone_bytes[name_start - 1] != '\0'
+					&& static_cast<unsigned char>(zone_bytes[name_start - 1]) >= 0x20)
+				{
+					name_start--;
+				}
+
+				if (name_start >= sizeof(c1::MapEnts) && name_start < start - 1)
+				{
+					candidates[candidate_count++] = name_start - sizeof(c1::MapEnts);
+				}
+			}
+
+			for (int c = 0; c < candidate_count; c++)
+			{
+				c1::MapEnts header;
+				std::memcpy(&header, zone_bytes.data() + candidates[c], sizeof(header));
+
+				const bool name_inline = (c == 1);
+
+				if (c1::zptr_is_inline(header.entityString) && header.numEntityChars == static_cast<std::int32_t>(length + 1)
+					&& (name_inline ? c1::zptr_is_inline(header.name) : !c1::zptr_is_inline(header.name)))
+				{
+					out.header_offset = candidates[c];
+					out.text_offset = start;
+					out.text_length = length;
+					out.header = header;
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	bool extract_from_zone(std::string_view zone_bytes, std::string& ent_text, int* trigger_models)
+	{
+		if (trigger_models)
+		{
+			*trigger_models = -1;
+		}
+
+		// the validated asset first
+		if (zone_map_ents info; find_map_ents(zone_bytes, info))
+		{
+			ent_text = std::string(zone_bytes.substr(info.text_offset, info.text_length));
+
+			if (trigger_models)
+			{
+				*trigger_models = static_cast<int>(info.header.trigger.count);
+			}
+
+			return true;
+		}
+
+		// fallback for dumps that only hold the text ( or a layout this build does not know )
 		static constexpr std::string_view needle = "\"classname\" \"worldspawn\"";
 
 		const auto hit = zone_bytes.find(needle);
@@ -503,6 +613,11 @@ namespace codol::mapents
 			{
 				ent.set(KEY_MAP_NAME, map_name);
 				ent.set(KEY_BASE_CRC, hex8(set.base_crc));
+
+				if (set.trigger_models >= 0)
+				{
+					ent.set(KEY_TRIGGER_MODELS, std::to_string(set.trigger_models));
+				}
 			}
 			else if (is_model_reference(ent.find("model")))
 			{
@@ -542,6 +657,8 @@ namespace codol::mapents
 			return false;
 		}
 
+		const int trigger_models = read_trigger_models(ents.front());
+
 		std::vector<entity> result;
 		result.reserve(ents.size());
 
@@ -553,7 +670,7 @@ namespace codol::mapents
 			if (i != 0)
 			{
 				const auto* cls = ent.find("classname");
-				if (!exportable(ent, cls ? *cls : std::string(), out.warnings))
+				if (!exportable(ent, cls ? *cls : std::string(), out.warnings, trigger_models))
 				{
 					continue;
 				}
@@ -603,6 +720,8 @@ namespace codol::mapents
 				baseline_by_id.emplace(id, &baseline[i]);
 			}
 		}
+
+		const int trigger_models = read_trigger_models(current.front());
 
 		std::vector<entity> result;
 		result.reserve(current.size());
@@ -702,7 +821,7 @@ namespace codol::mapents
 			if (i != 0)
 			{
 				const auto* cls = ent.find("classname");
-				if (!exportable(ent, cls ? *cls : std::string(), out.warnings))
+				if (!exportable(ent, cls ? *cls : std::string(), out.warnings, trigger_models))
 				{
 					continue;
 				}

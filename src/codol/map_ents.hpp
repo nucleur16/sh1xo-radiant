@@ -20,6 +20,7 @@ namespace codol::mapents
 	inline constexpr const char* KEY_BASE_CRC = "codol_base_crc32";
 	inline constexpr const char* KEY_MAP_NAME = "codol_map";
 	inline constexpr const char* KEY_ORIG_CLASS = "codol_classname";
+	inline constexpr const char* KEY_TRIGGER_MODELS = "codol_trigger_models";	// number of trigger hulls ( "?N" ) the zone has
 	inline constexpr const char* KEY_ID = "codol_id";			// index of the entity in the entity string it was imported from
 	inline constexpr const char* CLASS_BMODEL = "codol_bmodel";
 
@@ -39,6 +40,7 @@ namespace codol::mapents
 		std::vector<entity> ents;
 		bool has_crc = false;
 		std::uint32_t base_crc = 0;
+		int trigger_models = -1;	// MapEnts::trigger.count when the entities came out of a zone, else -1
 	};
 
 	std::uint32_t crc32(std::string_view data);
@@ -50,8 +52,22 @@ namespace codol::mapents
 	// one of them "// base_crc32 xxxxxxxx" ). For a plain entity string, base_crc is the crc of the text itself.
 	bool parse_entity_string(std::string_view text, entity_set& out, std::string& error);
 
-	// find the entity string inside a decrypted / inflated zone
-	bool extract_from_zone(std::string_view zone_bytes, std::string& ent_text);
+	// the MapEnts asset of a decrypted / inflated zone
+	struct zone_map_ents
+	{
+		std::size_t header_offset = 0;	// of the c1::MapEnts header
+		std::size_t text_offset = 0;	// of the entity string
+		std::size_t text_length = 0;	// without the terminator
+		c1::MapEnts header = {};
+	};
+
+	// locate the entity string of a zone and the MapEnts header in front of it. The header is validated
+	// ( inline string reference, numEntityChars == length + 1 ), so a hit is the real asset and not a look-alike.
+	bool find_map_ents(std::string_view zone_bytes, zone_map_ents& out);
+
+	// find the entity string inside a decrypted / inflated zone. `trigger_models` receives the number of trigger
+	// hulls of the map when the MapEnts header was found ( -1 otherwise ).
+	bool extract_from_zone(std::string_view zone_bytes, std::string& ent_text, int* trigger_models = nullptr);
 
 	// radiant .map with one point entity per game entity
 	std::string to_radiant_map(const entity_set& set, std::string_view map_name);

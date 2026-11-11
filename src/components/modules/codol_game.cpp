@@ -934,6 +934,25 @@ namespace components
 			GET_GUI(ggui::script_workbench_dialog)->open_file(args[1], args.size() > 2 ? utils::try_stoi(args[2], true) : 0);
 		});
 
+		// move the window of the running game into the Game dock / give it back
+		command::register_command("codol_attach"s, [](const std::vector<std::string>&)
+		{
+			GET_GUI(ggui::game_view_dialog)->open();
+
+			const auto* viewport = ImGui::GetMainViewport();
+			const auto parent = static_cast<HWND>(viewport->PlatformHandleRaw ? viewport->PlatformHandleRaw : viewport->PlatformHandle);
+
+			if (!attach_game_window(parent))
+			{
+				game::printf_to_console("^1[CoDOL] no running game window found ( codol_client_exe: %s )\n", dvar_string(dvars::codol_client_exe).c_str());
+			}
+		});
+
+		command::register_command("codol_detach"s, [](const std::vector<std::string>&)
+		{
+			detach_game_window();
+		});
+
 		command::register_command("codol_mapents"s, [](const std::vector<std::string>&)
 		{
 			GET_GUI(ggui::codol_map_ents_dialog)->toggle();

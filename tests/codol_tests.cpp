@@ -380,7 +380,7 @@ static void smoke_real_tree(const std::string& root)
 	CHECK(!index.gsc.empty());
 }
 
-static void test_map_ents(const char* real_ents_file)
+static void test_map_ents(const char* real_ents_file, const char* real_zone_file)
 {
 	using namespace codol::mapents;
 
@@ -526,6 +526,60 @@ static void test_map_ents(const char* real_ents_file)
 		CHECK(!merge_radiant_map(edited_map, "garbage", zone_text, merged, error));
 	}
 
+	// ---- the MapEnts asset inside a zone ( c1::MapEnts header in front of the entity string )
+	{
+		using namespace codol;
+
+		c1::MapEnts header = {};
+		header.name = 0x302A6785u;					// reference to the name of the render world
+		header.entityString = c1::ZPTR_INLINE;
+		header.numEntityChars = static_cast<std::int32_t>(zone_text.size() + 1);
+		header.trigger = { 2, c1::ZPTR_INLINE, 4, c1::ZPTR_INLINE, 7, c1::ZPTR_INLINE };
+		header.stages = c1::ZPTR_INLINE;
+		header.stageCount = 3;
+
+		std::string zone(64, '\x7f');
+		zone += "{\n\"classname\" \"worldspawn\"\n}";	// a look-alike without a header in front of it
+		zone += std::string(1, '\0') + std::string(40, '\x11');
+
+		const auto header_at = zone.size();
+		zone.append(reinterpret_cast<const char*>(&header), sizeof(header));
+		zone += zone_text + std::string(1, '\0') + "trailing";
+
+		zone_map_ents info;
+		CHECK(find_map_ents(zone, info));
+		CHECK(info.header_offset == header_at && info.text_offset == header_at + sizeof(header) && info.text_length == zone_text.size());
+		CHECK(info.header.trigger.count == 2 && info.header.stageCount == 3 && c1::zptr_block(info.header.name) == 3);
+
+		int trigger_models = 0;
+		CHECK(extract_from_zone(zone, extracted, &trigger_models) && extracted == zone_text && trigger_models == 2);
+
+		// name stored inline between the header and the entity string
+		header.name = c1::ZPTR_INLINE;
+		std::string zone2(32, '\x7f');
+		zone2.append(reinterpret_cast<const char*>(&header), sizeof(header));
+		zone2 += "maps/mp/mp_test.d3dbsp" + std::string(1, '\0') + zone_text + std::string(1, '\0');
+		CHECK(find_map_ents(zone2, info) && info.header_offset == 32 && info.text_length == zone_text.size());
+
+		// a wrong length is not accepted as the asset
+		header.numEntityChars += 1;
+		std::string zone3(32, '\x7f');
+		zone3.append(reinterpret_cast<const char*>(&header), sizeof(header));
+		zone3 += "maps/mp/mp_test.d3dbsp" + std::string(1, '\0') + zone_text + std::string(1, '\0');
+		CHECK(!find_map_ents(zone3, info));
+
+		// trigger hull references are checked against the zone on export ( the map has 2 hulls: ?0 and ?1 )
+		entity_set limited = set;
+		limited.trigger_models = 2;
+		export_result res;
+		CHECK(from_radiant_map(to_radiant_map(limited, "mp_test"), res, error));
+		CHECK(res.exported == 4 && res.warnings.size() == 1 && res.warnings[0].find("\"?3\" is not one of the 2 trigger hulls") != std::string::npos);
+		CHECK(res.text.find("codol_trigger_models") == std::string::npos);
+
+		limited.trigger_models = 4;
+		CHECK(from_radiant_map(to_radiant_map(limited, "mp_test"), res, error) && res.exported == 5 && res.warnings.empty());
+	}
+
 	// a normal radiant map is refused
 	CHECK(!from_radiant_map("iwmap 4\n// entity 0\n{\n\"classname\" \"worldspawn\"\n}\n", exp, error));
 	CHECK(!parse_entity_string("{\n\"classname\" \"info_null\"\n}", set, error));
@@ -548,8 +602,45 @@ static void test_map_ents(const char* real_ents_file)
 		std::printf("\n-- %s\n   %zu entities, base_crc32 %08x, round trip through a radiant .map is lossless: %s\n", real_ents_file,
 			set.ents.size(), set.base_crc, serialize_entity_string(back.ents) == serialize_entity_string(set.ents) ? "yes" : "NO");
 	}
-}
+	// a real decrypted zone: the MapEnts header has to validate against its own entity string
+	if (real_zone_file)
+	{
+		std::string zone;
+		{
+			std::ifstream file(real_zone_file, std::ios::binary);
+			zone.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+		}
 
+		zone_map_ents info;
+		CHECK(!zone.empty());
+		CHECK(find_map_ents(zone, info));
+		CHECK(info.header.numEntityChars == static_cast<std::int32_t>(info.text_length + 1));
+		CHECK(codol::c1::zptr_is_inline(info.header.entityString));
+
+		std::string text;
+		int trigger_models = -1;
+		CHECK(extract_from_zone(zone, text, &trigger_models) && text.size() == info.text_length);
+		CHECK(parse_entity_string(text, set, error));
+
+		// every "?N" of the map names one of its trigger hulls
+		int hull_refs = 0, bad_refs = 0;
+		for (const auto& ent : set.ents)
+		{
+			if (const auto* model = ent.find("model"); model && model->size() > 1 && (*model)[0] == '?')
+			{
+				hull_refs++;
+				bad_refs += std::atoi(model->c_str() + 1) >= trigger_models ? 1 : 0;
+			}
+		}
+
+		CHECK(bad_refs == 0);
+
+		std::printf("\n-- %s\n   MapEnts header at 0x%zx: %d entity chars, %u trigger models, %u hulls, %u slabs, %u stages; "
+			"%zu entities, crc32 %08x, %d \"?N\" references ( %d out of range )\n", real_zone_file, info.header_offset,
+			info.header.numEntityChars, info.header.trigger.count, info.header.trigger.hullCount, info.header.trigger.slabCount,
+			static_cast<unsigned>(info.header.stageCount), set.ents.size(), set.base_crc, hull_refs, bad_refs);
+	}
+}
 int main(int argc, char** argv)
 {
 	test_lexer();
@@ -560,11 +651,16 @@ int main(int argc, char** argv)
 
 	// arguments: script trees to index, and/or a .d3dbsp.ents file for the map entity round trip
 	const char* ents_file = nullptr;
+	const char* zone_file = nullptr;
 	for (int i = 1; i < argc; i++)
 	{
 		if (std::string_view(argv[i]).ends_with(".ents"))
 		{
 			ents_file = argv[i];
+		}
+		else if (std::string_view(argv[i]).ends_with(".zone"))
+		{
+			zone_file = argv[i];
 		}
 		else
 		{
@@ -572,7 +668,7 @@ int main(int argc, char** argv)
 		}
 	}
 
-	test_map_ents(ents_file);
+	test_map_ents(ents_file, zone_file);
 
 	std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
 	return g_failed ? 1 : 0;

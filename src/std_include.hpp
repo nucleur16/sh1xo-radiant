@@ -66,6 +66,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <string_view>
+#include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <filesystem>
 #pragma warning(pop)
@@ -131,6 +133,7 @@
 #include "game/dvars.hpp"
 
 // codol ( engine independent )
+#include "codol/c1_layouts.hpp"
 #include "codol/script_lex.hpp"
 #include "codol/anim_index.hpp"
 #include "codol/map_ents.hpp"

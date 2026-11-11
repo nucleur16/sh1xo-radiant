@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -19,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "codol/c1_layouts.hpp"
 #include "codol/script_lex.hpp"
 #include "codol/anim_index.hpp"
 #include "codol/map_ents.hpp"
