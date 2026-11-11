@@ -39,7 +39,7 @@ namespace codol::zone
 
 	struct SurfaceVertex
 	{
-		float position[3];
+		float position[3];					// model space ( bind pose ), also for rigid and skinned surfaces
 		float normal[3];
 		float tangent[3];
 		float binormalSign;
@@ -87,7 +87,9 @@ namespace codol::zone
 		zaddr address = 0;
 		c1::XModelSurfs raw{};
 		std::string_view name;
-		bool external = false;				// defined in another fast file or streamed from models/<name> in an .iwd
+		// no surfaces in this zone: the asset is defined in another fast file or streamed from models/<name> in an
+		// .iwd. Decided by the surface pointer alone - a ",name" XModelSurfs can still carry its surfaces.
+		bool external = false;
 		std::vector<SurfaceView> surfaces;	// empty when external
 	};
 
@@ -256,7 +258,8 @@ namespace codol::zone
 		c1::cbrush_t raw{};
 		c1::Bounds bounds{};
 		std::int32_t contents = 0;
-		// the six axial sides ( -x +x -y +y -z +z from the bounds ) followed by raw.numsides stored sides
+		// the six axial sides ( -x -y -z +x +y +z, planes from the bounds, materials from raw.axialMaterialNum )
+		// followed by the raw.numsides stored sides. Plane normals point out of the brush.
 		std::vector<BrushSide> sides;
 	};
 
