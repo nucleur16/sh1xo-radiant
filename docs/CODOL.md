@@ -37,6 +37,19 @@ needed. What it is made of:
 | `codol_edit/` | map document: `.map` reader / writer, brushes, patches, entities, selection, undo, editing operations, entity classes taken from the shipped maps |
 | `src/codol`, script workbench, game bridge | shared with the radiant plugin |
 
+### The tool chain
+
+| CoD4 mod tools | here | what it does today |
+|---|---|---|
+| Radiant | `CoDOLRadiant.exe` | open a map of the install, edit entities / models / brushes in 3D and 2D views with undo, save as `.map` |
+| `cod4map` | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the map's fastfile: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. Incremental: it patches the shipped zone, it does not build a map from nothing. No light bake. |
+| `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
+| script editing | Script Workbench, rcon reload | unchanged |
+
+Compiled fastfiles are unsigned ( `IWffu100` ); the signed form needs a key the client does not have. Per the notes
+in the install, the retail client only loads unsigned zones from disk with the `Kernel33.dll` patch; the dedicated
+server reads both. See `codol_mapc/README.md` for what has to be checked in the game first - none of the compiled
+output has been loaded in the game yet.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
 where the work goes.
 ## What works
