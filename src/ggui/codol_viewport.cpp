@@ -32,6 +32,12 @@ namespace ggui
 		float fov = 80.0f;
 		float fly_speed = 600.0f;
 
+		// one shot requests ( toolbar or keys ), handled where the camera is set up
+		bool next_spawn = false;
+		bool overview = false;
+		bool goto_radiant = false;
+		int spawn_index = 0;
+
 		double load_seconds = 0.0;
 	};
 
@@ -99,6 +105,7 @@ namespace ggui
 		m->map_input = map_name;
 
 		// a sensible first view when the camera is not driven by radiant
+		m->spawn_index = 0;
 		m->renderer.spawn_camera(0, m->cam);
 
 		const auto warnings = m->renderer.warnings();
@@ -154,25 +161,64 @@ namespace ggui
 		const bool loaded = m->renderer.loaded();
 
 		ImGui::SameLine(0.0f, 16.0f);
-		ImGui::Checkbox("World", &m->world);
+		if (ImGui::Button("Show"))
+		{
+			ImGui::OpenPopup("##vp_show");
+		}
+
+		if (ImGui::BeginPopup("##vp_show"))
+		{
+			ImGui::Checkbox("World", &m->world);
+			ImGui::Checkbox("Static models", &m->static_models);
+			ImGui::Checkbox("Entity models", &m->entity_models);
+			ImGui::Checkbox("Brush models", &m->brush_models);
+			ImGui::Separator();
+			ImGui::Checkbox("Sun shadows", &m->sun_shadows);
+			ImGui::Checkbox("Model LODs", &m->model_lods);
+			ImGui::Checkbox("Wireframe", &m->wireframe);
+			ImGui::EndPopup();
+		}
+
 		ImGui::SameLine();
-		ImGui::Checkbox("Static models", &m->static_models);
+		if (ImGui::Button("Camera"))
+		{
+			ImGui::OpenPopup("##vp_camera");
+		}
+
+		if (ImGui::BeginPopup("##vp_camera"))
+		{
+			ImGui::SetNextItemWidth(220.0f);
+			ImGui::SliderFloat("Fly speed", &m->fly_speed, 50.0f, 20000.0f, "%.0f units/s", ImGuiSliderFlags_Logarithmic);
+			ImGui::SetNextItemWidth(220.0f);
+			ImGui::SliderFloat("Field of view", &m->fov, 40.0f, 120.0f, "%.0f deg");
+			ImGui::Separator();
+
+			if (ImGui::MenuItem("Next spawn point", "N", false, loaded))
+			{
+				m->next_spawn = true;
+			}
+
+			if (ImGui::MenuItem("Whole map from above", "Home", false, loaded))
+			{
+				m->overview = true;
+			}
+
+			if (ImGui::MenuItem("Go to the radiant camera", "G", false, loaded))
+			{
+				m->goto_radiant = true;
+			}
+
+			ImGui::Separator();
+			ImGui::Checkbox("Follow the radiant camera", &m->follow_radiant);
+			ImGui::EndPopup();
+		}
+
 		ImGui::SameLine();
-		ImGui::Checkbox("Entity models", &m->entity_models);
-		ImGui::SameLine();
-		ImGui::Checkbox("Brush models", &m->brush_models);
-		ImGui::SameLine();
-		ImGui::Checkbox("Sun shadows", &m->sun_shadows);
-		ImGui::SameLine();
-		ImGui::Checkbox("LODs", &m->model_lods);
-		ImGui::SameLine();
-		ImGui::Checkbox("Wireframe", &m->wireframe);
-		ImGui::SameLine(0.0f, 16.0f);
-		ImGui::Checkbox("Follow radiant camera", &m->follow_radiant);
+		ImGui::Checkbox("Follow radiant", &m->follow_radiant);
 
 		if (ImGui::IsItemHovered())
 		{
-			ImGui::SetTooltip("On: this view shows what the radiant camera looks at.\nOff: fly here with the right mouse button held ( W A S D, Q / E down / up, Shift faster ).");
+			ImGui::SetTooltip("This view shows what the radiant camera looks at.\nMoving in this view turns it off again.");
 		}
 
 		if (!m->error.empty())
@@ -203,7 +249,35 @@ namespace ggui
 		auto& cam = m->cam;
 		cam.fov_x = m->fov;
 
-		if (m->follow_radiant && cmainframe::activewnd && cmainframe::activewnd->m_pCamWnd)
+		if (m->next_spawn)
+		{
+			m->next_spawn = false;
+			m->follow_radiant = false;
+
+			if (!m->renderer.spawn_camera(++m->spawn_index, cam))
+			{
+				m->spawn_index = 0;
+				m->renderer.spawn_camera(0, cam);
+			}
+		}
+
+		if (m->overview)
+		{
+			m->overview = false;
+			m->follow_radiant = false;
+
+			codol::render::float3 center, half;
+			if (m->renderer.world_bounds(center, half))
+			{
+				const float reach = std::max(half.x, half.y) / std::tan(m->fov * 0.5f * 0.0174532925f);
+				cam.origin = { center.x, center.y, center.z + half.z + reach };
+				cam.pitch = 89.0f;
+				cam.yaw = 90.0f;
+				cam.roll = 0.0f;
+			}
+		}
+
+		if ((m->follow_radiant || m->goto_radiant) && cmainframe::activewnd && cmainframe::activewnd->m_pCamWnd)
 		{
 			const auto& rc = cmainframe::activewnd->m_pCamWnd->camera;
 			cam.origin = { rc.origin[0], rc.origin[1], rc.origin[2] };
@@ -213,6 +287,8 @@ namespace ggui
 			cam.yaw = rc.angles[1];
 			cam.roll = 0.0f;
 		}
+
+		m->goto_radiant = false;
 
 		// ---- draw
 		codol::view::frame_options frame;
@@ -252,36 +328,119 @@ namespace ggui
 			ImGui::SetCursorScreenPos(ImVec2(image_pos.x, image_pos.y + static_cast<float>(height)));
 		}
 
-		// ---- free fly ( only when this view has its own camera )
-		if (!m->follow_radiant && ImGui::IsItemHovered() && ImGui::IsMouseDown(ImGuiMouseButton_Right))
+		// ---- navigation
+		// An invisible button over the image owns the mouse: a drag that starts on the view keeps steering it when the
+		// cursor leaves the view, and never moves the window.
+		ImGui::SetCursorScreenPos(image_pos);
+		ImGui::InvisibleButton("##vp_nav", ImVec2(static_cast<float>(width), static_cast<float>(height)),
+			ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+
+		const bool hovered = ImGui::IsItemHovered();
+		const bool active = ImGui::IsItemActive();
+
 		{
 			const auto& io = ImGui::GetIO();
-
-			cam.yaw -= io.MouseDelta.x * 0.2f;
-			cam.pitch = std::clamp(cam.pitch + io.MouseDelta.y * 0.2f, -89.0f, 89.0f);
-
 			const auto axes = cam.axes();
-			const float step = m->fly_speed * (io.KeyShift ? 4.0f : 1.0f) * io.DeltaTime;
+			const float boost = io.KeyShift ? 4.0f : 1.0f;
+			bool moved = false;
 
 			const auto move = [&](const codol::render::float3& dir, const float amount)
 			{
 				cam.origin.x += dir.x * amount;
 				cam.origin.y += dir.y * amount;
 				cam.origin.z += dir.z * amount;
+				moved = true;
 			};
 
-			if (ImGui::IsKeyDown(ImGuiKey_W)) { move(axes.forward, step); }
-			if (ImGui::IsKeyDown(ImGuiKey_S)) { move(axes.forward, -step); }
-			if (ImGui::IsKeyDown(ImGuiKey_A)) { move(axes.left, step); }
-			if (ImGui::IsKeyDown(ImGuiKey_D)) { move(axes.left, -step); }
-			if (ImGui::IsKeyDown(ImGuiKey_E)) { cam.origin.z += step; }
-			if (ImGui::IsKeyDown(ImGuiKey_Q)) { cam.origin.z -= step; }
+			const bool lmb = active && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+			const bool rmb = active && ImGui::IsMouseDown(ImGuiMouseButton_Right);
+			const bool mmb = active && ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+			const float dx = io.MouseDelta.x;
+			const float dy = io.MouseDelta.y;
+
+			// units per pixel of mouse travel, scaled with the fly speed
+			const float drag = m->fly_speed * boost / 200.0f;
+
+			if (mmb || (lmb && rmb))
+			{
+				// pan: the scene follows the cursor
+				move(axes.left, dx * drag);
+				move(axes.up, dy * drag);
+				ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+			}
+			else if (rmb)
+			{
+				// look around, fly with the keys
+				if (dx != 0.0f || dy != 0.0f)
+				{
+					cam.yaw -= dx * 0.15f;
+					cam.pitch = std::clamp(cam.pitch + dy * 0.15f, -89.0f, 89.0f);
+					moved = true;
+				}
+
+				const float step = m->fly_speed * boost * io.DeltaTime;
+
+				if (ImGui::IsKeyDown(ImGuiKey_W)) { move(axes.forward, step); }
+				if (ImGui::IsKeyDown(ImGuiKey_S)) { move(axes.forward, -step); }
+				if (ImGui::IsKeyDown(ImGuiKey_A)) { move(axes.left, step); }
+				if (ImGui::IsKeyDown(ImGuiKey_D)) { move(axes.left, -step); }
+				if (ImGui::IsKeyDown(ImGuiKey_E) || ImGui::IsKeyDown(ImGuiKey_Space)) { move({ 0.0f, 0.0f, 1.0f }, step); }
+				if (ImGui::IsKeyDown(ImGuiKey_Q) || ImGui::IsKeyDown(ImGuiKey_C)) { move({ 0.0f, 0.0f, 1.0f }, -step); }
+
+				// the wheel changes the fly speed while flying
+				if (io.MouseWheel != 0.0f)
+				{
+					m->fly_speed = std::clamp(m->fly_speed * std::pow(1.25f, io.MouseWheel), 50.0f, 20000.0f);
+				}
+
+				ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+			}
+			else if (lmb)
+			{
+				// drive: up / down moves along the ground, left / right turns
+				if (dx != 0.0f || dy != 0.0f)
+				{
+					const float yaw = cam.yaw * 0.0174532925f;
+					move({ std::cos(yaw), std::sin(yaw), 0.0f }, -dy * drag);
+					cam.yaw -= dx * 0.15f;
+				}
+			}
+			else if (hovered)
+			{
+				// the wheel moves along the view direction
+				if (io.MouseWheel != 0.0f)
+				{
+					move(axes.forward, io.MouseWheel * m->fly_speed * boost * 0.25f);
+				}
+
+				if (ImGui::IsKeyPressed(ImGuiKey_N, false)) { m->next_spawn = true; }
+				if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) { m->overview = true; }
+				if (ImGui::IsKeyPressed(ImGuiKey_G, false)) { m->goto_radiant = true; }
+			}
+
+			// taking the controls ends following the radiant camera
+			if (moved)
+			{
+				m->follow_radiant = false;
+			}
+		}
+
+		// ---- hint
+		if (hovered && !active)
+		{
+			const char* hint = "Right drag: look  +  W A S D fly, Q / E down / up, wheel = speed     Left drag: drive     Middle drag: pan     Wheel: forward / back     Shift: faster";
+			auto* dl = ImGui::GetWindowDrawList();
+			const ImVec2 size = ImGui::CalcTextSize(hint);
+			const ImVec2 at(image_pos.x + 8.0f, image_pos.y + static_cast<float>(height) - size.y - 10.0f);
+
+			dl->AddRectFilled(ImVec2(at.x - 4.0f, at.y - 3.0f), ImVec2(at.x + size.x + 4.0f, at.y + size.y + 3.0f), IM_COL32(0, 0, 0, 150), 3.0f);
+			dl->AddText(at, IM_COL32(230, 230, 230, 255), hint);
 		}
 
 		// ---- status
 		const auto stats = m->renderer.stats();
-		ImGui::TextDisabled("%s   %d x %d   %d draws   pos %.0f %.0f %.0f   pitch %.0f yaw %.0f",
-			m->renderer.map_name().c_str(), width, height, static_cast<int>(stats.draw_calls), cam.origin.x, cam.origin.y, cam.origin.z, cam.pitch, cam.yaw);
+		ImGui::TextDisabled("%s   %d x %d   %d draws   pos %.0f %.0f %.0f   pitch %.0f yaw %.0f   speed %.0f",
+			m->renderer.map_name().c_str(), width, height, static_cast<int>(stats.draw_calls), cam.origin.x, cam.origin.y, cam.origin.z, cam.pitch, cam.yaw, m->fly_speed);
 
 		ImGui::End();
 		return true;
