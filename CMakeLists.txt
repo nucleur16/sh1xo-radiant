@@ -240,3 +240,9 @@ if(RADIANT_ROOT)
 	add_custom_command(TARGET codol_assetconv POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:codol_assetconv> ${RADIANT_ROOT}/bin)
 endif()
+
+# codol_render: device independent core of the native CoDOL viewport ( static library `codol_render`; its tests and
+# its check tool are only built standalone: cmake -S codol_render -B <dir> -A Win32|x64 )
+if(EXISTS ${CMAKE_SOURCE_DIR}/codol_render/CMakeLists.txt)
+	add_subdirectory(codol_render)
+endif()
