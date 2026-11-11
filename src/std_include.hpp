@@ -133,6 +133,7 @@
 // codol ( engine independent )
 #include "codol/script_lex.hpp"
 #include "codol/anim_index.hpp"
+#include "codol/map_ents.hpp"
 
 #include "fx_system/fx_dvars.hpp"
 #include "fx_system/fx_structs.hpp"
@@ -176,6 +177,7 @@
 #include "ggui/prefab_preview.hpp"
 #include "ggui/preferences.hpp"
 #include "ggui/rope_generator.hpp"
+#include "ggui/script_workbench.hpp"
 #include "ggui/surface_inspector.hpp"
 #include "ggui/textures.hpp"
 #include "ggui/toolbar.hpp"

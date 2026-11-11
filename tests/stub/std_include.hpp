@@ -1,10 +1,11 @@
-﻿#pragma once
+#pragma once
 // Minimal stand-in for src/std_include.hpp so the engine independent parts of the
 // CoDOL code ( src/codol/*.cpp ) can be compiled into the unit tests without radiant.
 
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -20,3 +21,4 @@
 
 #include "codol/script_lex.hpp"
 #include "codol/anim_index.hpp"
+#include "codol/map_ents.hpp"

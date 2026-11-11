@@ -1,4 +1,4 @@
-﻿# CMake build for the CoDOL fork of iw3xo-radiant.
+# CMake build for the CoDOL fork of iw3xo-radiant.
 # Mirrors premake5.lua (which is kept for upstream parity) so the project can be
 # built with nothing but CMake + Visual Studio:
 #
@@ -201,7 +201,8 @@ enable_testing()
 add_executable(codol_tests
 	tests/codol_tests.cpp
 	src/codol/script_lex.cpp
-	src/codol/anim_index.cpp)
+	src/codol/anim_index.cpp
+	src/codol/map_ents.cpp)
 target_include_directories(codol_tests PRIVATE tests/stub src)
 target_compile_options(codol_tests PRIVATE /std:c++latest /W4 /wd4996)
 add_test(NAME codol_tests COMMAND codol_tests)

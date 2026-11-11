@@ -1,5 +1,9 @@
 #include "std_include.hpp"
 
+// windows.h macros
+#undef min
+#undef max
+
 namespace codol::script
 {
 	std::string to_lower(std::string_view s)

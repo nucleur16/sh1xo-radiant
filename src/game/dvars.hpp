@@ -139,6 +139,21 @@ namespace dvars
 	extern game::dvar_s* radiant_liveDebug;
 	extern game::dvar_s* radiant_liveWorldspawn;
 
+	// codol
+	extern game::dvar_s* codol_install_path;
+	extern game::dvar_s* codol_script_root;
+	extern game::dvar_s* codol_script_ref_root;
+	extern game::dvar_s* codol_rcon_port;
+	extern game::dvar_s* codol_rcon_password;
+	extern game::dvar_s* codol_rcon_password_file;
+	extern game::dvar_s* codol_rcon_log;
+	extern game::dvar_s* codol_reload_on_save;
+	extern game::dvar_s* codol_reload_mode;
+	extern game::dvar_s* codol_reload_precheck_cmd;
+	extern game::dvar_s* codol_reload_precheck_cwd;
+	extern game::dvar_s* codol_client_exe;
+	extern game::dvar_s* codol_launch_cmd;
+
 	// stock dvars (not registered but ptr assigned)
 	extern game::dvar_s* fs_homepath;
 	extern game::dvar_s* r_filmtweakenable;

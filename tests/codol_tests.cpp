@@ -379,6 +379,102 @@ static void smoke_real_tree(const std::string& root)
 	CHECK(!index.gsc.empty());
 }
 
+static void test_map_ents(const char* real_ents_file)
+{
+	using namespace codol::mapents;
+
+	// same vector as the server ( zlib crc32 )
+	CHECK(crc32("123456789") == 0xCBF43926u);
+
+	const std::string zone_text =
+		"{\n\"classname\" \"worldspawn\"\n\"sunlight\" \"1.1\"\n}\n"
+		"{\n\"classname\" \"mp_dm_spawn\"\n\"origin\" \"10 20 30\"\n\"angles\" \"0 90 0\"\n}\n"
+		"{\n\"classname\" \"trigger_multiple\"\n\"model\" \"?3\"\n\"targetname\" \"flag\"\n}\n"
+		"{\n\"classname\" \"script_brushmodel\"\n\"model\" \"*1\"\n}\n"
+		"{\n\"classname\" \"script_model\"\n\"model\" \"com_barrel\"\n\"origin\" \"1 2 3\"\n}";
+
+	entity_set set;
+	std::string error;
+	CHECK(parse_entity_string(zone_text, set, error));
+	CHECK(set.ents.size() == 5);
+	CHECK(set.has_crc && set.base_crc == crc32(zone_text));
+	CHECK(serialize_entity_string(set.ents) == zone_text); // byte exact round trip
+
+	// zone -> entity string
+	std::string blob = std::string("\x01\x02garbage{", 10) + std::string(1, '\0') + zone_text + std::string(1, '\0') + "tail";
+	std::string extracted;
+	CHECK(extract_from_zone(blob, extracted));
+	CHECK(extracted == zone_text);
+
+	// -> radiant map
+	const auto map = to_radiant_map(set, "mp_test");
+	CHECK(map.starts_with("iwmap 4\n// entity 0\n{\n\"classname\" \"worldspawn\"\n"));
+	CHECK(map.find("\"codol_base_crc32\"") != std::string::npos);
+	CHECK(map.find("\"classname\" \"codol_bmodel\"\n\"model\" \"?3\"") != std::string::npos);
+	CHECK(map.find("\"codol_classname\" \"trigger_multiple\"") != std::string::npos);
+	CHECK(map.find("\"classname\" \"script_model\"\n\"model\" \"com_barrel\"") != std::string::npos); // xmodels stay as they are
+
+	// unedited map -> override: same entities as the zone
+	export_result exp;
+	CHECK(from_radiant_map(map, exp, error));
+	CHECK(exp.map_name == "mp_test" && exp.base_crc == set.base_crc && exp.exported == 5 && exp.warnings.empty());
+
+	entity_set back;
+	CHECK(parse_entity_string(exp.text, back, error));
+	CHECK(back.has_crc && back.base_crc == set.base_crc);
+	CHECK(serialize_entity_string(back.ents) == zone_text);
+
+	// edited in radiant: layer header, a moved spawn, a new spawn, a drawn brush entity, worldspawn brushes
+	std::string edited = map;
+	edited.replace(edited.find("\"origin\" \"10 20 30\""), 19, "\"origin\" \"64 64 8\"");
+	edited.insert(7, "\n\"000_Global\" flags  active\n\"The Map\" flags ");
+	edited.insert(edited.find("// entity 1"), "// brush 0\n{\n ( 0 0 0 ) ( 1 0 0 ) ( 0 1 0 ) caulk 64 64 0 0 0 0 lightmap_gray 16384 16384 0 0 0 0\n}\n");
+	// ^ lands after the worldspawn's closing brace: make it a real nested brush instead
+	edited = map;
+	{
+		const auto world_close = edited.find("}\n// entity 1");
+		edited.insert(world_close, "// brush 0\n{\n ( 0 0 0 ) ( 1 0 0 ) ( 0 1 0 ) caulk 64 64 0 0 0 0 lightmap_gray 16384 16384 0 0 0 0\n}\n");
+		edited.replace(edited.find("\"origin\" \"10 20 30\""), 19, "\"origin\" \"64 64 8\"");
+		edited.insert(7, "\n\"000_Global\" flags  active\n\"The Map\" flags ");
+		edited += "// entity 5\n{\n\"classname\" \"mp_tdm_spawn\"\n\"origin\" \"5 5 5\"\n}\n";
+		edited += "// entity 6\n{\n\"classname\" \"trigger_multiple\"\n// brush 0\n{\n ( 0 0 0 ) ( 1 0 0 ) ( 0 1 0 ) trigger 64 64 0 0 0 0 lightmap_gray 16384 16384 0 0 0 0\n}\n}\n";
+		edited += "// entity 7\n{\n\"classname\" \"misc_model\"\n\"model\" \"tree\"\n}\n";
+	}
+
+	CHECK(from_radiant_map(edited, exp, error));
+	CHECK(exp.exported == 6);
+	CHECK(exp.warnings.size() == 2); // drawn brush entity + misc_model
+	CHECK(exp.text.find("\"origin\" \"64 64 8\"") != std::string::npos);
+	CHECK(exp.text.find("\"classname\" \"mp_tdm_spawn\"") != std::string::npos);
+	CHECK(exp.text.find("codol_") == std::string::npos || exp.text.find("codol_") < exp.text.find("{")); // only in the header comment
+	CHECK(exp.text.find("caulk") == std::string::npos);
+	CHECK(exp.text.find("\"classname\" \"trigger_multiple\"\n\"model\" \"?3\"") != std::string::npos);
+	CHECK(parse_entity_string(exp.text, back, error) && back.ents.size() == 6);
+
+	// a normal radiant map is refused
+	CHECK(!from_radiant_map("iwmap 4\n// entity 0\n{\n\"classname\" \"worldspawn\"\n}\n", exp, error));
+	CHECK(!parse_entity_string("{\n\"classname\" \"info_null\"\n}", set, error));
+	CHECK(!parse_entity_string("{\n\"classname\" \"worldspawn\"\n", set, error));
+
+	// a real override written by the server tooling: parse -> map -> export keeps every entity
+	if (real_ents_file)
+	{
+		std::string text;
+		CHECK(codol::script::read_text_file(real_ents_file, text));
+		CHECK(parse_entity_string(text, set, error));
+		CHECK(set.has_crc);
+
+		const auto real_map = to_radiant_map(set, "real_map");
+		CHECK(from_radiant_map(real_map, exp, error));
+		CHECK(exp.exported == static_cast<int>(set.ents.size()) && exp.warnings.empty() && exp.base_crc == set.base_crc);
+		CHECK(parse_entity_string(exp.text, back, error));
+		CHECK(serialize_entity_string(back.ents) == serialize_entity_string(set.ents));
+
+		std::printf("\n-- %s\n   %zu entities, base_crc32 %08x, round trip through a radiant .map is lossless: %s\n", real_ents_file,
+			set.ents.size(), set.base_crc, serialize_entity_string(back.ents) == serialize_entity_string(set.ents) ? "yes" : "NO");
+	}
+}
+
 int main(int argc, char** argv)
 {
 	test_lexer();
@@ -387,10 +483,21 @@ int main(int argc, char** argv)
 	test_gsc_scan();
 	test_index((std::filesystem::temp_directory_path() / "codol_tests_tree").string());
 
+	// arguments: script trees to index, and/or a .d3dbsp.ents file for the map entity round trip
+	const char* ents_file = nullptr;
 	for (int i = 1; i < argc; i++)
 	{
-		smoke_real_tree(argv[i]);
+		if (std::string_view(argv[i]).ends_with(".ents"))
+		{
+			ents_file = argv[i];
+		}
+		else
+		{
+			smoke_real_tree(argv[i]);
+		}
 	}
+
+	test_map_ents(ents_file);
 
 	std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
 	return g_failed ? 1 : 0;
