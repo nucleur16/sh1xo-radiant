@@ -10,7 +10,9 @@ namespace components
 		*ppvObj = nullptr;
 
 		HRESULT hRes = m_pIDirect3DDevice9->QueryInterface(riid, ppvObj);
-		if (hRes == NOERROR) *ppvObj = this;
+		// only stand in for the interfaces this wrapper implements. Handing 	his out as IDirect3DDevice9Ex
+		// ( or anything else ) makes the caller run off the end of the vtable
+		if (hRes == NOERROR && (riid == __uuidof(IUnknown) || riid == __uuidof(IDirect3DDevice9))) *ppvObj = this;
 		return hRes;
 	}
 
@@ -118,6 +120,7 @@ namespace components
 		//if (ggui::all_contexts_ready())
 		//{
 			ImGui_ImplDX9_InvalidateDeviceObjects();
+			ggui::codol_viewport_dialog::on_device_lost(); // codol: release the default pool resources of the native viewport
 
 			HRESULT hr = m_pIDirect3DDevice9->Reset(pPresentationParameters);
 			if (hr == D3DERR_INVALIDCALL)
@@ -126,6 +129,7 @@ namespace components
 			}
 
 			ImGui_ImplDX9_CreateDeviceObjects();
+			ggui::codol_viewport_dialog::on_device_reset();
 
 			return hr;
 		//}

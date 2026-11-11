@@ -23,6 +23,7 @@ and adds a **CoDOL** menu.
 | Scripted animations | Per-script tables of `level.scr_anim[..]` / `scr_model` / `scr_animtree` entries and `anim_*` calls, the governing `#using_animtree` for the cursor line, and an animtree browser. |
 | Validation | A `%anim` that is not in its animtree is an error (the server would append it and shift every later index: T-pose / wrong clips). Optional: animations the game does not ship are warnings. |
 | Map import | One click turns a shipped map into an editable radiant map: every collision brush with the material of each side, brush entities with their real brushes, every static model as a `misc_model`, and all entities. `mp_killhouse_sh`: 27,032 world brushes, 640 brushes in 280 brush entities, 16,335 static models, 1,967 entities. |
+| Native viewport | **CoDOL > Viewport ( native )** draws a map the way the game does: render world, static models, entity models and brush models read straight from the 1.1.1.13 fastfiles and drawn with the game's own materials, technique sets and compiled shaders (`codol_zone`, `codol_render`, `codol_view`). Lightmaps, reflection probes, light-grid model lighting, sun shadows, cell/portal culling. Frames are bit-identical to CODOL-AssetExplorer's renderer on 8 of 9 test views. Console: `codol_viewport <map>`. |
 | Map entities | Edited entities are exported as a server-side override (`<scripts>/maps/mp/<map>.d3dbsp.ents`). Unedited entities export byte-identical to the zone. |
 | Hot reload | rcon to the local dedicated server: reload the level when a script is saved, load a map after an entity export. Optional pre-check command. |
 | Game window | The window of the running game client can be docked inside radiant (CoDOL > Game Window) and handed back. |
@@ -38,11 +39,8 @@ Be aware of these before planning work around this branch:
   `cod4map` / `cod4rad` -> `linker_pc` -> an IW3 to IW4 map converter -> IW4x zonebuilder ->
   AssetExplorer `iw4-port`. Everything except the IW3 to IW4 converter (iw3x-port) is on this
   machine.
-- **The 3D view is still radiant's CoD4 viewport.** It draws CoD4 assets only, so CoDOL materials
-  and models appear only where CoD4 has an asset of the same name. CoDOL assets are not converted
-  to CoD4 formats (that approach was removed). The replacement is a native viewport that draws the
-  zone's own data with the game's technique sets and shaders; its building blocks are `codol_zone/`
-  (done) and `codol_render/` (in progress).
+- **The native viewport is a viewer so far.** It shows the shipped map from its fastfile, not the edited `.map`: no picking, no selection, and edits made in radiant do not appear in it. It has no fog, no spot/omni shadow maps, no post effects, no skinning or animation. Radiant's own 3D window is still the CoD4 renderer and only draws CoD4 assets.
+- **The editor still runs inside CoD4 radiant.** `iw3r.dll` is loaded by `IW3xRadiant.exe` (a patched `CoD4Radiant.exe`) and needs a CoD4 mod tools root to start. The native libraries and their tools (`codol_zonetool`, `codol_viewtool`, `codol_mapconv`) do not.
 - **Brush texture alignment is not recovered.** Sides get the right material but a default
   projection (`64 64 0 0 0 0`), so textures are scaled and shifted differently than in the game.
 - **Only brush geometry is imported.** Terrain, patches and decals exist in the game as render

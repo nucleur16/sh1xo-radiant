@@ -206,6 +206,9 @@ namespace ggui
 		}
 
 		ImGui::Toast(ImGuiToastType_Success, "CoDOL", ("Imported " + map_name).c_str());
+
+		// show the same map in the native viewport
+		GET_GUI(ggui::codol_viewport_dialog)->load_map(map_name);
 	}
 
 	void codol_map_ents_dialog::finish_import(const std::string& map_name, const std::string& entity_text, const std::string& origin, const int trigger_models)

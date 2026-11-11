@@ -243,6 +243,5 @@ target_link_libraries(iw3r PRIVATE codol_render)
 
 # codol_view: native Direct3D 9 map renderer on top of codol_zone + codol_render ( codol_viewtool and its tests are only built
 # standalone: cmake -S codol_view -B <dir> -A Win32|x64 ). Link it with target_link_libraries( iw3r PRIVATE codol_view ).
-if(EXISTS ${CMAKE_SOURCE_DIR}/codol_view/CMakeLists.txt)
-	add_subdirectory(codol_view)
-endif()
+add_subdirectory(codol_view)
+target_link_libraries(iw3r PRIVATE codol_view)

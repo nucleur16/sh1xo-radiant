@@ -163,6 +163,7 @@
 #include "ggui/camera_guizmo.hpp"
 #include "ggui/camera_settings.hpp"
 #include "ggui/codol_map_ents.hpp"
+#include "ggui/codol_viewport.hpp"
 #include "ggui/colors.hpp"
 #include "ggui/console.hpp"
 #include "ggui/effects_browser.hpp"

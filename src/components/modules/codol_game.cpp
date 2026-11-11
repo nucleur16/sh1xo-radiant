@@ -953,6 +953,18 @@ namespace components
 			detach_game_window();
 		});
 
+		// codol_viewport [map]: open the native viewport, optionally loading a map zone
+		command::register_command("codol_viewport"s, [](const std::vector<std::string>& args)
+		{
+			const auto dlg = GET_GUI(ggui::codol_viewport_dialog);
+			dlg->open();
+
+			if (args.size() > 1)
+			{
+				dlg->load_map(args[1]);
+			}
+		});
+
 		command::register_command("codol_mapents"s, [](const std::vector<std::string>&)
 		{
 			GET_GUI(ggui::codol_map_ents_dialog)->toggle();
