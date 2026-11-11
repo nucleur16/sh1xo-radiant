@@ -5,6 +5,7 @@
 #undef max
 
 #include "host.hpp"
+#include "ui.hpp"
 
 namespace ggui
 {
@@ -70,12 +71,20 @@ namespace ggui
 			name.erase(dot);
 		}
 
-		GET_GUI(ggui::codol_viewport_dialog)->load_map(name);
+		// asks first when the open map has unsaved changes
+		GET_GUI(ggui::codol_viewport_dialog)->open();
+		editor::ui::open_zone(name);
 	}
 
 	void codol_map_ents_dialog::export_current_map()
 	{
-		ImGui::Toast(ImGuiToastType_Warning, "CoDOL", "No map document is open.");
+		if (!editor::get_scene().open)
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "CoDOL", "No map is open.");
+			return;
+		}
+
+		editor::ui::export_entities(m_reload_after_export);
 	}
 
 	bool codol_map_ents_dialog::gui()

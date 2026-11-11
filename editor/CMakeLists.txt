@@ -15,7 +15,8 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
 set(ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
-set(DEPS ${ROOT}/deps)
+# third party sources; override when the submodules are checked out somewhere else ( -DDEPS=<path> )
+set(DEPS ${ROOT}/deps CACHE PATH "folder with imgui, ImGuizmo, rapidjson")
 
 # ---- native libraries
 set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -39,11 +40,16 @@ target_compile_definitions(imgui PRIVATE UNICODE _UNICODE $<$<CONFIG:Release>:ND
 # ---- the editor
 add_executable(CoDOLRadiant WIN32
 	src/main.cpp
+	src/actions.cpp
 	src/compat.cpp
+	src/grid_view.cpp
 	src/host.hpp
 	src/maps_dialog.cpp
+	src/scene.cpp
 	src/scene.hpp
+	src/ui.hpp
 	src/viewport.cpp
+	src/windows.cpp
 	${DEPS}/ImGuizmo/ImGuizmo.cpp
 	compat/std_include.hpp
 	compat/editor_map.hpp
@@ -76,4 +82,4 @@ target_precompile_headers(CoDOLRadiant PRIVATE compat/std_include.hpp)
 set_source_files_properties(${DEPS}/ImGuizmo/ImGuizmo.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "/W0")
 
 target_link_libraries(CoDOLRadiant PRIVATE imgui codol_edit codol_zone codol_render codol_view
-	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm)
+	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm comdlg32)
