@@ -116,10 +116,11 @@ namespace codol::c1
 
 #pragma pack(push, 1)
 
+	// centre + half extents, like IW4 ( CODOL-AssetExplorer MapExtractor.ReadBounds: MapBounds.FromMidHalf )
 	struct Bounds
 	{
-		float mins[3];
-		float maxs[3];
+		float midPoint[3];
+		float halfSize[3];
 	};
 	C1_SIZE(Bounds, 24);
 
