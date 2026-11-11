@@ -1267,9 +1267,9 @@ namespace editor::ui
 			st.create_position[view->v()] = get_scene().snapped(number(3));
 			st.open_create_popup = true;
 		}
-		else
+		else if (what != "info")
 		{
-			game::printf_to_console("usage: view2d <new | axis x|y|z|next | center a b | zoom z | fit | zone 0|1 | click a b [shift] | drag a1 b1 a2 b2 [shift] | rclick a b> [view n]\n");
+			game::printf_to_console("usage: view2d <info | new | axis x|y|z|next | center a b | zoom z | fit | zone 0|1 | click a b [shift] | drag a1 b1 a2 b2 [shift] | rclick a b> [view n]\n");
 			return;
 		}
 
