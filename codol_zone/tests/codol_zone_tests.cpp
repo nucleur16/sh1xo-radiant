@@ -969,6 +969,86 @@ namespace
 			CHECK_EQ(newWorld.surfaces.size(), oldWorld.surfaces.size());
 			CHECK_EQ(newWorld.staticModels.size(), oldWorld.staticModels.size());
 			CHECK_EQ(newWorld.raw.draw.vertexCount, oldWorld.raw.draw.vertexCount);
+
+			// ---- typed editing: data ids, pointers as targets, an array that changes its length
+			{
+				std::printf("  typed editing: mp_killhouse_sh\n");
+				ZoneEditor typed;
+				CHECK(typed.load(original, "mp_killhouse_sh"));
+				const Zone& z = typed.zone();
+				const zaddr clipAddress = first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP);
+				ClipMapView typedClip;
+				CHECK(read_clip_map(z, clipAddress, typedClip));
+				const ZoneDataId header = typed.header_data(clipAddress);
+				ZoneDataInfo dataInfo;
+				CHECK(typed.data_info(header, dataInfo));
+				CHECK_EQ(dataInfo.size, sizeof(c1::clipMap_t));
+				CHECK_EQ(dataInfo.index, 0u);
+				CHECK(typed.asset(dataInfo.asset).type == c1::ASSET_TYPE_CLIPMAP_MP);
+
+				// the typedClip map's planes are the GfxWorld's: a pointer into data of another asset
+				const ZoneTarget planes = typed.pointer_at(header, offsetof(c1::clipMap_t, planes));
+				ZoneDataInfo planeInfo;
+				CHECK(planes.kind == ZoneTarget::Kind::data && planes.offset == 0);
+				CHECK(typed.data_info(planes.data, planeInfo));
+				CHECK_EQ(planeInfo.size, sizeof(c1::cplane_s) * static_cast<std::size_t>(typedClip.raw.planeCount));
+				CHECK(planeInfo.asset != dataInfo.asset && typed.asset(planeInfo.asset).type == c1::ASSET_TYPE_GFXWORLD);
+				CHECK(typed.data_at(typedClip.raw.planes) == planes.data);
+				std::uint32_t inside = 0;
+				CHECK(typed.data_at(typedClip.raw.planes + 40, &inside) == planes.data && inside == 40);
+				CHECK(typed.pointers_to(planes.data).size() > 1000);		// brush sides, BSP nodes
+				CHECK(typed.pointer_at(header, offsetof(c1::clipMap_t, planeCount)).kind == ZoneTarget::Kind::none);
+				CHECK(typed.data_pointers(planes.data).empty());
+
+				// a field: patched in place; a pointer field is not a number
+				CHECK(typed.patch_value(header, offsetof(c1::clipMap_t, checksum), std::uint32_t{ 0x12345678 }));
+				CHECK(!typed.patch_value(header, offsetof(c1::clipMap_t, planes), std::uint32_t{ 0 }));
+				CHECK(!typed.patch_value(header, sizeof(c1::clipMap_t) - 2, std::uint32_t{ 0 }));
+				// data something points into cannot go, alone or as a range
+				CHECK(!typed.remove_data(planes.data));
+				CHECK(!typed.remove_data_range(planes.data, planes.data));
+				// a pointer past the end of its target is refused
+				CHECK(!typed.set_pointer(header, offsetof(c1::clipMap_t, planes), ZoneTarget::to_data(planes.data, planeInfo.size + 4)));
+				CHECK(typed.set_pointer(header, offsetof(c1::clipMap_t, planes), ZoneTarget::to_data(planes.data, 0)));
+
+				// an array of another length with its count: the entity string, the general way. The result is what the
+				// dedicated edit writes.
+				MapEntsView typedEnts;
+				const zaddr entsAddress = find_map_ents(z);
+				CHECK(read_map_ents(z, entsAddress, typedEnts));
+				const ZoneDataId stringData = typed.data_at(typedEnts.raw.entityString);
+				const ZoneDataId entsHeader = typed.header_data(entsAddress);
+				CHECK(stringData != 0 && entsHeader != 0);
+				std::vector<std::uint8_t> longer(text.begin(), text.end());
+				longer.push_back(0);
+				CHECK(typed.set_data(stringData, longer));
+				CHECK(typed.patch_value(entsHeader, offsetof(c1::MapEnts, numEntityChars), static_cast<std::int32_t>(longer.size())));
+				std::vector<std::uint8_t> general, dedicated;
+				CHECK(typed.write(general));
+				ZoneEditor other;
+				CHECK(other.load(original, "mp_killhouse_sh"));
+				CHECK(other.patch_value(other.header_data(clipAddress), offsetof(c1::clipMap_t, checksum), std::uint32_t{ 0x12345678 }));
+				CHECK(other.set_map_ents(text));
+				CHECK(other.write(dedicated));
+				CHECK(general == dedicated);
+				// a count that does not match its array is refused by the loaders, with nothing written
+				CHECK(typed.patch_value(entsHeader, offsetof(c1::MapEnts, numEntityChars), static_cast<std::int32_t>(longer.size() + 1)));
+				std::vector<std::uint8_t> refused;
+				CHECK(!typed.write(refused) && refused.empty());
+
+				// data the loaders do not ask for is refused too; taken out again, the zone is the original
+				ZoneEditor third;
+				CHECK(third.load(original, "mp_killhouse_sh"));
+				ZoneDataId extra = 0;
+				const std::uint8_t four[4] = { 1, 2, 3, 4 };
+				CHECK(third.insert_data(third.header_data(clipAddress), true, four, {}, extra) && extra != 0);
+				CHECK(third.data_info(extra, dataInfo) && dataInfo.index == 1 && dataInfo.address == 0);
+				CHECK(!third.write(refused));
+				CHECK(third.remove_data(extra));
+				CHECK(!third.data_info(extra, dataInfo));
+				CHECK(third.write(refused));
+				CHECK(refused == original);
+			}
 		}
 
 		// an unsigned ( rebuilt ) zone from the patch folder
