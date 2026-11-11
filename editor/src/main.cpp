@@ -487,12 +487,16 @@ namespace editor
 
 			ImGuiID center = dockspace;
 			const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.22f, nullptr, &center);
-			const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.22f, nullptr, &center);
+			const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.18f, nullptr, &center);
+			const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.2f, nullptr, &center);
 
 			ImGui::DockBuilderDockWindow("CoDOL Viewport##window", center);
 			ImGui::DockBuilderDockWindow("Script Workbench##codol_window", center);
 			ImGui::DockBuilderDockWindow("Game##codol_window", center);
 			ImGui::DockBuilderDockWindow("Maps##window", left);
+			ImGui::DockBuilderDockWindow("Models##window", left);
+			ImGui::DockBuilderDockWindow("Materials##window", left);
+			ImGui::DockBuilderDockWindow("Selection##window", right);
 			ImGui::DockBuilderDockWindow("Console##window", bottom);
 			ImGui::DockBuilderFinish(dockspace);
 		}

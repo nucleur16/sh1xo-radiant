@@ -40,6 +40,9 @@ add_executable(CoDOLRadiant WIN32
 	src/compat.cpp
 	src/host.hpp
 	src/maps_dialog.cpp
+	src/scene.hpp
+	src/viewport.cpp
+	${DEPS}/ImGuizmo/ImGuizmo.cpp
 	compat/std_include.hpp
 	compat/editor_map.hpp
 
@@ -52,7 +55,6 @@ add_executable(CoDOLRadiant WIN32
 	${ROOT}/src/components/fonts.cpp
 	${ROOT}/src/components/modules/codol_game.cpp
 	${ROOT}/src/ggui/script_workbench.cpp
-	${ROOT}/src/ggui/codol_viewport.cpp
 
 	${ROOT}/codol_view/tools/png_wic.cpp)
 
@@ -62,6 +64,7 @@ target_include_directories(CoDOLRadiant PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}/src
 	${ROOT}/src
 	${ROOT}/codol_view/tools
+	${DEPS}/ImGuizmo
 	${DEPS}/rapidjson/include)
 
 target_compile_definitions(CoDOLRadiant PRIVATE CODOL_STANDALONE=1 _WINDOWS UNICODE _UNICODE
@@ -71,6 +74,7 @@ target_compile_definitions(CoDOLRadiant PRIVATE CODOL_STANDALONE=1 _WINDOWS UNIC
 target_compile_options(CoDOLRadiant PRIVATE /std:c++latest /W3 /MP /wd4996 /wd4267 /wd4244 $<$<CONFIG:Release>:/O2 /Zi>)
 target_link_options(CoDOLRadiant PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OPT:ICF>)
 target_precompile_headers(CoDOLRadiant PRIVATE compat/std_include.hpp)
+set_source_files_properties(${DEPS}/ImGuizmo/ImGuizmo.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "/W0")
 
 target_link_libraries(CoDOLRadiant PRIVATE imgui codol_zone codol_render codol_view
 	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm)
