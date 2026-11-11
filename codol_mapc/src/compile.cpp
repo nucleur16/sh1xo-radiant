@@ -162,15 +162,17 @@ namespace codol::mapc
 			}
 			stage_models(ctx);
 		}
-		if (opts.brushes && (!d.brushes.empty() || !d.brushes_deleted.empty()))
+		const bool brush_changes = !d.brushes.empty() || !d.brushes_deleted.empty();
+		if (opts.brushes && brush_changes)
 		{
 			ctx.reload();
 			stage_brushes(ctx);
-			if (opts.surfaces)
-			{
-				ctx.reload();
-				stage_surfaces(ctx);
-			}
+		}
+		// the render faces do not need the collision brushes ( --no-brushes still draws the new geometry )
+		if (opts.surfaces && brush_changes)
+		{
+			ctx.reload();
+			stage_surfaces(ctx);
 		}
 
 		check(editor.write(zone_bytes), "writing the zone");
@@ -263,12 +265,38 @@ namespace codol::mapc
 		}
 		if (!opts.out.empty())
 		{
-			zone::FastFileWriteOptions write;
-			write.compression = opts.level;
-			if (const zone::Status s = zone::write_fastfile(opts.out, zone_bytes, key, write); !s)
+			// The client checks the length of every stock zone against a table in its exe before it loads
+			// anything ( its "data is incomplete or damaged" start error ), so the file is made exactly as long
+			// as the zone it replaces. A better compression level is tried when the first result is too long.
+			std::error_code size_error;
+			const std::uint64_t stock = std::filesystem::file_size(opts.base, size_error);
+			bool written = false;
+			if (!size_error && stock)
 			{
-				error = s.message;
-				return false;
+				for (const int level : { opts.level, 9 })
+				{
+					zone::FastFileWriteOptions write;
+					write.compression = level;
+					write.exactFileSize = stock;
+					if (zone::write_fastfile(opts.out, zone_bytes, key, write))
+					{
+						rep.notes.push_back(format("container: the file has the length of the base file ( %llu bytes ), which the client checks",
+							static_cast<unsigned long long>(stock)));
+						written = true;
+						break;
+					}
+				}
+			}
+			if (!written)
+			{
+				zone::FastFileWriteOptions write;
+				write.compression = opts.level;
+				if (const zone::Status s = zone::write_fastfile(opts.out, zone_bytes, key, write); !s)
+				{
+					error = s.message;
+					return false;
+				}
+				rep.warnings.push_back("container: the file could not be given the length of the base file; the client refuses a stock zone of another length at start");
 			}
 		}
 		return true;

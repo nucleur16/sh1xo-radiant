@@ -139,6 +139,11 @@ namespace codol::zone
 		std::uint32_t fileTimeHigh = 0;			// FILETIME of the build; 0 / 0 = now
 		std::uint32_t fileTimeLow = 0;
 		std::vector<std::uint8_t> keyIv;		// 24 byte AES key + 16 byte IV; empty = random
+		// > 0: the file is made exactly this long. The client checks the size of every stock zone against a table
+		// in its exe before it loads anything, so a rebuilt stock zone has to be as long as the one it replaces.
+		// The length is made up inside the compressed stream with empty deflate blocks, which every inflater
+		// skips; the zone itself is unchanged. Fails when the file would be longer, or 1 - 4 or 8 bytes shorter.
+		std::uint64_t exactFileSize = 0;
 	};
 
 	// inflated zone ( XFileHeader + data ) -> IWffu100 fast file

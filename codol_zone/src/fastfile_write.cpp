@@ -67,6 +67,60 @@ namespace codol::zone
 			return s;
 		}
 
+		if (options.exactFileSize)
+		{
+			const std::uint64_t plain = FASTFILE_HEADER_SIZE + FASTFILE_KEY_BLOCK_SIZE + compressed.size();
+			if (plain > options.exactFileSize)
+			{
+				return Status::error("the fast file is " + std::to_string(plain) + " bytes, longer than the " + std::to_string(options.exactFileSize) + " asked for");
+			}
+
+			// Empty deflate blocks right behind the two byte zlib header ( the stream is byte aligned there ):
+			//   stored block, no data:           00 00 00 FF FF                      5 bytes
+			//   k empty fixed blocks + stored:   10 bits each, then 3 bits, padding to a byte, 00 00 FF FF
+			// One fixed block in front makes 6 bytes, two make 7, three make 9. With those every length from 13
+			// up can be put together ( and 5, 6, 7, 9 .. 12 ).
+			const auto group = [](const int fixedBlocks, std::vector<std::uint8_t>& out)
+			{
+				std::uint64_t bits = 0;
+				int count = 0;
+				for (int i = 0; i < fixedBlocks; i++)
+				{
+					bits |= static_cast<std::uint64_t>(0b010) << count;		// BFINAL 0, BTYPE 01 ( fixed ), sent low bit first
+					count += 3 + 7;											// + the 7 zero bits of the end of block code
+				}
+				count += 3;													// BFINAL 0, BTYPE 00 ( stored ): three zero bits
+				for (int byte = 0; byte < (count + 7) / 8; byte++)
+				{
+					out.push_back(static_cast<std::uint8_t>(bits >> (byte * 8)));
+				}
+				out.insert(out.end(), { 0x00, 0x00, 0xFF, 0xFF });			// LEN 0, NLEN
+			};
+
+			std::uint64_t pad = options.exactFileSize - plain;
+			std::vector<std::uint8_t> filler;
+			if (pad)
+			{
+				switch (pad % 5)
+				{
+				case 1: if (pad >= 6) { group(1, filler); } break;
+				case 2: if (pad >= 7) { group(2, filler); } break;
+				case 3: if (pad >= 13) { group(1, filler); group(2, filler); } break;
+				case 4: if (pad >= 9) { group(3, filler); } break;
+				default: break;
+				}
+				if ((pad - filler.size()) % 5 != 0)
+				{
+					return Status::error("the fast file is " + std::to_string(pad) + " bytes short of the length asked for, which empty deflate blocks cannot make up");
+				}
+				for (std::uint64_t left = pad - filler.size(); left; left -= 5)
+				{
+					group(0, filler);
+				}
+				compressed.insert(compressed.begin() + 2, filler.begin(), filler.end());
+			}
+		}
+
 		std::uint64_t fileTime = (static_cast<std::uint64_t>(options.fileTimeHigh) << 32) | options.fileTimeLow;
 		if (!fileTime)
 		{
