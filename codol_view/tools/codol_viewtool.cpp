@@ -4,10 +4,14 @@
 //   codol_viewtool bench     --game <install> --map <name> [--frames n] [view] [options]
 //   codol_viewtool statetest --game <install> --map <name> [--out <folder>] [view] [options]
 //   codol_viewtool compare   <oracle.png> <ours.png> [--out <side by side png>]
+//   codol_viewtool edittest  --game <install> --map <name> [--out <folder>] [view] [options] [--model <xmodel>] [--material <name>]
+//   codol_viewtool pickbench --game <install> --map <name> [view]
 //
 //   view:    --size WxH ( 1280x720 )  --pos x,y,z  --angles pitch,yaw[,roll]  --spawn n  --fov degrees ( 80 )
 //   options: --no-models --no-entity-models --no-brush-models --no-world --no-shadows --no-cell-culling --wireframe --lods
 //            --ex ( IDirect3DDevice9Ex )  --pool managed|default  --skip-mips n  --time seconds
+//            --keep-edit-data ( options::keep_pick_geometry + keep_light_grid )  --extra-zones a,b
+//   render:  --box "x,y,z,half:material;.."  --model "x,y,z[,yaw[,scale]]:xmodel;.."  --hide "kind,id;.."
 //
 // The tool owns a hidden window and a Direct3D 9 device created the way the editor's host creates its own
 // ( D3DCREATE_HARDWARE_VERTEXPROCESSING | D3DCREATE_MULTITHREADED | D3DCREATE_FPU_PRESERVE ). It never presents.
@@ -51,7 +55,7 @@ namespace
 	arguments parse_arguments(const int argc, char** argv)
 	{
 		static const char* const FLAGS[] = { "no-models", "no-entity-models", "no-brush-models", "no-world", "no-shadows", "no-cell-culling", "wireframe", "lods",
-			"ex", "stats", "verbose" };
+			"ex", "stats", "verbose", "keep-edit-data" };
 		arguments args;
 		if (argc > 1)
 		{
@@ -247,7 +251,7 @@ namespace
 		std::string map;
 	};
 
-	bool open_session(const arguments& args, session& s)
+	bool open_session(const arguments& args, session& s, const bool edit = false)
 	{
 		const auto game = args.value("game");
 		const auto map = args.value("map");
@@ -274,6 +278,21 @@ namespace
 			options.texture_skip_mips = std::atoi(skip->c_str());
 		}
 		options.load_model_lods = args.flag("lods");
+		options.keep_pick_geometry = options.keep_light_grid = edit || args.flag("keep-edit-data");
+		if (const auto extra = args.value("extra-zones"))
+		{
+			std::size_t at = 0;
+			while (at <= extra->size())
+			{
+				std::size_t end = extra->find(',', at);
+				end = end == std::string::npos ? extra->size() : end;
+				if (end > at)
+				{
+					options.extra_zones.push_back(extra->substr(at, end - at));
+				}
+				at = end + 1;
+			}
+		}
 		const auto started = std::chrono::steady_clock::now();
 		if (!s.renderer.init(s.host.device, options, &error))
 		{
@@ -412,6 +431,89 @@ namespace
 
 	// ---- render ---------------------------------------------------------------------------------------------
 
+	void make_box(const codol::view::float3& center, const codol::view::float3& half, float texels_per_unit_u, float texels_per_unit_v,
+		std::vector<codol::view::mesh_vertex>& vertices, std::vector<std::uint32_t>& indices);
+
+	// --box "x,y,z,half:material;.."  --model "x,y,z,yaw:xmodel;.."  --hide "kind,id;.." ( kind: 0 surface, 1 static model, 2 entity model, 3 brush model )
+	void apply_edit_switches(const arguments& args, session& s)
+	{
+		const auto each = [](const std::string& list, const auto& visit)
+		{
+			std::size_t at = 0;
+			while (at < list.size())
+			{
+				std::size_t end = list.find(';', at);
+				end = end == std::string::npos ? list.size() : end;
+				if (end > at)
+				{
+					visit(list.substr(at, end - at));
+				}
+				at = end + 1;
+			}
+		};
+		std::string error;
+		if (const auto boxes = args.value("box"))
+		{
+			each(*boxes, [&](const std::string& item)
+			{
+				const std::size_t colon = item.find(':');
+				const auto numbers = parse_floats(item.substr(0, colon));
+				const std::string material = colon == std::string::npos ? std::string() : item.substr(colon + 1);
+				if (numbers.size() < 4)
+				{
+					return;
+				}
+				codol::view::material_info info;
+				const bool known = s.renderer.material_details(material, info);
+				std::vector<codol::view::mesh_vertex> vertices;
+				std::vector<std::uint32_t> indices;
+				// radiant's default texture scale: 0.25 units per texel
+				make_box({ numbers[0], numbers[1], numbers[2] }, { numbers[3], numbers[3], numbers[3] }, known && info.width > 0 ? 4.0f / static_cast<float>(info.width) : 1.0f / 128.0f,
+					known && info.height > 0 ? 4.0f / static_cast<float>(info.height) : 1.0f / 128.0f, vertices, indices);
+				codol::view::mesh_data data;
+				data.vertices = vertices.data();
+				data.vertex_count = vertices.size();
+				data.indices = indices.data();
+				data.index_count = indices.size();
+				data.material = material;
+				const int handle = s.renderer.create_mesh(data, &error);
+				static const char* const SHADING[] = { "none", "game_material", "color_map", "flat_color" };
+				std::printf("box of '%s' ( techset %s, colour map %s %dx%d ): mesh %d, drawn as %s %s\n", material.c_str(), info.technique_set.c_str(), info.color_map.c_str(),
+					info.width, info.height, handle, SHADING[static_cast<int>(s.renderer.mesh_shading_of(handle))], handle ? "" : error.c_str());
+			});
+		}
+		if (const auto models = args.value("model"))
+		{
+			each(*models, [&](const std::string& item)
+			{
+				const std::size_t colon = item.find(':');
+				const auto numbers = parse_floats(item.substr(0, colon));
+				if (numbers.size() < 3 || colon == std::string::npos)
+				{
+					return;
+				}
+				codol::view::transform placement;
+				placement.origin = { numbers[0], numbers[1], numbers[2] };
+				placement.angles.y = numbers.size() > 3 ? numbers[3] : 0.0f;
+				placement.scale = numbers.size() > 4 ? numbers[4] : 1.0f;
+				const int handle = s.renderer.add_model(item.substr(colon + 1), placement, &error);
+				std::printf("model '%s': handle %d %s\n", item.substr(colon + 1).c_str(), handle, handle ? "" : error.c_str());
+			});
+		}
+		if (const auto hidden = args.value("hide"))
+		{
+			each(*hidden, [&](const std::string& item)
+			{
+				const auto numbers = parse_floats(item);
+				if (numbers.size() >= 2)
+				{
+					const codol::view::object_ref ref{ static_cast<codol::view::object_kind>(static_cast<int>(numbers[0])), static_cast<int>(numbers[1]) };
+					std::printf("hide %d,%d: %s\n", static_cast<int>(numbers[0]), static_cast<int>(numbers[1]), s.renderer.set_hidden(ref, true) ? "ok" : "no such object");
+				}
+			});
+		}
+	}
+
 	int run_render(const arguments& args)
 	{
 		session s;
@@ -419,6 +521,7 @@ namespace
 		{
 			return 1;
 		}
+		apply_edit_switches(args, s);
 		const std::string out = args.value("out").value_or(s.map + ".png");
 		tools::image img;
 		std::string error;
@@ -902,6 +1005,1038 @@ namespace
 		print_memory();
 		return failures == 0 ? 0 : 1;
 	}
+	// ---- edittest ------------------------------------------------------------------------------------------
+	// Exercises the editor API offscreen: picking ( with a depth cross check against what is drawn ), hiding,
+	// moving, placing models, dynamic meshes, the overlay hook, the catalogs and thumbnails.
+
+	using codol::view::float3;
+	using codol::view::object_kind;
+	using codol::view::object_ref;
+
+	struct line_vertex
+	{
+		float x, y, z;
+		DWORD color;
+	};
+
+	float3 add(const float3& a, const float3& b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
+	float3 scaled(const float3& a, const float s) { return { a.x * s, a.y * s, a.z * s }; }
+	float distance_between(const float3& a, const float3& b)
+	{
+		const float3 d{ a.x - b.x, a.y - b.y, a.z - b.z };
+		return std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+	}
+
+	const char* kind_name(const object_kind kind)
+	{
+		switch (kind)
+		{
+		case object_kind::world_surface: return "world_surface";
+		case object_kind::static_model: return "static_model";
+		case object_kind::entity_model: return "entity_model";
+		case object_kind::brush_model: return "brush_model";
+		case object_kind::placed_model: return "placed_model";
+		case object_kind::dynamic_mesh: return "dynamic_mesh";
+		}
+		return "?";
+	}
+
+	void push_line(std::vector<line_vertex>& lines, const float3& a, const float3& b, const DWORD color)
+	{
+		lines.push_back({ a.x, a.y, a.z, color });
+		lines.push_back({ b.x, b.y, b.z, color });
+	}
+
+	void push_box(std::vector<line_vertex>& lines, const codol::view::oriented_box& box, const DWORD color)
+	{
+		float3 corners[8];
+		for (int c = 0; c < 8; c++)
+		{
+			corners[c] = add(add(add(box.center, scaled(box.axis[0], (c & 1) ? box.half_size.x : -box.half_size.x)),
+				scaled(box.axis[1], (c & 2) ? box.half_size.y : -box.half_size.y)), scaled(box.axis[2], (c & 4) ? box.half_size.z : -box.half_size.z));
+		}
+		for (int c = 0; c < 8; c++)
+		{
+			for (const int bit : { 1, 2, 4 })
+			{
+				if (!(c & bit))
+				{
+					push_line(lines, corners[c], corners[c | bit], color);
+				}
+			}
+		}
+	}
+
+	// a box of `half` around `center`, 24 vertices, uv = world units / texel size
+	void make_box(const codol::view::float3& center, const codol::view::float3& half, const float texels_per_unit_u, const float texels_per_unit_v,
+		std::vector<codol::view::mesh_vertex>& vertices, std::vector<std::uint32_t>& indices)
+	{
+		vertices.clear();
+		indices.clear();
+		for (int face = 0; face < 6; face++)
+		{
+			const int axis = face / 2;
+			const float sign = (face & 1) ? 1.0f : -1.0f;
+			const int u_axis = (axis + 1) % 3, v_axis = (axis + 2) % 3;
+			const float h[3] = { half.x, half.y, half.z };
+			const float c[3] = { center.x, center.y, center.z };
+			const std::uint32_t base = static_cast<std::uint32_t>(vertices.size());
+			for (int corner = 0; corner < 4; corner++)
+			{
+				const float su = (corner & 1) ? 1.0f : -1.0f, sv = (corner & 2) ? 1.0f : -1.0f;
+				float p[3];
+				p[axis] = c[axis] + sign * h[axis];
+				p[u_axis] = c[u_axis] + su * h[u_axis];
+				p[v_axis] = c[v_axis] + sv * h[v_axis];
+				codol::view::mesh_vertex v;
+				v.position = { p[0], p[1], p[2] };
+				float n[3] = {};
+				n[axis] = sign;
+				v.normal = { n[0], n[1], n[2] };
+				v.uv[0] = p[u_axis] * texels_per_unit_u;
+				v.uv[1] = -p[v_axis] * texels_per_unit_v;
+				vertices.push_back(v);
+			}
+			// the winding is left to the renderer ( it orients triangles by the normals )
+			for (const std::uint32_t i : { 0u, 1u, 2u, 2u, 1u, 3u })
+			{
+				indices.push_back(base + i);
+			}
+		}
+	}
+
+	int run_edittest(const arguments& args)
+	{
+		session s;
+		if (!open_session(args, s, true))
+		{
+			return 1;
+		}
+		map_renderer& r = s.renderer;
+		IDirect3DDevice9* device = s.host.device;
+		const std::filesystem::path folder = args.value("out").value_or(".");
+		std::error_code ec;
+		std::filesystem::create_directories(folder, ec);
+		std::string error;
+		int failures = 0;
+		const auto check = [&](const bool ok, const std::string& what)
+		{
+			std::printf("%s  %s\n", ok ? "PASS" : "FAIL", what.c_str());
+			failures += ok ? 0 : 1;
+		};
+		const auto frame_of = [&](const frame_options& frame, tools::image& img) { return read_back(device, r.render(s.cam, s.width, s.height, frame), img, error); };
+		const auto save = [&](const char* name, const tools::image& img)
+		{
+			if (!tools::save_png(folder / name, img, error))
+			{
+				std::fprintf(stderr, "%s\n", error.c_str());
+			}
+		};
+		const auto pixel = [&](const tools::image& img, const int x, const int y) -> std::uint32_t
+		{
+			const std::uint8_t* p = img.rgba.data() + 4 * (static_cast<std::size_t>(y) * static_cast<std::size_t>(img.width) + static_cast<std::size_t>(x));
+			return (static_cast<std::uint32_t>(p[0]) << 16) | (static_cast<std::uint32_t>(p[1]) << 8) | p[2];
+		};
+
+		{
+			const auto st = r.stats();
+			std::printf("pick geometry: %lld triangles, %.1f MB, built in %.0f ms ( part of the %.0f ms load ); light grid + sight trace kept: %.1f MB\n",
+				static_cast<long long>(st.pick_triangles), static_cast<double>(st.pick_bytes) / 1048576.0, st.pick_build_ms, st.load_ms,
+				static_cast<double>(st.light_grid_bytes) / 1048576.0);
+		}
+
+		// ---- 1. the plain frame
+		tools::image base;
+		check(frame_of(s.frame, base), "plain frame");
+		save("edit_0_base.png", base);
+
+		// ---- 2. camera math: project( screen_ray ) is the pixel again
+		{
+			float worst = 0;
+			for (int y = 0; y < s.height; y += 37)
+			{
+				for (int x = 0; x < s.width; x += 41)
+				{
+					float3 origin, direction;
+					codol::view::screen_ray(s.cam, s.width, s.height, static_cast<float>(x), static_cast<float>(y), origin, direction);
+					float xy[2] = {}, depth = 0;
+					if (!codol::view::project(s.cam, s.width, s.height, add(origin, scaled(direction, 500.0f)), xy, depth))
+					{
+						worst = 1.0e9f;
+						continue;
+					}
+					worst = std::max({ worst, std::fabs(xy[0] - static_cast<float>(x)), std::fabs(xy[1] - static_cast<float>(y)) });
+				}
+			}
+			char text[160];
+			std::snprintf(text, sizeof text, "project( screen_ray( pixel ) ) returns the pixel ( worst error %.4f pixels )", worst);
+			check(worst < 0.01f, text);
+		}
+
+		// ---- 3. picking: a grid of pixels
+		struct sample
+		{
+			int x, y;
+			bool hit;
+			codol::view::pick_result result;
+		};
+		std::vector<sample> samples;
+		const int columns = 24, rows = 14;
+		double pick_total = 0, pick_worst = 0;
+		for (int row = 0; row < rows; row++)
+		{
+			for (int column = 0; column < columns; column++)
+			{
+				sample smp{};
+				smp.x = (2 * column + 1) * s.width / (2 * columns);
+				smp.y = (2 * row + 1) * s.height / (2 * rows);
+				const auto started = std::chrono::steady_clock::now();
+				smp.hit = r.pick(s.cam, s.width, s.height, static_cast<float>(smp.x), static_cast<float>(smp.y), smp.result);
+				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+				pick_total += ms;
+				pick_worst = std::max(pick_worst, ms);
+				samples.push_back(std::move(smp));
+			}
+		}
+		{
+			int hits = 0, by_kind[6] = {};
+			float worst_pixels = 0, worst_distance = 0;
+			for (const sample& smp : samples)
+			{
+				if (!smp.hit)
+				{
+					continue;
+				}
+				hits++;
+				by_kind[static_cast<int>(smp.result.object.kind)]++;
+				float xy[2] = {}, depth = 0;
+				if (codol::view::project(s.cam, s.width, s.height, smp.result.point, xy, depth))
+				{
+					worst_pixels = std::max({ worst_pixels, std::fabs(xy[0] - static_cast<float>(smp.x)), std::fabs(xy[1] - static_cast<float>(smp.y)) });
+				}
+				else
+				{
+					worst_pixels = 1.0e9f;
+				}
+				worst_distance = std::max(worst_distance, std::fabs(distance_between(smp.result.point, s.cam.origin) - smp.result.distance));
+			}
+			std::printf("pick: %d x %d pixels, %d hits ( %d world surfaces, %d static models, %d entity models, %d brush models ); %.3f ms mean, %.3f ms worst\n",
+				columns, rows, hits, by_kind[0], by_kind[1], by_kind[2], by_kind[3], pick_total / static_cast<double>(samples.size()), pick_worst);
+			char text[200];
+			std::snprintf(text, sizeof text, "picked points project back to their pixels ( worst %.3f pixels ) and distance = |point - eye| ( worst %.4f units )",
+				worst_pixels, worst_distance);
+			check(hits > 0 && worst_pixels < 0.5f && worst_distance < 0.05f, text);
+			check(pick_worst < 10.0, "every pick took less than 10 ms");
+			for (std::size_t i = 0; i < samples.size(); i += 29)
+			{
+				const sample& smp = samples[i];
+				if (smp.hit)
+				{
+					std::printf("  pixel %4d,%3d: %-13s id %-6d entity %-4d distance %8.1f point %.1f,%.1f,%.1f normal %.2f,%.2f,%.2f surface %d triangle %d material %s\n",
+						smp.x, smp.y, kind_name(smp.result.object.kind), smp.result.object.id, smp.result.entity, smp.result.distance, smp.result.point.x,
+						smp.result.point.y, smp.result.point.z, smp.result.normal.x, smp.result.normal.y, smp.result.normal.z, smp.result.surface,
+						smp.result.triangle, smp.result.material.c_str());
+				}
+				else
+				{
+					std::printf("  pixel %4d,%3d: nothing\n", smp.x, smp.y);
+				}
+			}
+		}
+
+		// ---- 4. the depth of what is drawn against the picked distance: a marker a little in front of each
+		// picked point must be visible, a marker a little behind it must be hidden by the scene's depth buffer
+		{
+			const auto markers = [&](const float push, tools::image& img)
+			{
+				frame_options frame = s.frame;
+				frame.overlay = [&](const codol::view::overlay_context& context)
+				{
+					std::vector<line_vertex> triangles;
+					// camera right / up from the view matrix ( its first two columns )
+					const float3 right{ context.view[0], context.view[4], context.view[8] };
+					const float3 up{ context.view[1], context.view[5], context.view[9] };
+					for (const sample& smp : samples)
+					{
+						if (!smp.hit)
+						{
+							continue;
+						}
+						float3 origin, direction;
+						codol::view::screen_ray(context.cam, context.width, context.height, static_cast<float>(smp.x), static_cast<float>(smp.y), origin, direction);
+						const float t = smp.result.distance + push * std::max(1.0f, 0.01f * smp.result.distance);
+						const float3 centre = add(origin, scaled(direction, t));
+						const float size = 2.0f * t * std::tan(context.cam.fov_x * 3.14159265f / 360.0f) / static_cast<float>(context.width);		// about two pixels
+						const float3 a = add(add(centre, scaled(right, -size)), scaled(up, -size)), b = add(add(centre, scaled(right, size)), scaled(up, -size));
+						const float3 c = add(add(centre, scaled(right, size)), scaled(up, size)), d = add(add(centre, scaled(right, -size)), scaled(up, size));
+						for (const float3& p : { a, b, c, a, c, d })
+						{
+							triangles.push_back({ p.x, p.y, p.z, 0xFFFF00FF });
+						}
+					}
+					if (!triangles.empty())
+					{
+						context.device->DrawPrimitiveUP(D3DPT_TRIANGLELIST, static_cast<UINT>(triangles.size() / 3), triangles.data(), sizeof(line_vertex));
+					}
+				};
+				return frame_of(frame, img);
+			};
+			tools::image front, behind;
+			check(markers(-1.0f, front) && markers(1.0f, behind), "frames with overlay markers");
+			save("edit_1_pick_markers_in_front.png", front);
+			save("edit_1_pick_markers_behind.png", behind);
+			// A surface that writes no depth ( decals, blended materials ) or has alpha tested holes ( fences, foliage )
+			// is picked on its triangles but does not hide what is behind it: those are counted apart
+			int tested = 0, front_visible = 0, solid = 0, solid_hidden = 0, other = 0, other_hidden = 0;
+			std::map<std::string, int> unexplained;
+			for (const sample& smp : samples)
+			{
+				if (!smp.hit)
+				{
+					continue;
+				}
+				tested++;
+				const bool visible = pixel(front, smp.x, smp.y) == 0xFF00FF;
+				const bool hidden = pixel(behind, smp.x, smp.y) != 0xFF00FF;
+				front_visible += visible ? 1 : 0;
+				codol::view::material_info info;
+				const bool is_solid = r.material_details(smp.result.material, info) && info.writes_depth && !info.alpha_tested;
+				(is_solid ? solid : other)++;
+				(is_solid ? solid_hidden : other_hidden) += hidden ? 1 : 0;
+				if (!visible || (is_solid && !hidden))
+				{
+					unexplained[smp.result.material]++;
+					std::printf("  depth mismatch at %d,%d: %s id %d material %s distance %.1f ( marker in front %s, marker behind %s )\n", smp.x, smp.y,
+						kind_name(smp.result.object.kind), smp.result.object.id, smp.result.material.c_str(), smp.result.distance, visible ? "visible" : "HIDDEN",
+						hidden ? "hidden" : "VISIBLE");
+				}
+			}
+			char text[400];
+			std::snprintf(text, sizeof text, "depth of the drawn scene at the %d picked pixels: a marker 1 %% in front of the picked point is visible at %d; a marker 1 %% "
+				"behind it is hidden at %d of the %d hits on solid materials ( and at %d of the %d hits on materials without depth writes or with alpha tested holes )",
+				tested, front_visible, solid_hidden, solid, other_hidden, other);
+			check(tested > 0 && front_visible == tested && solid_hidden == solid, text);
+		}
+
+		// ---- 5. hiding: the picked object of some pixels goes, the pixel changes; show_all brings the frame back
+		{
+			std::vector<object_ref> hidden;
+			int changed = 0, tried = 0;
+			for (std::size_t i = 7; i < samples.size() && tried < 12; i += 5)
+			{
+				// solid materials only: a decal layer or the hole of a fence can leave the pixel as it was
+				const sample& smp = samples[i];
+				codol::view::material_info info;
+				if (!smp.hit || std::find(hidden.begin(), hidden.end(), smp.result.object) != hidden.end() || !r.material_details(smp.result.material, info)
+					|| !info.writes_depth || info.alpha_tested || info.blends)
+				{
+					continue;
+				}
+				tried++;
+				r.set_hidden(smp.result.object, true);
+				hidden.push_back(smp.result.object);
+				tools::image img;
+				frame_of(s.frame, img);
+				const bool differs = pixel(img, smp.x, smp.y) != pixel(base, smp.x, smp.y);
+				changed += differs ? 1 : 0;
+				codol::view::pick_result again;
+				const bool hit_again = r.pick(s.cam, s.width, s.height, static_cast<float>(smp.x), static_cast<float>(smp.y), again);
+				if (!differs || (hit_again && again.object == smp.result.object) || (hit_again && again.distance < smp.result.distance))
+				{
+					std::printf("  hide %s %d ( %s ) at %d,%d: pixel %s, pick behind it %s\n", kind_name(smp.result.object.kind), smp.result.object.id,
+						smp.result.material.c_str(), smp.x, smp.y, differs ? "changed" : "DID NOT CHANGE", hit_again ? kind_name(again.object.kind) : "nothing");
+				}
+				if (hit_again && (again.object == smp.result.object || again.distance < smp.result.distance))
+				{
+					failures++;
+					std::printf("FAIL  a hidden object was picked again\n");
+				}
+			}
+			tools::image img;
+			frame_of(s.frame, img);
+			save("edit_2_hidden.png", img);
+			char text[160];
+			std::snprintf(text, sizeof text, "hiding the picked object changes its pixel ( %d of %d ); %d objects hidden", changed, tried, r.stats().hidden_objects);
+			check(tried > 0 && changed == tried && r.stats().hidden_objects == tried, text);
+			r.show_all();
+			frame_of(s.frame, img);
+			check(compare_images(base, img, nullptr).max == 0 && r.stats().hidden_objects == 0, "after show_all the frame is identical to the plain one");
+		}
+
+		// ---- 5b. a brush model: pick, outline, move, put back
+		{
+			codol::view::scene_object brush;
+			float nearest_brush = FLT_MAX;
+			float brush_xy[2] = {};
+			for (const auto& candidate : r.objects())
+			{
+				float xy[2] = {}, depth = 0;
+				if (candidate.kind == object_kind::brush_model && candidate.drawn && codol::view::project(s.cam, s.width, s.height, candidate.center, xy, depth)
+					&& xy[0] > 0 && xy[1] > 0 && xy[0] < static_cast<float>(s.width) && xy[1] < static_cast<float>(s.height)
+					&& distance_between(candidate.center, s.cam.origin) < nearest_brush)
+				{
+					// one that is seen: the pick at its centre is the brush model itself
+					codol::view::pick_result seen;
+					if (!r.pick(s.cam, s.width, s.height, xy[0], xy[1], seen) || !(seen.object == candidate.ref()))
+					{
+						continue;
+					}
+					nearest_brush = distance_between(candidate.center, s.cam.origin);
+					brush = candidate;
+					brush_xy[0] = xy[0];
+					brush_xy[1] = xy[1];
+				}
+			}
+			if (nearest_brush == FLT_MAX)
+			{
+				std::printf("no brush model is drawn in this view ( %d in the map )\n", r.stats().brush_model_count);
+			}
+			else
+			{
+				const codol::view::pick_options only_brushes{ .world = false, .static_models = false, .entity_models = false, .placed_models = false, .meshes = false };
+				codol::view::pick_result hit;
+				const bool picked = r.pick(s.cam, s.width, s.height, brush_xy[0], brush_xy[1], hit, only_brushes);
+				std::vector<float3> triangles;
+				codol::view::oriented_box box;
+				const bool outlined = r.object_box(brush.ref(), box) && r.object_triangles(brush.ref(), triangles);
+				std::printf("brush model %s of entity %d: centre at pixel %.0f,%.0f, %zu triangles, box half size %.0f,%.0f,%.0f; a ray at its centre picks %s %d ( %s ) at %.1f\n",
+					brush.name.c_str(), brush.entity, brush_xy[0], brush_xy[1], triangles.size() / 3, box.half_size.x, box.half_size.y, box.half_size.z,
+					picked ? kind_name(hit.object.kind) : "nothing", picked ? hit.object.id : -1, picked ? hit.material.c_str() : "", picked ? hit.distance : 0.0f);
+				check(outlined && !triangles.empty(), "object_box and object_triangles of a brush model");
+				codol::view::transform before, t;
+				check(r.get_transform(brush.ref(), before), "get_transform of a brush model");
+				t = before;
+				t.origin.z += 40.0f;
+				t.angles.y += 25.0f;
+				check(r.set_transform(brush.ref(), t), "set_transform of a brush model ( raised 40, turned 25 degrees )");
+				tools::image img;
+				frame_of(s.frame, img);
+				save("edit_2b_brush_moved.png", img);
+				codol::view::scene_object moved;
+				r.object(brush.ref(), moved);
+				float xy[2] = {}, depth = 0;
+				const bool again = codol::view::project(s.cam, s.width, s.height, moved.center, xy, depth) && r.pick(s.cam, s.width, s.height, xy[0], xy[1], hit, only_brushes);
+				check(compare_images(base, img, nullptr).max > 0 && moved.moved, "the frame with the moved brush model differs from the plain one");
+				std::printf("  moved brush model: centre at pixel %.0f,%.0f, picked %s %d\n", xy[0], xy[1], again ? kind_name(hit.object.kind) : "nothing", again ? hit.object.id : -1);
+				r.reset_transform(brush.ref());
+				frame_of(s.frame, img);
+				check(compare_images(base, img, nullptr).max == 0, "after reset_transform of the brush model the frame is identical to the plain one");
+			}
+		}
+
+		// ---- 6. moving a static model and an entity model
+		const sample* ground = nullptr;			// a picked point on an upward facing world surface near the screen centre
+		{
+			float best = FLT_MAX;
+			for (const sample& smp : samples)
+			{
+				if (smp.hit && smp.result.object.kind == object_kind::world_surface && smp.result.normal.z > 0.9f && smp.result.distance < 1500.0f && smp.result.distance > 350.0f)
+				{
+					const float d = std::fabs(static_cast<float>(smp.x - s.width / 2)) + 2.0f * std::fabs(static_cast<float>(smp.y - 3 * s.height / 4));
+					if (d < best)
+					{
+						best = d;
+						ground = &smp;
+					}
+				}
+			}
+		}
+		if (!ground)
+		{
+			std::printf("no ground under this view: the move / add / mesh steps are skipped ( choose another --pos / --spawn )\n");
+			failures++;
+		}
+		else
+		{
+			std::printf("ground point: pixel %d,%d at %.1f,%.1f,%.1f ( surface %d, %s )\n", ground->x, ground->y, ground->result.point.x, ground->result.point.y,
+				ground->result.point.z, ground->result.object.id, ground->result.material.c_str());
+			float3 origin, forward;
+			codol::view::screen_ray(s.cam, s.width, s.height, static_cast<float>(s.width) * 0.5f, static_cast<float>(s.height) * 0.5f, origin, forward);
+			const float flat_length = std::max(std::sqrt(forward.x * forward.x + forward.y * forward.y), 1.0e-3f);
+			const float3 flat_forward{ forward.x / flat_length, forward.y / flat_length, 0 };
+			const float3 side{ -flat_forward.y, flat_forward.x, 0 };		// to the left of the view
+			const float3 spot = ground->result.point;
+
+			object_ref moved_static{ object_kind::static_model, -1 }, moved_entity{ object_kind::entity_model, -1 };
+			for (const sample& smp : samples)
+			{
+				if (smp.hit && smp.result.object.kind == object_kind::static_model && moved_static.id < 0)
+				{
+					codol::view::scene_object info;
+					if (r.object(smp.result.object, info) && std::max({ info.half_size.x, info.half_size.y, info.half_size.z }) < 200.0f)
+					{
+						moved_static = smp.result.object;
+					}
+				}
+			}
+			float nearest = FLT_MAX;
+			for (const auto& object : r.objects())
+			{
+				if (object.kind == object_kind::entity_model && distance_between(object.center, s.cam.origin) < nearest
+					&& std::max({ object.half_size.x, object.half_size.y, object.half_size.z }) < 300.0f)
+				{
+					nearest = distance_between(object.center, s.cam.origin);
+					moved_entity = object.ref();
+				}
+			}
+			codol::view::transform before_static, before_entity, t;
+			tools::image img;
+			if (moved_static.id >= 0 && r.get_transform(moved_static, before_static))
+			{
+				codol::view::scene_object info;
+				r.object(moved_static, info);
+				t = before_static;
+				t.origin = add(spot, scaled(side, 260.0f));
+				t.angles.y += 45.0f;
+				check(r.set_transform(moved_static, t), "set_transform of static model " + std::to_string(moved_static.id) + " ( " + info.name + " )");
+				codol::view::transform now;
+				r.get_transform(moved_static, now);
+				check(distance_between(now.origin, t.origin) < 0.01f && std::fabs(now.scale - t.scale) < 1.0e-4f, "get_transform returns the override");
+			}
+			else
+			{
+				std::printf("no small static model was picked in this view\n");
+			}
+			if (moved_entity.id >= 0 && r.get_transform(moved_entity, before_entity))
+			{
+				codol::view::scene_object info;
+				r.object(moved_entity, info);
+				t = before_entity;
+				t.origin = add(spot, scaled(side, -260.0f));
+				t.angles.y += 30.0f;
+				check(r.set_transform(moved_entity, t), "set_transform of entity model " + std::to_string(moved_entity.id) + " ( " + info.name + " )");
+			}
+			else
+			{
+				std::printf("the map has no small entity model\n");
+			}
+			frame_of(s.frame, img);
+			save("edit_3_moved.png", img);
+			check(compare_images(base, img, nullptr).max > 0, "the frame with moved models differs from the plain one");
+			for (const object_ref& ref : { moved_static, moved_entity })
+			{
+				codol::view::scene_object info;
+				if (ref.id < 0 || !r.object(ref, info))
+				{
+					continue;
+				}
+				// a ray at the middle of the moved model's bounds hits it ( or something of it is in front )
+				float xy[2] = {}, depth = 0;
+				codol::view::pick_result hit;
+				const bool projected = codol::view::project(s.cam, s.width, s.height, info.center, xy, depth);
+				const bool picked = projected && r.pick(s.cam, s.width, s.height, xy[0], xy[1], hit, { .world = false });
+				std::printf("  moved %s %d ( %s ): centre at pixel %.0f,%.0f, picked %s %d at distance %.1f; moved = %d\n", kind_name(ref.kind), ref.id, info.name.c_str(),
+					xy[0], xy[1], picked ? kind_name(hit.object.kind) : "nothing", picked ? hit.object.id : -1, picked ? hit.distance : 0.0f, info.moved ? 1 : 0);
+				check(info.moved, std::string("scene_object::moved is set for the moved ") + kind_name(ref.kind));
+			}
+			check(r.stats().moved_objects == (moved_static.id >= 0 ? 1 : 0) + (moved_entity.id >= 0 ? 1 : 0), "statistics::moved_objects");
+			if (moved_static.id >= 0)
+			{
+				r.reset_transform(moved_static);
+			}
+			if (moved_entity.id >= 0)
+			{
+				r.reset_transform(moved_entity);
+			}
+			frame_of(s.frame, img);
+			const difference restored = compare_images(base, img, nullptr);
+			std::printf("      after reset_transform: largest difference to the plain frame %d\n", restored.max);
+			check(restored.max == 0,"after reset_transform the frame is identical to the plain one ( placement and lighting restored )");
+
+			// ---- 7. new model instances
+			const auto& model_names = r.model_names();
+			const auto& material_names = r.material_names();
+			std::printf("catalog: %zu models, %zu materials\n", model_names.size(), material_names.size());
+			std::string map_model, library_model;
+			{
+				codol::view::scene_object info;
+				if (moved_static.id >= 0 && r.object(moved_static, info))
+				{
+					map_model = info.name;
+				}
+				const auto wanted = args.value("model");
+				// a model no object of the map uses: from the library ( another zone )
+				std::map<std::string, bool> used;
+				for (const auto& object : r.objects())
+				{
+					if (object.kind == object_kind::static_model || object.kind == object_kind::entity_model)
+					{
+						used[object.name] = true;
+					}
+				}
+				for (const std::string& name : model_names)
+				{
+					if (wanted ? name == *wanted : (!used.count(name) && (name.find("vehicle") != std::string::npos || name.find("com_") == 0)))
+					{
+						float3 mins, maxs;
+						if (r.model_bounds(name, mins, maxs) && maxs.z - mins.z > 30.0f && maxs.z - mins.z < 250.0f && maxs.x - mins.x < 400.0f)
+						{
+							library_model = name;
+							break;
+						}
+					}
+				}
+			}
+			int handles[2] = {};
+			const std::string names[2] = { map_model, library_model };
+			for (int i = 0; i < 2; i++)
+			{
+				if (names[i].empty())
+				{
+					std::printf("no %s model to place\n", i == 0 ? "map" : "library");
+					continue;
+				}
+				float3 mins, maxs;
+				const bool bounds = r.model_bounds(names[i], mins, maxs);
+				codol::view::transform placement;
+				placement.origin = add(add(spot, scaled(side, i == 0 ? 130.0f : -130.0f)), scaled(flat_forward, 160.0f));
+				placement.origin.z -= bounds ? std::min(mins.z, 0.0f) : 0.0f;
+				placement.angles = { 0, i == 0 ? 20.0f : 200.0f, 0 };
+				const auto started = std::chrono::steady_clock::now();
+				handles[i] = r.add_model(names[i], placement, &error);
+				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+				char text[320];
+				std::snprintf(text, sizeof text, "add_model( %s ) -> handle %d in %.0f ms; bounds %.0f,%.0f,%.0f .. %.0f,%.0f,%.0f%s%s", names[i].c_str(), handles[i], ms,
+					mins.x, mins.y, mins.z, maxs.x, maxs.y, maxs.z, handles[i] ? "" : ": ", handles[i] ? "" : error.c_str());
+				check(handles[i] > 0 && bounds, text);
+			}
+			frame_of(s.frame, img);
+			save("edit_4_added.png", img);
+			check(r.stats().placed_models == (handles[0] ? 1 : 0) + (handles[1] ? 1 : 0), "the placed models were drawn ( statistics::placed_models )");
+			for (const int handle : handles)
+			{
+				codol::view::scene_object info;
+				if (!handle || !r.object({ object_kind::placed_model, handle }, info))
+				{
+					continue;
+				}
+				float xy[2] = {}, depth = 0;
+				codol::view::pick_result hit;
+				const bool picked = codol::view::project(s.cam, s.width, s.height, info.center, xy, depth) && r.pick(s.cam, s.width, s.height, xy[0], xy[1], hit);
+				std::printf("  placed model %d ( %s ): centre at pixel %.0f,%.0f, picked %s %d ( %s )\n", handle, info.name.c_str(), xy[0], xy[1],
+					picked ? kind_name(hit.object.kind) : "nothing", picked ? hit.object.id : -1, picked ? hit.material.c_str() : "");
+			}
+			if (handles[1])
+			{
+				// move the placed model, then remove the other
+				codol::view::transform placement;
+				r.get_transform({ object_kind::placed_model, handles[1] }, placement);
+				placement.origin.z += 40.0f;
+				placement.scale = 1.5f;
+				check(r.set_transform({ object_kind::placed_model, handles[1] }, placement), "set_transform of a placed model ( raised, scale 1.5 )");
+			}
+			if (handles[0])
+			{
+				check(r.remove_model(handles[0]) && !r.remove_model(handles[0]), "remove_model");
+			}
+
+			// ---- 8. dynamic meshes
+			codol::view::material_info info;
+			// two solid materials made for brushes that the view shows: a wall first
+			std::string wall_material = ground->result.material, second_material;
+			for (const bool wall : { true, false })
+			{
+				for (const sample& smp : samples)
+				{
+					if (smp.hit && smp.result.object.kind == object_kind::world_surface && (!wall || std::fabs(smp.result.normal.z) < 0.3f)
+						&& r.material_details(smp.result.material, info) && info.world_material && !info.blends && !info.alpha_tested && info.writes_depth)
+					{
+						if (wall)
+						{
+							wall_material = smp.result.material;
+							break;
+						}
+						if (smp.result.material != wall_material)
+						{
+							second_material = smp.result.material;
+							break;
+						}
+					}
+				}
+			}
+			const std::string world_material = args.value("material").value_or(wall_material);
+			const bool known = r.material_details(world_material, info);
+			std::printf("material %s: techset %s, colour map %s %dx%d, surface type bits 0x%08X, game flags 0x%02X, sort key %d, camera region %d, world material %d, "
+				"blends %d, alpha tested %d, writes depth %d, zone %s\n", world_material.c_str(), info.technique_set.c_str(), info.color_map.c_str(), info.width, info.height,
+				info.surface_type_bits, info.game_flags, info.sort_key, info.camera_region, info.world_material ? 1 : 0, info.blends ? 1 : 0, info.alpha_tested ? 1 : 0,
+				info.writes_depth ? 1 : 0, info.zone.c_str());
+			check(known && info.width > 0 && info.height > 0, "material_details gives the colour map and its size");
+			std::vector<codol::view::mesh_vertex> vertices;
+			std::vector<std::uint32_t> indices;
+			const float u_scale = info.width > 0 ? 4.0f / static_cast<float>(info.width) : 1.0f / 128.0f;		// radiant: 0.25 units per texel
+			const float v_scale = info.height > 0 ? 4.0f / static_cast<float>(info.height) : 1.0f / 128.0f;
+			std::string model_material;
+			if (handles[1])
+			{
+				codol::view::pick_result hit;
+				codol::view::scene_object placed;
+				float xy[2] = {}, depth = 0;
+				if (r.object({ object_kind::placed_model, handles[1] }, placed) && codol::view::project(s.cam, s.width, s.height, placed.center, xy, depth)
+					&& r.pick(s.cam, s.width, s.height, xy[0], xy[1], hit, { .world = false, .static_models = false, .entity_models = false, .brush_models = false }))
+				{
+					model_material = hit.material;
+				}
+			}
+			struct box_spec
+			{
+				const char* what;
+				std::string material;
+				float3 offset;
+				codol::view::mesh_shading expected;
+			};
+			const box_spec boxes[] =
+			{
+				{ "world material", world_material, scaled(side, 50.0f), codol::view::mesh_shading::game_material },
+				{ "another world material", second_material, add(scaled(side, 150.0f), scaled(flat_forward, -90.0f)), codol::view::mesh_shading::game_material },
+				{ "missing material", "no_such_material_xyz", scaled(side, -50.0f), codol::view::mesh_shading::flat_color },
+				{ "model material", model_material, add(scaled(side, 0.0f), scaled(flat_forward, -110.0f)), codol::view::mesh_shading::none },
+				{ "tool material ( never drawn by the game )", args.value("tool-material").value_or("clip"), add(scaled(side, -150.0f), scaled(flat_forward, -90.0f)),
+					codol::view::mesh_shading::none },
+			};
+			std::vector<int> mesh_handles;
+			for (const box_spec& box : boxes)
+			{
+				if (box.material.empty())
+				{
+					continue;
+				}
+				const float3 half{ 36, 36, 36 };
+				make_box(add(add(spot, box.offset), float3{ 0, 0, half.z }), half, u_scale, v_scale, vertices, indices);
+				codol::view::mesh_data data;
+				data.vertices = vertices.data();
+				data.vertex_count = vertices.size();
+				data.indices = indices.data();
+				data.index_count = indices.size();
+				data.material = box.material;
+				data.fallback_color = 0xFFE08020;
+				const int handle = r.create_mesh(data, &error);
+				const auto shading = r.mesh_shading_of(handle);
+				static const char* const SHADING[] = { "none", "game_material", "color_map", "flat_color" };
+				check(handle > 0 && (box.expected == codol::view::mesh_shading::none || shading == box.expected),
+					std::string("create_mesh, ") + box.what + " '" + box.material + "': drawn as " + SHADING[static_cast<int>(shading)]);
+				if (handle)
+				{
+					mesh_handles.push_back(handle);
+				}
+			}
+			frame_of(s.frame, img);
+			save("edit_5_meshes.png", img);
+			check(r.stats().meshes == static_cast<int>(mesh_handles.size()), "the meshes were drawn ( statistics::meshes )");
+			for (const int handle : mesh_handles)
+			{
+				codol::view::scene_object mesh_info;
+				r.object({ object_kind::dynamic_mesh, handle }, mesh_info);
+				float xy[2] = {}, depth = 0;
+				codol::view::pick_result hit;
+				// the top face, seen from the camera
+				const float3 top = add(mesh_info.center, float3{ 0, 0, mesh_info.half_size.z });
+				const bool picked = codol::view::project(s.cam, s.width, s.height, top, xy, depth) && r.pick(s.cam, s.width, s.height, xy[0], xy[1], hit);
+				std::printf("  mesh %d ( %s ): top at pixel %.0f,%.0f, picked %s %d, normal %.2f,%.2f,%.2f, point %.1f,%.1f,%.1f\n", handle, mesh_info.name.c_str(), xy[0], xy[1],
+					picked ? kind_name(hit.object.kind) : "nothing", picked ? hit.object.id : -1, hit.normal.x, hit.normal.y, hit.normal.z, hit.point.x, hit.point.y, hit.point.z);
+			}
+			if (!mesh_handles.empty())
+			{
+				// update: the first box becomes a slab; hide the second
+				make_box(add(add(spot, boxes[0].offset), float3{ 0, 0, 60 }), { 20, 70, 60 }, u_scale, v_scale, vertices, indices);
+				codol::view::mesh_data data;
+				data.vertices = vertices.data();
+				data.vertex_count = vertices.size();
+				data.indices = indices.data();
+				data.index_count = indices.size();
+				data.material = world_material;
+				check(r.update_mesh(mesh_handles[0], data, &error), "update_mesh");
+				if (mesh_handles.size() > 1)
+				{
+					check(r.set_mesh_visible(mesh_handles[1], false) && r.is_hidden({ object_kind::dynamic_mesh, mesh_handles[1] }), "set_mesh_visible( false )");
+				}
+				frame_of(s.frame, img);
+				save("edit_6_mesh_updated.png", img);
+				if (mesh_handles.size() > 1)
+				{
+					r.set_mesh_visible(mesh_handles[1], true);
+				}
+			}
+
+			// ---- 9. overlay: outlines of the edited objects, the triangles of one, axes, thumbnails
+			{
+				std::vector<IDirect3DTexture9*> thumbnails;
+				std::vector<std::string> thumbnail_names;
+				const auto started = std::chrono::steady_clock::now();
+				for (std::size_t i = 0; i < material_names.size() && thumbnails.size() < 12; i += std::max<std::size_t>(1, material_names.size() / 97))
+				{
+					if (IDirect3DTexture9* texture = r.material_thumbnail(material_names[i], 128))
+					{
+						thumbnails.push_back(texture);
+						thumbnail_names.push_back(material_names[i]);
+					}
+				}
+				if (IDirect3DTexture9* texture = r.material_thumbnail(world_material, 128))
+				{
+					thumbnails.insert(thumbnails.begin(), texture);
+					thumbnail_names.insert(thumbnail_names.begin(), world_material);
+				}
+				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+				std::printf("thumbnails: %zu loaded in %.0f ms:", thumbnails.size(), ms);
+				for (std::size_t i = 0; i < thumbnails.size(); i++)
+				{
+					D3DSURFACE_DESC desc{};
+					thumbnails[i]->GetLevelDesc(0, &desc);
+					std::printf(" %s %ux%u", thumbnail_names[i].c_str(), desc.Width, desc.Height);
+				}
+				std::printf("\n");
+				check(!thumbnails.empty() && r.material_thumbnail(thumbnail_names[0], 128) == thumbnails[0], "material_thumbnail loads and caches");
+
+				frame_options frame = s.frame;
+				frame.overlay = [&](const codol::view::overlay_context& context)
+				{
+					IDirect3DDevice9* dev = context.device;
+					std::vector<line_vertex> lines;
+					codol::view::oriented_box box;
+					for (const int handle : mesh_handles)
+					{
+						if (r.object_box({ object_kind::dynamic_mesh, handle }, box))
+						{
+							push_box(lines, box, 0xFFFFFF00);
+						}
+					}
+					if (handles[1] && r.object_box({ object_kind::placed_model, handles[1] }, box))
+					{
+						push_box(lines, box, 0xFF00FFFF);
+					}
+					if (moved_static.id >= 0 && r.object_box(moved_static, box))
+					{
+						push_box(lines, box, 0xFF00FF00);
+					}
+					if (moved_entity.id >= 0 && r.object_box(moved_entity, box))
+					{
+						push_box(lines, box, 0xFFFF8000);
+					}
+					// the triangles of the placed model and of the ground surface as wire
+					std::vector<float3> triangles;
+					if (handles[1])
+					{
+						r.object_triangles({ object_kind::placed_model, handles[1] }, triangles);
+					}
+					const std::size_t model_points = triangles.size();
+					r.object_triangles(ground->result.object, triangles);
+					for (std::size_t i = 0; i + 2 < triangles.size(); i += 3)
+					{
+						const DWORD color = i < model_points ? 0xFFFFFFFF : 0xFFFF4040;
+						push_line(lines, triangles[i], triangles[i + 1], color);
+						push_line(lines, triangles[i + 1], triangles[i + 2], color);
+						push_line(lines, triangles[i + 2], triangles[i], color);
+					}
+					push_line(lines, spot, add(spot, float3{ 100, 0, 0 }), 0xFFFF0000);
+					push_line(lines, spot, add(spot, float3{ 0, 100, 0 }), 0xFF00FF00);
+					push_line(lines, spot, add(spot, float3{ 0, 0, 100 }), 0xFF0000FF);
+					// depth tested, pulled towards the eye a little so that lines on a surface do not z-fight
+					const float bias = -0.00002f;
+					DWORD bias_bits;
+					std::memcpy(&bias_bits, &bias, 4);
+					dev->SetRenderState(D3DRS_DEPTHBIAS, bias_bits);
+					dev->DrawPrimitiveUP(D3DPT_LINELIST, static_cast<UINT>(lines.size() / 2), lines.data(), sizeof(line_vertex));
+					// a translucent flat triangle fan over the ground point, depth tested
+					dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+					dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+					dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+					dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+					const line_vertex quad[] =
+					{
+						{ spot.x - 50, spot.y - 50, spot.z + 30, 0x8000A0FF }, { spot.x + 50, spot.y - 50, spot.z + 30, 0x8000A0FF },
+						{ spot.x + 50, spot.y + 50, spot.z + 30, 0x8000A0FF }, { spot.x - 50, spot.y + 50, spot.z + 30, 0x8000A0FF },
+					};
+					dev->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, quad, sizeof(line_vertex));
+					// the thumbnails along the top edge, in pixels
+					struct screen_vertex
+					{
+						float x, y, z, rhw;
+						float u, v;
+					};
+					dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+					dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+					dev->SetRenderState(D3DRS_ZENABLE, D3DZB_FALSE);
+					dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+					dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+					dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+					dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+					dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+					dev->SetSamplerState(0, D3DSAMP_SRGBTEXTURE, FALSE);
+					for (std::size_t i = 0; i < thumbnails.size(); i++)
+					{
+						const float x0 = 8.0f + 72.0f * static_cast<float>(i) - 0.5f, y0 = 8.0f - 0.5f, size = 64.0f;
+						const screen_vertex v[] = { { x0, y0, 0, 1, 0, 0 }, { x0 + size, y0, 0, 1, 1, 0 }, { x0 + size, y0 + size, 0, 1, 1, 1 }, { x0, y0 + size, 0, 1, 0, 1 } };
+						dev->SetTexture(0, thumbnails[i]);
+						dev->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, 2, v, sizeof(screen_vertex));
+					}
+					// leave a mess behind: render() has to restore the host's state all the same
+					dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_CW);
+					dev->SetRenderState(D3DRS_FOGENABLE, TRUE);
+					dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_ADD);
+				};
+				if (moved_static.id >= 0)
+				{
+					codol::view::transform placement = before_static;
+					placement.origin = add(spot, scaled(side, 260.0f));
+					r.set_transform(moved_static, placement);
+				}
+				if (moved_entity.id >= 0)
+				{
+					codol::view::transform placement = before_entity;
+					placement.origin = add(spot, scaled(side, -260.0f));
+					r.set_transform(moved_entity, placement);
+				}
+				host_objects objects;
+				make_dirty(device, objects, !args.flag("ex"));
+				const device_state before = capture(device);
+				IDirect3DTexture9* texture = r.render(s.cam, s.width, s.height, frame);
+				const device_state after = capture(device);
+				check(count_differences(before, after) == 0, "device state after render() with an overlay hook that changes states equals the state before");
+				check(read_back(device, texture, img, error), "frame with the overlay");
+				save("edit_7_overlay.png", img);
+				// the dirty state would make every later frame of this test draw into the host's little target
+				device->SetRenderTarget(0, nullptr);
+				IDirect3DSurface9* back = nullptr;
+				if (SUCCEEDED(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &back)))
+				{
+					device->SetRenderTarget(0, back);
+					back->Release();
+				}
+				device->SetDepthStencilSurface(nullptr);
+				for (DWORD sampler = 0; sampler < 16; sampler++)
+				{
+					device->SetTexture(sampler, nullptr);
+				}
+				device->SetStreamSource(0, nullptr, 0, 0);
+				device->SetStreamSource(1, nullptr, 0, 0);
+				device->SetIndices(nullptr);
+				device->SetVertexDeclaration(nullptr);
+				device->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+				objects.release();
+			}
+
+			// ---- 10. a device reset keeps the edits ( with the default pool the map is loaded again )
+			{
+				tools::image before_reset, after_reset;
+				frame_of(s.frame, before_reset);
+				save("edit_8_before_reset.png", before_reset);
+				const auto stats_before = r.stats();
+				r.on_device_lost();
+				const HRESULT reset = device->Reset(&s.host.parameters);
+				check(SUCCEEDED(reset) && r.on_device_reset(), "device reset");
+				frame_of(s.frame, after_reset);
+				save("edit_8_after_reset.png", after_reset);
+				const difference d = compare_images(before_reset, after_reset, nullptr);
+				const auto stats_after = r.stats();
+				char text[240];
+				std::snprintf(text, sizeof text, "the frame after the reset is identical ( largest difference %d ); %d placed models, %d meshes, %d moved, %d hidden before, "
+					"%d / %d / %d / %d after", d.max, stats_before.placed_model_count, stats_before.mesh_count, stats_before.moved_objects, stats_before.hidden_objects,
+					stats_after.placed_model_count, stats_after.mesh_count, stats_after.moved_objects, stats_after.hidden_objects);
+				check(d.max == 0 && stats_before.placed_model_count == stats_after.placed_model_count && stats_before.mesh_count == stats_after.mesh_count
+					&& stats_before.moved_objects == stats_after.moved_objects, text);
+			}
+
+			// ---- 11. everything undone: the plain frame again
+			for (const int handle : mesh_handles)
+			{
+				r.destroy_mesh(handle);
+			}
+			if (handles[1])
+			{
+				r.remove_model(handles[1]);
+			}
+			if (moved_static.id >= 0)
+			{
+				r.reset_transform(moved_static);
+			}
+			if (moved_entity.id >= 0)
+			{
+				r.reset_transform(moved_entity);
+			}
+			r.show_all();
+			frame_of(s.frame, img);
+			const difference undone = compare_images(base, img, nullptr);
+			std::printf("      after undoing every edit: largest difference to the plain frame %d\n", undone.max);
+			check(undone.max == 0, "with every edit undone the frame is identical to the plain one");
+		}
+
+		{
+			const auto st = r.stats();
+			std::printf("end: %d distinct models, %d materials, %d textures, GPU geometry %.1f MB, textures %.1f MB\n", st.distinct_models, st.materials, st.textures,
+				static_cast<double>(st.geometry_bytes) / 1048576.0, static_cast<double>(st.texture_bytes) / 1048576.0);
+			for (const std::string& warning : r.warnings())
+			{
+				if (warning.find("mesh") != std::string::npos || warning.find("lighting volume") != std::string::npos || warning.find("extra zone") != std::string::npos)
+				{
+					std::printf("  warning: %s\n", warning.c_str());
+				}
+			}
+		}
+		std::printf("%s: %d failure(s)\n", failures == 0 ? "edit test passed" : "EDIT TEST FAILED", failures);
+		print_memory();
+		return failures == 0 ? 0 : 1;
+	}
+
+	// ---- pickbench ------------------------------------------------------------------------------------------
+
+	int run_pickbench(const arguments& args)
+	{
+		session s;
+		if (!open_session(args, s, true))
+		{
+			return 1;
+		}
+		const auto st = s.renderer.stats();
+		std::printf("pick geometry: %lld triangles, %.1f MB, built in %.0f ms; load %.0f ms\n", static_cast<long long>(st.pick_triangles),
+			static_cast<double>(st.pick_bytes) / 1048576.0, st.pick_build_ms, st.load_ms);
+		// rays from the camera through every 8th pixel, then rays from above the map straight down and along the map
+		std::vector<double> times;
+		int hits = 0;
+		codol::view::pick_result result;
+		const auto timed = [&](const float3& origin, const float3& direction)
+		{
+			const auto started = std::chrono::steady_clock::now();
+			hits += s.renderer.pick_ray(origin, direction, result) ? 1 : 0;
+			times.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
+		};
+		for (int y = 4; y < s.height; y += 8)
+		{
+			for (int x = 4; x < s.width; x += 8)
+			{
+				float3 origin, direction;
+				codol::view::screen_ray(s.cam, s.width, s.height, static_cast<float>(x), static_cast<float>(y), origin, direction);
+				timed(origin, direction);
+			}
+		}
+		const std::size_t camera_rays = times.size();
+		float3 center, half;
+		s.renderer.world_bounds(center, half);
+		for (int i = 0; i < 64; i++)
+		{
+			for (int k = 0; k < 64; k++)
+			{
+				const float fx = (static_cast<float>(i) + 0.5f) / 32.0f - 1.0f, fy = (static_cast<float>(k) + 0.5f) / 32.0f - 1.0f;
+				timed({ center.x + fx * half.x, center.y + fy * half.y, center.z + half.z + 10.0f }, { 0, 0, -1 });
+				timed({ center.x - half.x - 10.0f, center.y + fx * half.y, center.z + fy * half.z }, { 1, 0.01f * fx, 0.01f * fy });
+			}
+		}
+		const auto summary = [&](const std::size_t begin, const std::size_t end, const char* what)
+		{
+			std::vector<double> part(times.begin() + static_cast<std::ptrdiff_t>(begin), times.begin() + static_cast<std::ptrdiff_t>(end));
+			double sum = 0;
+			for (const double v : part)
+			{
+				sum += v;
+			}
+			std::sort(part.begin(), part.end());
+			std::printf("%s: %zu rays, mean %.4f ms, median %.4f ms, 99 %% %.4f ms, worst %.4f ms\n", what, part.size(), sum / static_cast<double>(part.size()),
+				part[part.size() / 2], part[part.size() * 99 / 100], part.back());
+		};
+		summary(0, camera_rays, "rays through the pixels of the view");
+		summary(camera_rays, times.size(), "rays down onto and across the whole map");
+		std::printf("%d of %zu rays hit something\n", hits, times.size());
+		print_memory();
+		return 0;
+	}
 }
 
 int main(const int argc, char** argv)
@@ -923,12 +2058,24 @@ int main(const int argc, char** argv)
 	{
 		return run_compare(args);
 	}
+	if (args.command == "edittest")
+	{
+		return run_edittest(args);
+	}
+	if (args.command == "pickbench")
+	{
+		return run_pickbench(args);
+	}
 	std::fprintf(stderr,
 		"codol_viewtool render    --game <install> --map <name> --out <png> [--size WxH] [--pos x,y,z --angles pitch,yaw[,roll] | --spawn n] [--fov deg]\n"
 		"                         [--no-models] [--no-entity-models] [--no-brush-models] [--no-world] [--no-shadows] [--no-cell-culling] [--wireframe] [--lods]\n"
 		"                         [--ex] [--pool managed|default] [--skip-mips n] [--time s] [--stats] [--verbose]\n"
 		"codol_viewtool bench     --game <install> --map <name> [--frames n] [view and options as above]\n"
 		"codol_viewtool statetest --game <install> --map <name> [--out <folder>] [view and options as above]\n"
-		"codol_viewtool compare   <oracle.png> <ours.png> [--out <side by side png: oracle | ours | 4 x difference>]\n");
+		"codol_viewtool compare   <oracle.png> <ours.png> [--out <side by side png: oracle | ours | 4 x difference>]\n"
+		"codol_viewtool edittest  --game <install> --map <name> [--out <folder>] [view and options as above] [--model <xmodel>] [--material <name>]\n"
+		"                         picking, hiding, moving, placing models, dynamic meshes, overlay, thumbnails: checks and edit_*.png\n"
+		"codol_viewtool pickbench --game <install> --map <name> [view as above]      time of map_renderer::pick_ray\n"
+		"                         --keep-edit-data ( render / bench / statetest with the pick geometry and the light grid kept )  --extra-zones a,b\n");
 	return 2;
 }

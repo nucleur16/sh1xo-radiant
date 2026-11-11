@@ -106,6 +106,42 @@ namespace codol::view
 		transparent_models.clear();
 		opaque_brushes.clear();
 		transparent_brushes.clear();
+		opaque_meshes.clear();
+		transparent_meshes.clear();
+		fixed_meshes.clear();
+		meshes.clear();
+		placed_models.clear();
+		model_backups.clear();
+		brush_backups.clear();
+		entity_models.clear();
+		entity_brushes.clear();
+		static_count = 0;
+		next_handle = 0;
+		hidden_count = 0;
+		held_map_zone.reset();
+		held_zone.reset();
+		material_by_asset.clear();
+		lighting_by_material.clear();
+		resolved_models.clear();
+		grid.reset();
+		trace.reset();
+		light_grid_bytes = 0;
+		lighting_handles = 0;
+		free_lighting_handles.clear();
+		lighting_fill.reset();
+		lighting_texture_height = 0;
+		brush_pick.clear();
+		world_pick.clear();
+		world_positions.clear();
+		world_positions.shrink_to_fit();
+		pick_bytes = 0;
+		pick_triangles = 0;
+		pick_build_ms = 0;
+		model_name_list.clear();
+		material_name_list.clear();
+		model_names_built = material_names_built = false;
+		image_sizes.clear();
+		thumbnails.clear();
 		surface_visible.clear();
 		visibility.reset();
 		lighting_volume.reset();
@@ -231,6 +267,7 @@ namespace codol::view
 	{
 		try
 		{
+			impl_->pending_edits = {};
 			return impl_->load_map(map_name, error);
 		}
 		catch (const std::exception& e)
@@ -242,7 +279,11 @@ namespace codol::view
 		}
 	}
 
-	void map_renderer::unload() { impl_->unload(); }
+	void map_renderer::unload()
+	{
+		impl_->pending_edits = {};
+		impl_->unload();
+	}
 	bool map_renderer::loaded() const { return impl_->map_loaded; }
 	const std::string& map_renderer::map_name() const { return impl_->map_name; }
 
@@ -271,8 +312,10 @@ namespace codol::view
 		i.release_default_pool();
 		if (!i.managed && i.map_loaded)
 		{
-			// everything lives in the default pool: it has to go before Reset and is loaded again after it
+			// everything lives in the default pool: it has to go before Reset and is loaded again after it; so are
+			// the edits ( hidden and moved objects, placed models, meshes )
 			const std::string name = i.map_name;
+			i.pending_edits = i.capture_edits();
 			i.unload();
 			i.map_name = name;
 		}
@@ -289,7 +332,14 @@ namespace codol::view
 		if (!i.managed && !i.map_loaded && !i.map_name.empty())
 		{
 			const std::string name = i.map_name;
-			return load_map(name, nullptr);
+			const edit_snapshot edits = std::move(i.pending_edits);
+			i.pending_edits = {};
+			if (!load_map(name, nullptr))
+			{
+				return false;
+			}
+			i.apply_edits(edits);
+			return true;
 		}
 		return true;		// targets and the state block are made again by the next render()
 	}
@@ -316,45 +366,30 @@ namespace codol::view
 		{
 			return result;
 		}
-		result.reserve(i.surfaces.size() + i.static_models.size() + i.brush_models.size());
+		result.reserve(i.surfaces.size() + i.static_models.size() + i.brush_models.size() + i.placed_models.size() + i.meshes.size());
 		for (const world_surface& s : i.surfaces)
 		{
 			if (s.brush_model)
 			{
 				continue;
 			}
-			scene_object o;
-			o.kind = object_kind::world_surface;
-			o.id = s.index;
-			o.center = s.center;
-			o.half_size = s.half;
-			o.name = s.material ? s.material->asset().name : std::string();
-			o.drawn = static_cast<std::size_t>(s.index) < i.surface_visible.size() && i.surface_visible[static_cast<std::size_t>(s.index)] != 0;
-			result.push_back(std::move(o));
+			i.fill_object(s, result.emplace_back());
 		}
 		for (const static_model_instance& m : i.static_models)
 		{
-			scene_object o;
-			o.kind = m.is_entity ? object_kind::entity_model : object_kind::static_model;
-			o.id = m.is_entity ? m.entity_index : m.static_index;
-			o.entity = m.entity_index;
-			o.center = m.center;
-			o.half_size = m.half;
-			o.name = m.draw ? m.draw->name : std::string();
-			o.drawn = m.drawn;
-			result.push_back(std::move(o));
+			i.fill_object(m, result.emplace_back());
 		}
 		for (const brush_model_instance& b : i.brush_models)
 		{
-			scene_object o;
-			o.kind = object_kind::brush_model;
-			o.id = b.entity_index;
-			o.entity = b.entity_index;
-			o.center = b.center;
-			o.half_size = b.half;
-			o.name = "*" + std::to_string(b.model);
-			o.drawn = b.drawn;
-			result.push_back(std::move(o));
+			i.fill_object(b, result.emplace_back());
+		}
+		for (const auto& placed : i.placed_models)
+		{
+			i.fill_object(*placed.second, result.emplace_back());
+		}
+		for (const auto& mesh : i.meshes)
+		{
+			i.fill_object(*mesh.second, result.emplace_back());
 		}
 		return result;
 	}

@@ -162,6 +162,143 @@ namespace
 		CHECK(p.x == 11 && p.y == 22 && p.z == 33);
 		CHECK(close_to(length(cross({ 1, 0, 0 }, { 0, 1, 0 }) - float3{ 0, 0, 1 }), 0));
 	}
+
+	void test_camera_math()
+	{
+		camera cam;
+		cam.origin = { 100, -200, 50 };
+		cam.pitch = 20;
+		cam.yaw = 130;
+		cam.roll = 5;
+		const int width = 1280, height = 720;
+		// the ray through a pixel projects back onto the pixel, at any distance
+		for (const float px : { 0.0f, 17.0f, 640.0f, 1279.0f })
+		{
+			for (const float py : { 0.0f, 360.0f, 719.0f })
+			{
+				float3 origin, direction;
+				screen_ray(cam, width, height, px, py, origin, direction);
+				CHECK(origin == cam.origin && close_to(length(direction), 1.0f));
+				float xy[2] = {}, depth = 0;
+				CHECK(project(cam, width, height, origin + direction * 750.0f, xy, depth));
+				CHECK(close_to(xy[0], px, 0.01f) && close_to(xy[1], py, 0.01f) && depth > 0 && depth < 1);
+			}
+		}
+		// the middle of the target looks along the camera's forward axis; depth = 1 - z_near / z
+		float3 origin, direction;
+		screen_ray(cam, width, height, 640.0f, 360.0f, origin, direction);
+		CHECK(close_to(length(direction - cam.axes().forward), 0, 1e-5f));
+		float xy[2] = {}, depth = 0;
+		CHECK(project(cam, width, height, cam.origin + cam.axes().forward * 100.0f, xy, depth) && close_to(depth, 1.0f - cam.z_near / 100.0f, 1e-5f));
+		CHECK(!project(cam, width, height, cam.origin - cam.axes().forward * 100.0f, xy, depth));
+		// view_matrix * projection_matrix is what project() uses ( row vectors )
+		float view[16], projection[16];
+		view_matrix(cam, view);
+		projection_matrix(cam, width, height, projection);
+		const mat4 both = codol::render::mul(mat4::from_floats(view), mat4::from_floats(projection));
+		const float3 point = cam.origin + direction * 300.0f + cam.axes().left * 40.0f;
+		const float4 clip = codol::render::transform({ point.x, point.y, point.z, 1 }, both);
+		CHECK(project(cam, width, height, point, xy, depth));
+		CHECK(close_to((clip.x / clip.w + 1) * 0.5f * width, xy[0], 0.01f) && close_to((1 - clip.y / clip.w) * 0.5f * height, xy[1], 0.01f) && close_to(clip.z / clip.w, depth, 1e-5f));
+		// something to the camera's left is left of the middle
+		CHECK(xy[0] < 640.0f);
+	}
+
+	void test_pick_mesh()
+	{
+		// a grid of 32 x 32 quads in the plane z = 0 ( surface 0 ) and one large triangle at z = 10 ( surface 1 )
+		std::vector<float3> positions;
+		for (int y = 0; y <= 32; y++)
+		{
+			for (int x = 0; x <= 32; x++)
+			{
+				positions.push_back({ static_cast<float>(x), static_cast<float>(y), 0 });
+			}
+		}
+		positions.push_back({ 0, 0, 10 });
+		positions.push_back({ 8, 0, 10 });
+		positions.push_back({ 0, 8, 10 });
+		pick_mesh mesh;
+		mesh.own_positions(positions);
+		for (std::uint32_t y = 0; y < 32; y++)
+		{
+			for (std::uint32_t x = 0; x < 32; x++)
+			{
+				const std::uint32_t a = y * 33 + x;
+				mesh.add_triangle(a, a + 1, a + 34, 0);
+				mesh.add_triangle(a, a + 34, a + 33, 0);
+			}
+		}
+		mesh.add_triangle(33 * 33, 33 * 33 + 1, 33 * 33 + 2, 1);
+		mesh.build();
+		CHECK(mesh.triangle_count() == 2049 && mesh.bytes() > 0);
+		const auto any = [](std::uint32_t, float) { return 0; };
+		pick_hit hit;
+		hit.priority = -1;
+		// straight down onto the grid: the plane, and which quad
+		CHECK(mesh.raycast({ 20.25f, 11.5f, 50 }, { 0, 0, -1 }, 1.0e9f, hit, any));
+		CHECK(close_to(hit.t, 50.0f) && mesh.surface_of(hit.triangle) == 0 && hit.triangle / 2 == 11 * 32 + 20);
+		// the triangle above the corner is nearer
+		hit = {};
+		hit.priority = -1;
+		CHECK(mesh.raycast({ 1, 1, 50 }, { 0, 0, -1 }, 1.0e9f, hit, any) && close_to(hit.t, 40.0f) && mesh.surface_of(hit.triangle) == 1);
+		// .. unless its surface is rejected
+		hit = {};
+		hit.priority = -1;
+		CHECK(mesh.raycast({ 1, 1, 50 }, { 0, 0, -1 }, 1.0e9f, hit, [](const std::uint32_t surface, float) { return surface == 1 ? -1 : 0; }) && close_to(hit.t, 50.0f));
+		// facing: the grid's triangles have ( b - a ) x ( c - a ) = +z, a ray going down runs against it
+		float seen_facing = 0;
+		hit = {};
+		hit.priority = -1;
+		mesh.raycast({ 20.25f, 11.5f, 50 }, { 0, 0, -1 }, 1.0e9f, hit, [&](std::uint32_t, const float facing) { seen_facing = facing; return 0; });
+		CHECK(seen_facing < 0 && hit.normal.z > 0);
+		// misses, t_max
+		hit = {};
+		hit.priority = -1;
+		CHECK(!mesh.raycast({ 40, 40, 50 }, { 0, 0, -1 }, 1.0e9f, hit, any));
+		CHECK(!mesh.raycast({ 20, 11, 50 }, { 0, 0, -1 }, 49.0f, hit, any));
+		CHECK(!mesh.raycast({ 20, 11, 50 }, { 0, 0, 1 }, 1.0e9f, hit, any));
+		// two surfaces in the same place: the higher priority wins whatever the order
+		pick_mesh layers;
+		layers.own_positions({ { 0, 0, 0 }, { 4, 0, 0 }, { 0, 4, 0 }, { 0, 0, 0.001f }, { 4, 0, 0.001f }, { 0, 4, 0.001f } });
+		layers.add_triangle(0, 1, 2, 7);
+		layers.add_triangle(3, 4, 5, 3);
+		layers.build();
+		hit = {};
+		hit.priority = -1;
+		CHECK(layers.raycast({ 1, 1, 9 }, { 0, 0, -1 }, 1.0e9f, hit, [](const std::uint32_t surface, float) { return static_cast<int>(surface); }) && layers.surface_of(hit.triangle) == 7);
+		hit = {};
+		hit.priority = -1;
+		CHECK(layers.raycast({ 1, 1, 9 }, { 0, 0, -1 }, 1.0e9f, hit, [](const std::uint32_t surface, float) { return 10 - static_cast<int>(surface); }) && layers.surface_of(hit.triangle) == 3);
+		mesh.clear();
+		CHECK(mesh.empty());
+	}
+
+	void test_lighting_volume()
+	{
+		model_lighting_volume volume(3);
+		CHECK(volume.capacity() == 64 && volume.height() == 4);
+		std::array<std::uint32_t, 64> block{}, read{};
+		for (std::size_t i = 0; i < 64; i++)
+		{
+			block[i] = 0x01000000u + static_cast<std::uint32_t>(i);
+		}
+		volume.set_block(3, block);
+		volume.get_block(3, read);
+		CHECK(read == block);
+		// growing keeps the blocks and their place
+		CHECK(!volume.grow(64));
+		CHECK(volume.grow(65) && volume.capacity() >= 65 && volume.height() == 8);
+		volume.get_block(3, read);
+		CHECK(read == block);
+		volume.set_block(65, block);
+		volume.get_block(65, read);
+		CHECK(read == block);
+		volume.get_block(2, read);
+		CHECK(read[0] == 0 && read[63] == 0);
+		volume.get_block(9999, read);
+		CHECK(read[0] == 0);
+	}
 }
 
 int main()
@@ -172,6 +309,9 @@ int main()
 	test_streamed_surfaces();
 	test_sun_shadow();
 	test_math();
+	test_camera_math();
+	test_pick_mesh();
+	test_lighting_volume();
 	std::printf("%d checks, %d failures\n", checks, failures);
 	return failures == 0 ? 0 : 1;
 }
