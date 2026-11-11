@@ -1,5 +1,8 @@
 // codol_mapconv: rebuild an editable radiant .map from a shipped CoDOL map.
 //
+//   codol_mapconv --map <name> --ff <map.ff> --exe <client exe> --out <file.map> [--ents-out <file>]
+//       native: entities, brushes and static models are read straight from the 1.1.1.13 fastfile
+//
 //   codol_mapconv --map <name> --ents <entities> --out <file.map>
 //                 [--brushes <brushes.map.json>] [--models <smodels.map.json>] [--trigger-models <n>]
 //
@@ -10,6 +13,7 @@
 // Exit code 0 on success. A one line summary goes to stdout, errors to stderr.
 
 #include "std_include.hpp"
+#include "codol/map_zone.hpp"
 
 #include <chrono>
 
@@ -43,7 +47,7 @@ namespace
 
 int main(int argc, char** argv)
 {
-	std::string map_name, ents_path, out_path, brushes_path, models_path;
+	std::string map_name, ents_path, out_path, brushes_path, models_path, ff_path, exe_path, ents_out_path;
 	int trigger_models = -1;
 
 	for (int i = 1; i + 1 < argc; i += 2)
@@ -56,25 +60,49 @@ int main(int argc, char** argv)
 		else if (key == "--out") { out_path = value; }
 		else if (key == "--brushes") { brushes_path = value; }
 		else if (key == "--models") { models_path = value; }
+		else if (key == "--ff") { ff_path = value; }
+		else if (key == "--exe") { exe_path = value; }
+		else if (key == "--ents-out") { ents_out_path = value; }
 		else if (key == "--trigger-models") { trigger_models = std::atoi(value.c_str()); }
 		else { return fail("unknown option " + key); }
 	}
 
-	if (map_name.empty() || ents_path.empty() || out_path.empty())
+	if (map_name.empty() || (ents_path.empty() && ff_path.empty()) || out_path.empty() || (!ff_path.empty() && exe_path.empty()))
 	{
-		return fail("usage: codol_mapconv --map <name> --ents <entities> --out <file.map> [--brushes <json>] [--models <json>] [--trigger-models <n>]");
+		return fail("usage: codol_mapconv --map <name> --ff <map.ff> --exe <client exe> --out <file.map> [--ents-out <file>]\n       codol_mapconv --map <name> --ents <entities> --out <file.map> [--brushes <json>] [--models <json>] [--trigger-models <n>]");
 	}
 
 	const auto t0 = std::chrono::steady_clock::now();
 
-	// entities
+	mapgeo::map_geometry geometry;
 	std::string text;
-	if (!read_file(ents_path, text))
+	std::string error;
+
+	if (!ff_path.empty())
+	{
+		// native: one pass over the fastfile
+		mapgeo::zone_map zm;
+		if (!mapgeo::read_zone_map(std::filesystem::u8path(ff_path), std::filesystem::u8path(exe_path), zm, error))
+		{
+			return fail(ff_path + ": " + error);
+		}
+
+		geometry = std::move(zm.geometry);
+		text = std::move(zm.entity_text);
+		trigger_models = zm.trigger_models;
+
+		if (!ents_out_path.empty())
+		{
+			std::ofstream file(std::filesystem::u8path(ents_out_path), std::ios::binary | std::ios::trunc);
+			file.write(text.data(), static_cast<std::streamsize>(text.size()));
+		}
+	}
+	else if (!read_file(ents_path, text))
 	{
 		return fail("can not read " + ents_path);
 	}
 
-	if (ends_with_ci(ents_path, ".zone"))
+	if (ff_path.empty() && ends_with_ci(ents_path, ".zone"))
 	{
 		std::string zone;
 		zone.swap(text);
@@ -84,13 +112,12 @@ int main(int argc, char** argv)
 			return fail(ents_path + " does not contain a map entity string");
 		}
 	}
-	else
+	else if (ff_path.empty())
 	{
 		text.erase(std::remove(text.begin(), text.end(), '\r'), text.end());
 	}
 
 	mapents::entity_set set;
-	std::string error;
 
 	if (!mapents::parse_entity_string(text, set, error))
 	{
@@ -104,8 +131,7 @@ int main(int argc, char** argv)
 
 	set.trigger_models = trigger_models;
 
-	// geometry
-	mapgeo::map_geometry geometry;
+	// geometry exported by the external tool ( legacy input )
 
 	if (!brushes_path.empty())
 	{

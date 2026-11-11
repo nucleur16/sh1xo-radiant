@@ -19,8 +19,6 @@ namespace ggui
 		void export_current_map();
 
 		bool m_reload_after_export = true;
-		bool m_import_materials = true;	// convert the materials + textures of the map for radiant ( slower )
-		bool m_import_geometry = true;	// rebuild brushes and static models too ( needs the asset tool )
 
 	private:
 		enum class source_kind { zone, override_file };

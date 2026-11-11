@@ -218,7 +218,8 @@ add_executable(codol_mapconv
 	src/codol/map_ents.cpp
 	src/codol/map_geometry.cpp
 	src/codol/anim_index.cpp
-	src/codol/script_lex.cpp)
+	src/codol/script_lex.cpp
+	src/codol/map_zone.cpp)
 target_include_directories(codol_mapconv PRIVATE tests/stub src ${DEPS}/rapidjson/include)
 target_compile_options(codol_mapconv PRIVATE /std:c++latest /W4 /wd4996 $<$<CONFIG:Release>:/O2>)
 target_link_options(codol_mapconv PRIVATE /LARGEADDRESSAWARE)
@@ -228,15 +229,9 @@ if(RADIANT_ROOT)
 	add_custom_command(TARGET codol_mapconv POST_BUILD
 		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:codol_mapconv> ${RADIANT_ROOT}/bin)
 endif()
-# codol_assetconv: CoDOL materials + textures of a map export -> CoD4 raw materials / iwi for radiant
-add_executable(codol_assetconv tools/codol_assetconv/main.cpp)
-target_include_directories(codol_assetconv PRIVATE ${DEPS}/rapidjson/include)
-target_compile_definitions(codol_assetconv PRIVATE UNICODE _UNICODE NOMINMAX)
-target_compile_options(codol_assetconv PRIVATE /std:c++latest /W4 /wd4996 $<$<CONFIG:Release>:/O2>)
-target_link_options(codol_assetconv PRIVATE /LARGEADDRESSAWARE)
-target_link_libraries(codol_assetconv PRIVATE windowscodecs ole32)
-add_dependencies(iw3r codol_assetconv)
-if(RADIANT_ROOT)
-	add_custom_command(TARGET codol_assetconv POST_BUILD
-		COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:codol_assetconv> ${RADIANT_ROOT}/bin)
-endif()
+# ---------------------------------------------------------------------------
+# native CoDOL 1.1.1.13 fastfile reader ( library + codol_zonetool ), linked into the editor
+set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(codol_zone)
+target_link_libraries(iw3r PRIVATE codol_zone)
+target_link_libraries(codol_mapconv PRIVATE codol_zone)

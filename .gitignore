@@ -82,3 +82,6 @@ user*.bat
 # generated CoDOL asset cache
 /codol_root/
 /build-cmake/
+
+# agent worktrees
+/.claude/
