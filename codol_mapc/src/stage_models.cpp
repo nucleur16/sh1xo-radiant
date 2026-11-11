@@ -264,52 +264,6 @@ namespace codol::mapc
 			}
 		};
 
-		// ---- the cell the BSP of the GfxWorld puts a point in ( codol_view world_cells.cpp cell_of_point ) ----
-
-		struct cell_finder
-		{
-			std::vector<c1::cplane_s> planes;
-			std::vector<std::uint16_t> nodes;
-			int cell_count = 0;
-
-			explicit cell_finder(const context& ctx)
-			{
-				const Zone& zone = ctx.zone();
-				planes = zone.get_array<c1::cplane_s>(zone.get<zaddr>(ctx.gfx_address + WORLD_DPVS_PLANES), static_cast<std::size_t>(std::max(ctx.gfx.raw.planeCount, 0)));
-				nodes = zone.get_array<std::uint16_t>(zone.get<zaddr>(ctx.gfx_address + WORLD_NODES), static_cast<std::size_t>(std::max(ctx.gfx.raw.nodeCount, 0)));
-				cell_count = ctx.gfx.raw.cellCount;
-			}
-
-			int find(const float p[3]) const
-			{
-				if (nodes.empty() || planes.empty())
-				{
-					return -1;
-				}
-				int at = 0;
-				for (int step = 0; step < 256; step++)
-				{
-					const int value = nodes[static_cast<std::size_t>(at)];
-					if (value < cell_count)
-					{
-						return value;
-					}
-					if (value >= static_cast<int>(planes.size()) || at + 1 >= static_cast<int>(nodes.size()))
-					{
-						return -1;
-					}
-					const c1::cplane_s& plane = planes[static_cast<std::size_t>(value)];
-					const float side = plane.normal[0] * p[0] + plane.normal[1] * p[1] + plane.normal[2] * p[2] - plane.dist;
-					at = side >= 0 ? at + 2 : at + nodes[static_cast<std::size_t>(at) + 1];
-					if (at < 0 || at >= static_cast<int>(nodes.size()))
-					{
-						return -1;
-					}
-				}
-				return -1;
-			}
-		};
-
 		// ---- one cell's AABB tree with its static model lists ----------------------------------------------
 
 		struct cell_tree
