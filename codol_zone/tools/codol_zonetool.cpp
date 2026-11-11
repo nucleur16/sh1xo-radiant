@@ -29,6 +29,8 @@ namespace
 		"  material <ff> <name>         techset, textures, constants, state bits\n"
 		"  image <ff> <name>            dimensions, inline pixels or streamed\n"
 		"  map <ff>                     GfxWorld / clipMap / MapEnts / ComWorld counts\n"
+		"  index <ff>                   JSON: names per type, models, anims, localize, images, string tables\n"
+		"  peek <ff> <hex addr> [<n>]   hex dump of image memory\n"
 		"\n"
 		"options:\n"
 		"  --exe <client exe>           C1.exe or codoMP_client_shipRetail.exe ( default: searched next to / above the .ff )\n"
@@ -69,8 +71,9 @@ namespace
 					text += '\\';
 					text += ch;
 				}
-				else if (c < 0x20)
+				else if (c < 0x20 || c >= 0x7F)
 				{
+					// bytes outside printable ASCII as \u00XX, so the output is valid JSON whatever the game's encoding is
 					char buf[8];
 					std::snprintf(buf, sizeof(buf), "\\u%04x", c);
 					text += buf;
@@ -399,6 +402,7 @@ namespace
 					j.kv("type", asset_type_name(e.type));
 					j.kv("name", name);
 					j.kv("zoneOffset", e.dataOffset + 40);
+					j.kv("header", e.header);
 					j.kv("size", e.dataSize);
 					j.end('}');
 				}
@@ -649,6 +653,56 @@ namespace
 		return failed ? 1 : 0;
 	}
 
+	// hex dump of image memory ( debugging aid )
+	int cmd_peek(const Args& args)
+	{
+		Zone zone;
+		if (!open_zone(args, zone))
+		{
+			return 1;
+		}
+		if (args.positional.size() < 2)
+		{
+			std::fprintf(stderr, "error: peek <ff> <hex address> [<bytes>]\n");
+			return 1;
+		}
+		const zaddr address = static_cast<zaddr>(std::strtoul(args.positional[1].c_str(), nullptr, 16));
+		std::size_t size = args.positional.size() > 2 ? std::strtoul(args.positional[2].c_str(), nullptr, 0) : 64;
+		auto data = zone.bytes(address, size);
+		while (data.empty() && size > 1)
+		{
+			data = zone.bytes(address, --size);
+		}
+		if (data.empty())
+		{
+			std::fprintf(stderr, "error: 0x%08X is not mapped\n", address);
+			return 1;
+		}
+		for (std::size_t i = 0; i < data.size(); i += 16)
+		{
+			std::printf("%08X ", address + static_cast<zaddr>(i));
+			for (std::size_t k = 0; k < 16; k++)
+			{
+				if (i + k < data.size())
+				{
+					std::printf(" %02X", data[i + k]);
+				}
+				else
+				{
+					std::printf("   ");
+				}
+			}
+			std::printf("  ");
+			for (std::size_t k = 0; k < 16 && i + k < data.size(); k++)
+			{
+				const unsigned char ch = data[i + k];
+				std::putchar(ch >= 0x20 && ch < 0x7F ? ch : '.');
+			}
+			std::putchar('\n');
+		}
+		return 0;
+	}
+
 	struct LodCounts
 	{
 		std::size_t surfaces = 0, vertices = 0, triangles = 0;
@@ -851,6 +905,209 @@ namespace
 			j.end(']');
 			print_json(j);
 		}
+		return 0;
+	}
+
+	std::string hex(const std::string_view bytes)
+	{
+		static const char* digits = "0123456789abcdef";
+		std::string out;
+		out.reserve(bytes.size() * 2);
+		for (const char ch : bytes)
+		{
+			out += digits[static_cast<unsigned char>(ch) >> 4];
+			out += digits[static_cast<unsigned char>(ch) & 15];
+		}
+		return out;
+	}
+
+	// everything the verification script compares, as one JSON document
+	int cmd_index(const Args& args)
+	{
+		Zone zone;
+		if (!open_zone(args, zone))
+		{
+			return 1;
+		}
+		Json j;
+		j.begin('{');
+		j.kv("zone", zone.name());
+		j.kv("assets", zone.assets().size());
+
+		// names of the assets that have their data in this zone, per type, in load order
+		std::map<std::int32_t, std::vector<std::string>> names;
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			const std::uint32_t nameOffset = r.type == c1::ASSET_TYPE_IMAGE ? 32u : r.type == c1::ASSET_TYPE_LOCALIZE_ENTRY ? 4u : 0u;
+			if (!zone.c_string(zone.get<zaddr>(r.header + nameOffset)).starts_with(","))
+			{
+				names[r.type].push_back(sv(zone.asset_name(r.type, r.header)));
+			}
+		}
+		j.key("names");
+		j.begin('{');
+		for (const auto& [type, list] : names)
+		{
+			j.key(asset_type_name(type));
+			j.begin('[');
+			for (const std::string& name : list)
+			{
+				j.str(hex(name));
+			}
+			j.end(']');
+		}
+		j.end('}');
+
+		j.key("models");
+		j.begin('[');
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			ModelView model;
+			if (r.type != c1::ASSET_TYPE_XMODEL || !read_model(zone, r.header, model) || model.isReference)
+			{
+				continue;
+			}
+			LodCounts c;
+			bool external = false;
+			if (!model.lods.empty())
+			{
+				c = lod_counts(model.lods[0]);
+				external = model.lods[0].surfs.external;
+			}
+			j.begin('{');
+			j.kv("name", model.name);
+			j.kv("address", r.header);
+			j.kv("bones", model.bones.size());
+			j.kv("rootBones", static_cast<int>(model.raw.numRootBones));
+			j.kv("lods", model.lods.size());
+			j.kv("lod0External", external);
+			j.kv("lod0Surfaces", c.surfaces);
+			j.kv("lod0Vertices", c.vertices);
+			j.kv("lod0Triangles", c.triangles);
+			j.key("boneNames");
+			j.begin('[');
+			for (const ModelBone& bone : model.bones)
+			{
+				j.str(bone.name);
+			}
+			j.end(']');
+			j.key("materials");
+			j.begin('[');
+			std::set<zaddr> seen;
+			for (std::size_t i = 0; i < model.materials.size(); i++)
+			{
+				if (model.materials[i] && seen.insert(model.materials[i]).second)
+				{
+					j.str(model.materialNames[i]);
+				}
+			}
+			j.end(']');
+			j.end('}');
+		}
+		j.end(']');
+
+		j.key("materials");
+		j.begin('[');
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			MaterialView material;
+			if (r.type != c1::ASSET_TYPE_MATERIAL || !read_material(zone, r.header, material) || material.isReference)
+			{
+				continue;
+			}
+			j.begin('{');
+			j.kv("name", hex(material.name));
+			j.kv("techset", hex(material.techsetName));
+			j.key("textures");
+			j.begin('[');
+			for (const MaterialTexture& texture : material.textures)
+			{
+				if (texture.image)
+				{
+					j.str(hex(texture.imageName));
+				}
+			}
+			j.end(']');
+			j.end('}');
+		}
+		j.end(']');
+
+		j.key("anims");
+		j.begin('[');
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			AnimView anim;
+			if (r.type != c1::ASSET_TYPE_XANIMPARTS || !read_anim(zone, r.header, anim) || anim.isReference)
+			{
+				continue;
+			}
+			j.begin('{');
+			j.kv("name", anim.name);
+			j.kv("lastFrame", static_cast<int>(anim.raw.numframes));
+			j.kv("framerate", static_cast<double>(anim.raw.framerate));
+			j.kv("bones", anim.boneNames.size());
+			j.kv("notetracks", anim.notetracks.size());
+			j.kv("flags", static_cast<int>(anim.raw.flags));
+			j.end('}');
+		}
+		j.end(']');
+
+		j.key("locales");
+		j.begin('[');
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			LocalizeView entry;
+			if (r.type == c1::ASSET_TYPE_LOCALIZE_ENTRY && read_localize(zone, r.header, entry))
+			{
+				j.begin('{');
+				j.kv("key", hex(entry.name));
+				j.kv("value", hex(entry.value));
+				j.end('}');
+			}
+		}
+		j.end(']');
+
+		j.key("images");
+		j.begin('[');
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			ImageView image;
+			if (r.type != c1::ASSET_TYPE_IMAGE || !read_image(zone, r.header, image) || image.isReference)
+			{
+				continue;
+			}
+			j.begin('{');
+			j.kv("name", hex(image.name));
+			j.kv("address", r.header);
+			j.kv("width", static_cast<int>(image.raw.width));
+			j.kv("height", static_cast<int>(image.raw.height));
+			j.kv("mapType", static_cast<int>(image.raw.mapType));
+			j.kv("streamed", image.streamed);
+			j.kv("format", image.loadDef.format);
+			j.kv("levels", static_cast<int>(image.loadDef.levelCount));
+			j.kv("size", image.pixels.size());
+			j.end('}');
+		}
+		j.end(']');
+
+		j.key("stringtables");
+		j.begin('[');
+		for (const AssetRecord& r : zone.all_assets())
+		{
+			StringTableView table;
+			if (r.type == c1::ASSET_TYPE_STRINGTABLE && read_stringtable(zone, r.header, table))
+			{
+				j.begin('{');
+				j.kv("name", table.name);
+				j.kv("rows", table.raw.rowCount);
+				j.kv("columns", table.raw.columnCount);
+				j.kv("cells", table.cells.size());
+				j.end('}');
+			}
+		}
+		j.end(']');
+		j.end('}');
+		print_json(j);
 		return 0;
 	}
 
@@ -1200,6 +1457,8 @@ int main(const int argc, char** argv)
 		if (args.command == "dump-ents") return cmd_dump_ents(args);
 		if (args.command == "dump-rawfile") return cmd_dump_rawfile(args);
 		if (args.command == "dump-rawfiles") return cmd_dump_rawfiles(args);
+		if (args.command == "peek") return cmd_peek(args);
+		if (args.command == "index") return cmd_index(args);
 		if (args.command == "model") return cmd_model(args);
 		if (args.command == "models") return cmd_models(args);
 		if (args.command == "material") return cmd_material(args);

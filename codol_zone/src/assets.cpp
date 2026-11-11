@@ -255,7 +255,9 @@ namespace codol::zone
 		view.address = modelSurfs;
 		bool reference = false;
 		resolve_name(zone, c1::ASSET_TYPE_XMODEL_SURFS, modelSurfs, view.raw.name, view.name, reference);
-		view.external = reference || !view.raw.surfs;
+		// a ",name" XModelSurfs can still carry its surfaces ( common_gametype_mp: ",flag2_lod000" ), so only the
+		// surface pointer decides
+		view.external = zone.reference(modelSurfs) != nullptr || !view.raw.surfs;
 		if (view.external)
 		{
 			return true;
@@ -380,7 +382,7 @@ namespace codol::zone
 					lod.surfs.raw = raw;
 					bool reference = false;
 					resolve_name(zone, c1::ASSET_TYPE_XMODEL_SURFS, info.modelSurfs, raw.name, lod.surfs.name, reference);
-					lod.surfs.external = reference || !raw.surfs;
+					lod.surfs.external = zone.reference(info.modelSurfs) != nullptr || !raw.surfs;
 				}
 			}
 			if (lod.surfsName.empty())
