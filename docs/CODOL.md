@@ -14,6 +14,31 @@ and adds a **CoDOL** menu.
 - [Code layout, build and tests](#code-layout-build-and-tests)
 - [Roadmap](#roadmap)
 
+## CoDOL Radiant: the standalone editor
+
+`CoDOLRadiant.exe` is its own program. It does not load, hook or need CoD4 radiant or the CoD4 mod tools: maps,
+models, materials and shaders are read from the 1.1.1.13 install and drawn with the game's own shaders.
+
+```
+cmake -S editor -B build-editor -G "Visual Studio 17 2022" -A x64
+cmake --build build-editor --config Release
+build-editor\Release\CoDOLRadiant.exe
+```
+
+Settings are in `codol_editor.cfg` next to the exe ( File > Settings ); the CoDOL install folder is the one that is
+needed. What it is made of:
+
+| Part | Role |
+|---|---|
+| `editor/` | the application: window, Direct3D 9 device, docking UI, 3D view, browsers |
+| `codol_zone/` | fastfile reader ( and writer, in progress ) |
+| `codol_render/` | materials, technique sets, shaders, images |
+| `codol_view/` | map renderer with the editor API: picking, moving / hiding / adding models, meshes with game materials |
+| `codol_edit/` | map document: `.map` reader / writer, brushes, patches, entities, selection, undo, editing operations, entity classes taken from the shipped maps |
+| `src/codol`, script workbench, game bridge | shared with the radiant plugin |
+
+The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
+where the work goes.
 ## What works
 
 | Area | Status |
