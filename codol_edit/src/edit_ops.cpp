@@ -1907,7 +1907,6 @@ namespace codol::edit
 		entity e;
 		e.pairs.emplace_back("classname", std::string(classname));
 		e.pairs.emplace_back("origin", format_key_vec3(origin));
-		e.layer = new_object_layer(*d);
 
 		for (const auto& [k, v] : pairs)
 		{

@@ -245,3 +245,8 @@ target_link_libraries(iw3r PRIVATE codol_render)
 # standalone: cmake -S codol_view -B <dir> -A Win32|x64 ). Link it with target_link_libraries( iw3r PRIVATE codol_view ).
 add_subdirectory(codol_view)
 target_link_libraries(iw3r PRIVATE codol_view)
+
+# codol_edit: UI independent core of the standalone map editor ( document model, .map reader / writer, geometry, picking,
+# editing operations with undo, C1 entity class catalog, fastfile import ). Its tests and codol_classgen are only built
+# standalone: cmake -S codol_edit -B <dir> -A Win32|x64. Link it with target_link_libraries( <editor> PRIVATE codol_edit ).
+add_subdirectory(codol_edit)

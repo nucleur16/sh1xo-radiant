@@ -1,6 +1,9 @@
 // Tests of codol_edit. Plain checks and counters, no framework.
 //
 //   codol_edit_tests [folder with .map files] ...
+//   codol_edit_tests --check <file.map> [n]                              describe the first n invalid brushes of a map
+//   codol_edit_tests --canonical <in.map> <out.map>                      rewrite every object in radiant's formatting
+//   codol_edit_tests --import <map.ff> <client exe> <out.map> [out.ents] fastfile import ( and override export )
 //
 // Uses, when they exist ( otherwise the tests that need them are skipped and say so ):
 //   CODOL_EDIT_MAP_SOURCE_DIR   radiant .map files: byte identical load -> save round trip
@@ -1558,6 +1561,56 @@ namespace
 		CHECK(mins[2] == 0.0f && maxs[2] == 72.0f);
 	}
 
+	// A map that was imported, saved by radiant and is opened again: with the two files the radiant fork keeps next
+	// to it ( <map>.codol_base.map: the map as first saved, <map>.codol_orig.ents: the entity string of the zone )
+	// the override of the unedited map is the original entity string.
+	void test_saved_import(const char* map)
+	{
+		const std::filesystem::path folder = std::filesystem::path(CODOL_EDIT_MAP_SOURCE_DIR) / "codol";
+		std::string text, baseline, original;
+
+		if (!read_file(folder / (std::string(map) + ".map"), text) || !read_file(folder / (std::string(map) + ".codol_base.map"), baseline)
+			|| !read_file(folder / (std::string(map) + ".codol_orig.ents"), original))
+		{
+			std::printf("-- %s: no saved import in %s, skipped\n", map, folder.string().c_str());
+			g_skipped++;
+			return;
+		}
+
+		document doc;
+		std::string error;
+		CHECK_MSG(doc.load_map_text(text, error), error);
+		CHECK(!doc.has_import_baseline());
+		doc.set_import_baseline(baseline, original);
+		CHECK(doc.has_import_baseline() && doc.import_original_ents() == original);
+
+		override_export exported;
+		CHECK_MSG(doc.export_entity_override(exported, error), error);
+		CHECK(exported.map_name == map);
+
+		// both without their comment lines
+		const auto body = [](std::string_view s)
+		{
+			while (s.starts_with("//"))
+			{
+				s.remove_prefix(std::min(s.find('\n') + 1, s.size()));
+			}
+
+			while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == '\0'))
+			{
+				s.remove_suffix(1);
+			}
+
+			return s;
+		};
+
+		CHECK(body(exported.text) == body(original));
+		CHECK(exported.text.size() > 1000);
+
+		std::printf("-- %s ( saved by radiant ): override of %d entities equals the original entity string: %s\n", map, exported.exported,
+			body(exported.text) == body(original) ? "yes" : "NO");
+	}
+
 	// ---- fastfile import ------------------------------------------------------------------------
 
 	void test_import(const char* map)
@@ -1899,6 +1952,35 @@ int main(const int argc, char** argv)
 		return 0;
 	}
 
+	// codol_edit_tests --import <map.ff> <client exe> <out.map> [out.d3dbsp.ents]: what document::import_fastfile gives
+	// ( to compare with codol_mapconv --ff ), and the override export of the unedited import
+	if (argc >= 5 && std::string_view(argv[1]) == "--import")
+	{
+		document doc;
+		std::string error;
+		if (!doc.import_fastfile(argv[2], argv[3], error) || !doc.save_map_file(argv[4], error))
+		{
+			std::printf("%s: %s\n", argv[2], error.c_str());
+			return 1;
+		}
+
+		if (argc >= 6)
+		{
+			override_export exported;
+			if (!doc.export_entity_override(exported, error))
+			{
+				std::printf("%s: %s\n", argv[2], error.c_str());
+				return 1;
+			}
+
+			std::ofstream out(argv[5], std::ios::binary | std::ios::trunc);
+			out.write(exported.text.data(), static_cast<std::streamsize>(exported.text.size()));
+		}
+
+		std::printf("%s: %zu entities, %zu brushes\n", argv[2], doc.entities().size(), doc.brush_count());
+		return 0;
+	}
+
 	std::vector<std::string> extra;
 	for (int i = 1; i < argc; i++)
 	{
@@ -1912,6 +1994,8 @@ int main(const int argc, char** argv)
 	test_picking();
 	test_class_catalog();
 	test_round_trip(extra);
+	test_saved_import("mp_rust");
+	test_saved_import("mp_killhouse_sh");
 	test_import("mp_rust");
 	test_import("mp_killhouse_sh");
 
