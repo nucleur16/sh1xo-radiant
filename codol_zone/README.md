@@ -173,7 +173,7 @@ same numbers for the Win32 and the x64 build:
 The oracle has no name column in `assets`; asset names were compared through its index ( rows above ) and with
 `CoD4x_Server/docs/zone_assets/<zone>.txt` where such a file exists ( 90 of the 146 ): the per type counts agree for
 all 89 stock zones ( the 90th, patch_common_gametype_zm, is a rebuilt file that no longer has the documented asset
-list ), and 71877 of 73272 unflagged rows have the same type + name. The remaining rows are names that
+list ), and 71512 of 72907 unflagged rows of those 89 files have the same type + name. The remaining rows are names that
 document's own README calls heuristic ( it does not replay the loader ); for the types they fall into ( localize,
 sound, xmodel, material, weapon, xanim ) the library's names equal the oracle's in every zone.
 
