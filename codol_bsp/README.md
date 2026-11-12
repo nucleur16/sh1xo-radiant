@@ -541,7 +541,7 @@ compiled map gets them:
   distance` get one ( 0xA85330, 0xA86100 ), and their surfaces are drawn with the shadowed technique
   ( 0xAB7400: light type + 3 ). An entity is drawn into a light's shadow map when its box is inside the light's
   sphere, cone and region ( 0xA858D0, 0xA85030 ).
-* *The frames.* The harness's frame dump dll counts what a frame draws into ( `frame_stats.ps1` ): on a compiled
+* *The frames.* The harness counts what a frame draws into ( `frame_stats.ps1`, through Kernel33's `k33_stats.req` ): on a compiled
   map with one spot and no sun a pass into a depth buffer of 1024 x 2048 with 4 draw calls and 2405 triangles
   ( the surfaces that name the light and the static model in it ); with a script model in the beam 5 draw
   calls and 4793 triangles; with three bots walking about 233 to 239 draw calls and 44722 to 48121 triangles.
@@ -778,11 +778,16 @@ called in by a bot runs into script errors ( seen on the yard without them: 12 "
 
 ### Third round: the client, with pictures
 
-Pictures of the game are taken with a `d3d9.dll` of the harness in the test client's folder
-( `tests/harness/d3d9_shot` ): it hands everything on to the system's and writes the back buffer of a frame when
-asked through a file. On this machine the display is off, Windows then drops the frames of a windowed Direct3D 9
-program, and a screen copy of the game window is black - while the game renders. `start_client.ps1` puts the dll
-there, `shot.ps1` asks for a frame, `stop_all.ps1` takes it away; `join_match.ps1` goes Multiplayer -> Start ->
+Pictures of the game are taken through Kernel33, the client patch dll the game loads anyway: its diagnostic
+profile ( `k33shot.c` of the Kernel33 repository, built by `tests/harness/build_kernel33.ps1` ) writes the back
+buffer of a frame, or what a frame drew into, when asked through a file ( `k33_shot.req`, `k33_stats.req` next to
+the exe, polled where the game presents; `+set k33_shotFile 1` ). On this machine the display is off, Windows then
+drops the frames of a windowed Direct3D 9 program, and a screen copy of the game window is black - while the game
+renders. `start_client.ps1` puts that Kernel33.dll into the shadow client in place of its link to the install's
+( the link is removed first: nothing is written through it ), `shot.ps1` asks for a frame, `stop_all.ps1` puts the
+link back. ( The harness had a helper of its own for this before; it is gone. The pictures and
+numbers of the rounds below were taken with it; the request, the picture and the statistics lines are the same. )
+`join_match.ps1` goes Multiplayer -> Start ->
 Search -> Ready, `devmap`, class, spawn; `client_views.ps1` places the player ( `setviewpos` over rcon ) and renders
 the same views with `codol_viewtool`. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), viewtool
 renders `build-editor\bsptest\png\<name>_view.png`.
@@ -811,7 +816,7 @@ crashed in its own in-game menu code while nothing of the map was involved.
 
 ### Fourth round: light, primary lights, vision, sun, effects
 
-The same harness ( loopback, the test user, the frame dump dll in the shadow client only ), with the server at
+The same harness ( loopback, the test user, the harness's dll in the shadow client only ), with the server at
 `developer 0`: at `developer 1` this server stops a match on a script error of its own at the first spawn with a
 class ( `codol_getLoadoutKillstreak: mp/coMarketplaceItems.csv is not mounted` ), which has nothing to do with the
 map. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), the maps and the asset project of the test under
@@ -836,7 +841,7 @@ map. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), the maps and th
 
 ### Fifth round: light cuts, spot shadows, T-junctions, sound
 
-The same harness. New in it: `frame_stats.ps1` ( the frame dump dll now also counts, per pair of render target and
+The same harness. New in it: `frame_stats.ps1` ( the harness's dll now also counts, per pair of render target and
 depth buffer, the draw calls and triangles of the frame that was just drawn - which shows a shadow map pass and
 what is in it ), `audio_peak.ps1` ( the peak level of the client's audio session over some seconds, from Windows'
 own meter: what the game sends to the sound card, on a machine nobody listens to ), and `stop_all.ps1` was seen
@@ -998,7 +1003,7 @@ New in the harness: `put_zone.ps1`, `put_iwd.ps1`, `make_base.ps1` ( `main\` as 
 `start_lobby.ps1` without `-Map`, and under `round6\`: `run_editor.ps1` ( the editor unattended ), `ui.ps1` ( one
 click in the client's menus with a picture ), `views.ps1`, `dvar_shots.ps1`, `snd_sequence.ps1`, `change_map.ps1`,
 `serve_map.ps1`, `serve_package.ps1`, `serve_stock.ps1`, `editor_mapc.ps1`, `editor_fx.ps1`, `list_build.ps1`. After
-every run `stop_all.ps1` was seen to have taken the frame dump dll out of the test client's folder.
+every run `stop_all.ps1` was seen to have taken the harness's dll out of the test client's folder.
 
 ### Seventh round: omni shadows, lights that move, doorways, coloured bounce
 

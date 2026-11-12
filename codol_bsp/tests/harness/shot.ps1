@@ -2,9 +2,9 @@ param([Parameter(Mandatory)][string]$Name, [switch]$Full, [switch]$Screen, [stri
       [string]$Client = 'D:\CoD\iw3xo-radiant-codol\build-editor\shadow_client')
 # A picture of the game to $Scratch\shots\<Name>.png and a copy of at most 1600 pixels width, <Name>_s.png. Prints the
 # path of the small one.
-#   default   the frame the game renders, through the frame dump d3d9.dll next to the client ( start_client.ps1 puts
-#             it there ): works whatever is in front of the window and while the display is off ( a screen copy of
-#             the window is black then )
+#   default   the frame the game renders, through the diagnostic Kernel33.dll in the client ( start_client.ps1 puts
+#             it there; its request file k33_shot.req ): works whatever is in front of the window, without input
+#             focus and while the display is off ( a screen copy of the window is black then )
 #   -Screen   a screen copy of the game window ( nothing is saved while another window covers it )
 #   -Full     the whole primary screen
 Add-Type -AssemblyName System.Drawing
@@ -21,13 +21,13 @@ function Save-Small($bmp) {
   $s.Dispose()
   "$dir\${Name}_s.png"
 }
-if (-not $Full -and -not $Screen -and (Test-Path "$Client\d3d9.dll")) {
+if (-not $Full -and -not $Screen -and (Test-Path "$Client\Kernel33.dll.harness")) {
   if (-not (Get-Process codoMP_client_shipRetail -ErrorAction SilentlyContinue)) { 'NOT CAPTURED: no client'; return }
   $out = "$dir\$Name.bmp"
   Remove-Item $out -ErrorAction SilentlyContinue
-  [IO.File]::WriteAllText("$Client\codol_shot.req", $out, [Text.Encoding]::ASCII)
+  [IO.File]::WriteAllText("$Client\k33_shot.req", $out, [Text.Encoding]::ASCII)
   for ($i = 0; -not (Test-Path $out) -and $i -lt 100; $i++) { Start-Sleep -Milliseconds 100 }
-  if (-not (Test-Path $out)) { Remove-Item "$Client\codol_shot.req" -ErrorAction SilentlyContinue; 'NOT CAPTURED: the client did not write the frame'; return }
+  if (-not (Test-Path $out)) { Remove-Item "$Client\k33_shot.req" -ErrorAction SilentlyContinue; 'NOT CAPTURED: the client did not write the frame'; return }
   Start-Sleep -Milliseconds 100
   $bytes = [IO.File]::ReadAllBytes($out)
   $ms = New-Object IO.MemoryStream (, $bytes)
