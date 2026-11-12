@@ -2312,6 +2312,52 @@ namespace editor::assets
 
 	std::string default_anim_tree() { return g.project; }
 
+	bool model_files(const std::string& name, preview_files& out)
+	{
+		const auto known = g.sources.models.find(clean_name(name));
+		if (known == g.sources.models.end() || known->second.lods.empty())
+		{
+			return false;
+		}
+
+		const fs::path& lod = known->second.lods[0].file;
+		out.mesh = lod.is_absolute() ? lod : project_dir() / "models" / lod;
+		out.materials = known->second.materials;
+		return true;
+	}
+
+	bool anim_files(const std::string& name, preview_files& out)
+	{
+		const auto known = g.sources.anims.find(clean_name(name));
+		if (known == g.sources.anims.end())
+		{
+			return false;
+		}
+
+		const auto& def = known->second;
+		out = {};
+		out.xanim = def.file.is_absolute() ? def.file : project_dir() / "anims" / def.file;
+		out.loop = def.loop;
+
+		if (!def.model.empty())
+		{
+			preview_files model;
+
+			if (model_files(def.model, model))
+			{
+				out.model = clean_name(def.model);
+				out.mesh = model.mesh;
+				out.materials = model.materials;
+			}
+			else
+			{
+				out.mesh = skeleton_file(project_dir(), g.sources, def.model);
+			}
+		}
+
+		return true;
+	}
+
 	std::vector<std::string> project_models()
 	{
 		std::vector<std::string> out;
@@ -2950,7 +2996,8 @@ namespace editor::assets
 
 	bool undrawn_in_game(const std::string& material)
 	{
-		if (material.rfind("wc/", 0) != 0 || !get_scene().renderer.loaded())
+		// a map of your own ( drawn in the stage ) is built whole by File > Build map: every material goes into its zone
+		if (material.rfind("wc/", 0) != 0 || !get_scene().renderer.loaded() || get_scene().stage)
 		{
 			return false;
 		}
@@ -3528,7 +3575,7 @@ namespace editor::assets
 			files_dropped(files);
 		});
 
-		// asset_dialog <material | model | anim | gdt | close>: the windows of the Materials / Models browsers
+		// asset_dialog <material | model | anim | sounds | fx | gdt | close> [file]: the windows that make assets
 		command::register_command("asset_dialog", [](args_t args)
 		{
 			const std::string which = args.size() > 1 ? args[1] : "";
@@ -3536,6 +3583,8 @@ namespace editor::assets
 			else if (which == "model") { open_model_dialog(); }
 			else if (which == "anim") { open_anim_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
 			else if (which == "gdt") { open_gdt_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
+			else if (which == "sounds") { open_sounds_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
+			else if (which == "fx") { open_fx_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
 			else { close_dialogs(); }
 		});
 

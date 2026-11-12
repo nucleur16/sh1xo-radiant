@@ -763,7 +763,8 @@ namespace components
 		{
 			startup_read = true;
 
-			char env[2048] = {};
+			// a list can be long ( a whole test run ): the limit of an environment variable
+			static char env[32767] = {};
 			if (GetEnvironmentVariableA("CODOL_STARTUP_CMDS", env, sizeof(env)))
 			{
 				for (const auto& cmd : utils::split(std::string(env), ';'))
@@ -779,7 +780,46 @@ namespace components
 		while (startup_next < startup_cmds.size() && ImGui::GetTime() >= startup_resume)
 		{
 			const auto& c = startup_cmds[startup_next++];
-			const auto args = utils::split(c, ' ');
+
+			// words split on spaces, "quoted words" kept together ( ed_key angles "60 200 0" )
+			std::vector<std::string> args;
+			{
+				std::string word;
+				bool quoted = false, have = false;
+
+				for (const char ch : c)
+				{
+					if (ch == '"')
+					{
+						quoted = !quoted;
+						have = true;
+					}
+					else if (ch == ' ' && !quoted)
+					{
+						if (have || !word.empty())
+						{
+							args.push_back(word);
+						}
+
+						word.clear();
+						have = false;
+					}
+					else
+					{
+						word.push_back(ch);
+					}
+				}
+
+				if (have || !word.empty())
+				{
+					args.push_back(word);
+				}
+			}
+
+			if (args.empty())
+			{
+				continue;
+			}
 
 			if (args[0] == "wait")
 			{

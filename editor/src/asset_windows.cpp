@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 
 #include <commdlg.h>
 
@@ -667,6 +668,176 @@ namespace editor::assets
 			ImGui::End();
 		}
 
+		// ---- Sounds, Effect: a file and what the import takes besides it ----------------------------------------
+
+		struct sound_dialog
+		{
+			bool open = false;
+			bool appearing = false;
+			std::string file, root;
+			bool overwrite = false;
+			std::string error;
+		};
+
+		struct fx_dialog
+		{
+			bool open = false;
+			bool appearing = false;
+			std::string file, name;
+			bool overwrite = false;
+			std::string error;
+		};
+
+		sound_dialog g_sound;
+		fx_dialog g_fx;
+
+		void draw_sound_dialog()
+		{
+			auto& d = g_sound;
+			if (!d.open)
+			{
+				return;
+			}
+
+			ImGui::SetNextWindowSize(ImVec2(680.0f, 0.0f), ImGuiCond_Appearing);
+			ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+			if (d.appearing)
+			{
+				ImGui::SetNextWindowFocus();
+				d.appearing = false;
+			}
+
+			if (ImGui::Begin("Import sounds##assets", &d.open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize))
+			{
+				ImGui::PushItemWidth(520.0f);
+				path_row("Aliases ( .csv )", "file", d.file, csv_filter, 130.0f);
+				ImGui::PopItemWidth();
+
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("Sound folder");
+				ImGui::SameLine(130.0f);
+				ImGui::SetNextItemWidth(-44.0f);
+				ImGui::InputTextWithHint("##root", "the folder that holds sound\\ and soundaliases\\ ( empty: above the csv's soundaliases\\ )", &d.root);
+
+				ImGui::PushTextWrapPos(640.0f);
+				ImGui::TextColored(dim, "The columns of the CoD4 mod tools. The .wav / .mp3 files the file column names are copied from sound\\, curves ( .vfcurve ) and "
+					"speaker maps ( .spkrmap ) from soundaliases\\. A file that is not there is a sound of the game: it is referenced by name.");
+				ImGui::PopTextWrapPos();
+				ImGui::Checkbox("Overwrite", &d.overwrite);
+				ImGui::Spacing();
+
+				const bool can = !d.file.empty() && !project().empty();
+				if (!can) { ImGui::BeginDisabled(); }
+
+				if (ImGui::Button("Import and build", ImVec2(170.0f, 0.0f)))
+				{
+					if (import_sounds(fs::u8path(d.file), fs::u8path(d.root), d.overwrite, d.error))
+					{
+						ui::get().show_assets = true;
+						d.open = false;
+						d.error.clear();
+					}
+				}
+
+				if (!can) { ImGui::EndDisabled(); }
+
+				ImGui::SameLine();
+				if (ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)))
+				{
+					d.open = false;
+				}
+
+				if (project().empty())
+				{
+					ImGui::TextColored(yellow, "Open a map first: the assets belong to the project of a map.");
+				}
+
+				if (!d.error.empty())
+				{
+					ImGui::PushTextWrapPos(640.0f);
+					ImGui::TextColored(red, "%s", d.error.c_str());
+					ImGui::PopTextWrapPos();
+				}
+			}
+
+			ImGui::End();
+		}
+
+		void draw_fx_dialog()
+		{
+			auto& d = g_fx;
+			if (!d.open)
+			{
+				return;
+			}
+
+			ImGui::SetNextWindowSize(ImVec2(680.0f, 0.0f), ImGuiCond_Appearing);
+			ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+			if (d.appearing)
+			{
+				ImGui::SetNextWindowFocus();
+				d.appearing = false;
+			}
+
+			if (ImGui::Begin("Import effect##assets", &d.open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize))
+			{
+				ImGui::PushItemWidth(520.0f);
+				path_row("Effect ( .efx )", "file", d.file, efx_filter, 130.0f);
+				ImGui::PopItemWidth();
+
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("Name");
+				ImGui::SameLine(130.0f);
+				ImGui::SetNextItemWidth(330.0f);
+				ImGui::InputTextWithHint("##name", "folder/name, as loadfx takes it ( empty: by its place below an fx folder )", &d.name);
+				ImGui::SameLine();
+				ImGui::Checkbox("Overwrite", &d.overwrite);
+
+				ImGui::PushTextWrapPos(640.0f);
+				ImGui::TextColored(dim, "An .efx of the effects editor. ..\\fx\\misc\\x.efx is misc/x; a file outside an fx folder becomes <project>/<file>. Effects it emits "
+					"are read from fx\\<name>.efx of the project.");
+				ImGui::PopTextWrapPos();
+				ImGui::Spacing();
+
+				const bool can = !d.file.empty() && !project().empty();
+				if (!can) { ImGui::BeginDisabled(); }
+
+				if (ImGui::Button("Import and build", ImVec2(170.0f, 0.0f)))
+				{
+					if (import_fx(fs::u8path(d.file), d.name, d.overwrite, d.error))
+					{
+						ui::get().show_assets = true;
+						d.open = false;
+						d.error.clear();
+					}
+				}
+
+				if (!can) { ImGui::EndDisabled(); }
+
+				ImGui::SameLine();
+				if (ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)))
+				{
+					d.open = false;
+				}
+
+				if (project().empty())
+				{
+					ImGui::TextColored(yellow, "Open a map first: the assets belong to the project of a map.");
+				}
+
+				if (!d.error.empty())
+				{
+					ImGui::PushTextWrapPos(640.0f);
+					ImGui::TextColored(red, "%s", d.error.c_str());
+					ImGui::PopTextWrapPos();
+				}
+			}
+
+			ImGui::End();
+		}
+
 		// ---- GDT -------------------------------------------------------------------------------------------
 
 		struct gdt_dialog
@@ -928,11 +1099,7 @@ namespace editor::assets
 
 			if (ImGui::Button("Sounds .."))
 			{
-				std::string file, error;
-				if (browse(csv_filter, file) && !import_sounds(fs::u8path(file), {}, false, error))
-				{
-					ImGui::Toast(ImGuiToastType_Error, "Sounds", error.c_str(), 8000);
-				}
+				open_sounds_dialog();
 			}
 
 			if (ImGui::IsItemHovered())
@@ -945,11 +1112,7 @@ namespace editor::assets
 
 			if (ImGui::Button("Effect .."))
 			{
-				std::string file, error;
-				if (browse(efx_filter, file) && !import_fx(fs::u8path(file), {}, false, error))
-				{
-					ImGui::Toast(ImGuiToastType_Error, "Effect", error.c_str(), 8000);
-				}
+				open_fx_dialog();
 			}
 
 			if (ImGui::IsItemHovered())
@@ -1025,8 +1188,23 @@ namespace editor::assets
 					ImGui::TextColored(dim, "%s", tag);
 					ImGui::SameLine(124.0f);
 
-					if (ImGui::Selectable(entry.name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
-						&& entry.state == status::built)
+					const bool clicked = ImGui::Selectable(entry.name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+
+					if (clicked && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					{
+						// a look ( or a listen ) before it is used: the Preview window
+						switch (entry.type)
+						{
+						case kind::image: preview::show_image(entry.file); break;
+						case kind::material: if (entry.state == status::built) { preview::show_material(entry.name); } break;
+						case kind::model: if (entry.state == status::built) { preview::show_model(entry.name); } break;
+						case kind::anim: preview::show_anim(entry.name); break;
+						case kind::sound: preview::show_sounds(entry.file); break;
+						default: break;
+						}
+					}
+
+					if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && entry.state == status::built)
 					{
 						// use it: the material of new brushes ( and of the selection ), or a new entity with the model
 						if (entry.type == kind::material)
@@ -1048,11 +1226,12 @@ namespace editor::assets
 					if (ImGui::IsItemHovered())
 					{
 						// how it is used: in the editor, or by the level script of the built map
-						const std::string use = entry.type == kind::material ? "Double click: the material of new brushes and of the selection."
-							: entry.type == kind::model ? "Double click: a new entity with the model where the camera looks."
-							: entry.type == kind::anim ? "File > Build map puts it into the map. Script: #using_animtree( \"<its animtree>\" ); in front of main(), then\n"
+						const std::string use = entry.type == kind::material ? "Click: preview. Double click: the material of new brushes and of the selection."
+							: entry.type == kind::model ? "Click: preview. Double click: a new entity with the model where the camera looks."
+							: entry.type == kind::image ? "Click: the picture."
+							: entry.type == kind::anim ? "Click: plays it on its model ( Preview window ). File > Build map puts it into the map. Script: #using_animtree( \"<its animtree>\" ); in front of main(), then\n"
 								"ent setAnim( %" + entry.name + ", 1, 0, 1 ); on a script_model that has its model"
-							: entry.type == kind::sound ? "File > Build map puts the aliases into the map. Script: ent playSound( \"<alias>\" ); ent playLoopSound( \"<alias>\" );\n"
+							: entry.type == kind::sound ? "Click: its aliases, to listen to. File > Build map puts the aliases into the map. Script: ent playSound( \"<alias>\" ); ent playLoopSound( \"<alias>\" );\n"
 								"ambientPlay( \"<alias>\" ); in the map: a script_sound entity"
 							: entry.type == kind::fx ? "File > Build map puts it into the map. Script: level._effect[ \"x\" ] = loadfx( \"" + entry.name + "\" ); playfx( level._effect[ \"x\" ], origin );\n"
 								"in the map: a script_fx entity with the key fx " + entry.name
@@ -1233,9 +1412,43 @@ namespace editor::assets
 		}
 	}
 
+	void open_sounds_dialog(const fs::path& file)
+	{
+		auto& d = g_sound;
+
+		if (!d.open || !file.empty())
+		{
+			d = {};
+		}
+
+		d.open = d.appearing = true;
+
+		if (!file.empty())
+		{
+			d.file = to_utf8(file);
+		}
+	}
+
+	void open_fx_dialog(const fs::path& file)
+	{
+		auto& d = g_fx;
+
+		if (!d.open || !file.empty())
+		{
+			d = {};
+		}
+
+		d.open = d.appearing = true;
+
+		if (!file.empty())
+		{
+			d.file = to_utf8(file);
+		}
+	}
+
 	void close_dialogs()
 	{
-		g_material.open = g_model.open = g_gdt.open = g_anim.open = false;
+		g_material.open = g_model.open = g_gdt.open = g_anim.open = g_sound.open = g_fx.open = false;
 	}
 
 	void draw_windows()
@@ -1245,5 +1458,7 @@ namespace editor::assets
 		draw_model_dialog();
 		draw_gdt_dialog();
 		draw_anim_dialog();
+		draw_sound_dialog();
+		draw_fx_dialog();
 	}
 }

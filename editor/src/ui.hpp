@@ -35,6 +35,7 @@ namespace editor::ui
 		bool show_materials = false;
 		bool show_surface = false;
 		bool show_assets = false;
+		bool show_preview = false;
 
 		// which view the mouse was over in the last frame: decides what view relative shortcuts mean
 		int hovered_2d = -1;		// index of the 2D view, -1: none
@@ -103,7 +104,20 @@ namespace editor::ui
 	void new_map(const std::string& name, bool force = false);
 	void build_map(bool fast);
 	void add_gameplay_entities();
-	void install_map(const std::string& zone_to, const std::string& scripts_to);
+	// install.cpp: the package of the last build to where the game reads it, and out again
+	struct install_request
+	{
+		std::string game;			// the game folder: usermaps\<map>\, main\, and the create-room list
+		std::string zone_dir;		// a zone folder by hand instead of <game>\usermaps\<map>
+		std::string script_dir;		// the server's script folder; empty: no scripts
+		bool list = false;			// add the map to the create-room list of `game`
+	};
+	void install_map(const install_request& request);
+	void install_map(const std::string& zone_to, const std::string& scripts_to);	// empty: the folders of File > Settings
+	void uninstall_map(const std::string& map);										// empty: the open map
+	void print_map_list(const std::string& game_folder);							// empty: the install of File > Settings
+	void open_install_window();
+	void draw_install_window();
 	void close_map(bool force = false);
 	void exit_editor();
 
@@ -116,6 +130,40 @@ namespace editor::ui
 	void draw_entity_window();
 	void draw_layers_window();
 	void draw_surface_window();
+
+	// ---- light ( lights.cpp ) ----------------------------------------------------------------------------------
+	// a `light` entity as the map compiler reads it ( codol_bsp map_input.cpp )
+	struct light_info
+	{
+		float3 origin{};
+		float radius = 600.0f;
+		float color[3] = { 1.0f, 1.0f, 1.0f };
+		float intensity = 1.0f;
+		int flags = 0;					// spawnflags
+		bool scriptable = false;		// spawnflags 4: a primary light a script can change; it stays an entity
+		bool primary_omni = false;
+		bool primary_spot = false;
+		bool spot = false;				// has a cone: a primary spot, or a baked light with fov_outer or a target
+		float outer = 0.0f;				// whole angles of the cone, degrees
+		float inner = 0.0f;
+		int exponent = 0;
+		float3 forward{ 0.0f, 0.0f, -1.0f };
+		bool has_target = false;		// the key is there ..
+		bool target_found = false;		// .. and names an entity
+		float3 target{};
+		bool can_shadow = true;
+	};
+
+	bool is_light_class(std::string_view classname);		// light, light_spot, light_omni
+	light_info read_light(const edit::document& doc, const edit::entity& e);
+	// lines ( two vertices each ) that show where a light reaches: its radius, the cone of a spot
+	void light_shape(const light_info& light, std::vector<line_vertex>& out);
+	// the shapes of the selected light entities, world space, colours as Direct3D has them
+	const std::vector<line_vertex>& selected_light_lines();
+	// the typed fields of the Entity window for `light` entities / the light keys of the worldspawn
+	void draw_light_panel(const std::vector<object_id>& entities, bool world);
+	// once per frame: closes the undo step of a field that was dragged
+	void finish_live_edits();
 
 	// one row of filter + list of the classes of the catalog; returns the picked class
 	const edit::class_info* class_picker(std::string& filter, float height, bool brush_classes_enabled);

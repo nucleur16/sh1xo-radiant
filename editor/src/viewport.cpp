@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 #include "ui.hpp"
 
 #include <ImGuizmo.h>
@@ -245,6 +246,8 @@ namespace ggui
 
 	void codol_viewport_dialog::on_device_lost()
 	{
+		editor::preview::device_lost();
+
 		if (auto& s = editor::get_scene(); s.renderer.initialised())
 		{
 			s.renderer.on_device_lost();
@@ -541,6 +544,12 @@ namespace ggui
 			refs.clear();
 			s.refs_of(e.id, refs);
 			outline_refs();
+		}
+
+		// where a selected light reaches: its radius, the cone of a spot
+		{
+			const auto& lights = ui::selected_light_lines();
+			selection_lines.insert(selection_lines.end(), lights.begin(), lights.end());
 		}
 
 		// the brush model the zone draws for a selected brush entity
@@ -1179,7 +1188,7 @@ namespace ggui
 		}
 
 		ImGui::SameLine();
-		ImGui::TextDisabled("%d models. Double click: new entity where the camera looks.", static_cast<int>(names.size()));
+		ImGui::TextDisabled("%d models. Click: preview. Double click: new entity where the camera looks.", static_cast<int>(names.size()));
 
 		// a model of the map's own project ( assets.hpp ); a row of its own: the window is often narrow
 		if (ImGui::Button("Import model .."))
@@ -1232,7 +1241,15 @@ namespace ggui
 				{
 					const auto& name = names[static_cast<std::size_t>(filtered[static_cast<std::size_t>(row)])];
 
-					if (ImGui::Selectable(name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					const bool clicked = ImGui::Selectable(name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+
+					if (clicked && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					{
+						// a look at it before it is placed
+						editor::preview::show_model(name);
+					}
+
+					if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					{
 						// on what the camera looks at, else a few steps ahead; facing the camera
 						const auto target = edit::snap_point(s.ray_target(s.cam.origin, s.cam.axes().forward), s.snap ? s.grid : 0.0);
@@ -1346,7 +1363,8 @@ namespace ggui
 
 		if (ImGui::IsItemHovered())
 		{
-			ImGui::SetTooltip("Click: the material of new brushes. Double click: also apply it to the selection.\nW: a world material ( its technique set reads lightmaps: made for brushes and terrain ).");
+			ImGui::SetTooltip("Click: the material of new brushes. Double click: also apply it to the selection.\nRight click: the Preview window ( its picture, a cube drawn with it ).\n"
+				"W: a world material ( its technique set reads lightmaps: made for brushes and terrain ).");
 		}
 
 		// materials of the map's own project ( assets.hpp ); a row of their own: the window is often narrow
@@ -1426,6 +1444,17 @@ namespace ggui
 						if (ImGui::IsItemClicked())
 						{
 							doc.set_default_material(name);
+
+							// the Preview window follows while it is open
+							if (st.show_preview)
+							{
+								editor::preview::show_material(name);
+							}
+						}
+
+						if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+						{
+							editor::preview::show_material(name);
 						}
 
 						if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
@@ -1690,7 +1719,16 @@ namespace ggui
 		{
 			m->next_spawn = false;
 
-			if (!s.renderer.spawn_camera(++s.spawn_index, cam))
+			if (s.stage)
+			{
+				// the renderer only knows the stage: the spawn points of the document
+				if (!s.document_spawn_camera(++s.spawn_index))
+				{
+					s.spawn_index = 0;
+					s.document_spawn_camera(0);
+				}
+			}
+			else if (!s.renderer.spawn_camera(++s.spawn_index, cam))
 			{
 				s.spawn_index = 0;
 				s.renderer.spawn_camera(0, cam);
@@ -1702,7 +1740,24 @@ namespace ggui
 			m->overview = false;
 
 			float3 center, half;
-			if (s.renderer.world_bounds(center, half))
+			edit::bounds box;
+			bool have = false;
+
+			if (s.stage)
+			{
+				if (s.document_bounds(box))
+				{
+					center = { static_cast<float>((box.mins.x + box.maxs.x) * 0.5), static_cast<float>((box.mins.y + box.maxs.y) * 0.5), static_cast<float>((box.mins.z + box.maxs.z) * 0.5) };
+					half = { static_cast<float>((box.maxs.x - box.mins.x) * 0.5), static_cast<float>((box.maxs.y - box.mins.y) * 0.5), static_cast<float>((box.maxs.z - box.mins.z) * 0.5) };
+					have = true;
+				}
+			}
+			else
+			{
+				have = s.renderer.world_bounds(center, half);
+			}
+
+			if (have)
 			{
 				const float reach = std::max(half.x, half.y) / std::tan(m->fov * 0.5f * editor::DEG);
 				cam.origin = { center.x, center.y, center.z + half.z + reach };
