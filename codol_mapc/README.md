@@ -33,6 +33,7 @@ Static CRT, `/std:c++latest`, `/W4 /WX`. Builds `codol_zone`, `codol_edit`, `cod
 ```
 codol_mapc --base <map.ff> --exe <C1.exe> --map <edited.map> [--baseline <map.codol_base.map>] --out <new.ff>
            [--report <file>] [--zone-out <file>] [--donor <zone.ff>]... [--level 0..9]
+           [--assets <project zone.ff>[,<type> ..]]... [--rawfile <name>=<file>]... [--append-rawfile <name>=<file>]...
            [--no-entities] [--no-models] [--no-brushes] [--no-surfaces]
 codol_mapc --check <map.ff> --exe <C1.exe>
 ```
@@ -48,6 +49,8 @@ codol_mapc --check <map.ff> --exe <C1.exe>
   a top level xmodel in front of the gfx_map with what it depends on ( "entity models: xmodel .. taken from zone .." in
   the report ). A model neither has is left alone - it may be in one of the game's common zones, which the compiler
   does not read. Not loaded by a game client or server yet.
+* `--assets` a project's assets for the edited map, see [A project's assets](#a-projects-assets). `--rawfile`,
+  `--append-rawfile`: a rawfile of the zone is replaced / added, or gets a file's text behind what it holds.
 * `--no-brushes` also leaves out the surfaces: render surfaces are only made for brushes the brush stage compiled.
 * Exit code 0: written. 1: failed, nothing written. A map without differences gives the base zone, byte for byte.
 * A compile that changes collision data reads the result back the way a dedicated server does ( below ) and fails,
@@ -129,6 +132,42 @@ The stages do not use per-case patches of the zone stream. They use the typed ed
 ( `ZoneEditor::data_at`, `set_data`, `patch_value`, `set_pointer`, `insert_data`, `remove_data_range` .. ): an array is
 replaced by one of another length with the pointers it holds given as targets, and the loaders decide where
 everything ends up when the zone is written. See `codol_zone/README.md`, "Typed editing".
+
+### A project's assets
+
+An edited shipped map takes a project's animations, sounds, effects, models and materials the way a map compiled
+from scratch does ( `codol_assetc --carry` after `codol_bsp` ): `--assets <project zone.ff>` carries every top level
+asset of the kinds `xanim`, `sndcurve`, `loaded_sound`, `sound`, `fx`, `xmodel`, `material` ( or of the kinds named
+behind the file, `--assets zone.ff,sound,loaded_sound,sndcurve`; names as `codol_linker --list` prints them ) into
+the map zone, each with what it points at ( `ZoneEditor::add_asset_closure`: an alias list with its loaded sounds
+and curve, an effect with its materials, a model with materials, images and technique sets ), behind the assets the
+zone has. An asset whose kind and name the zone already has stays as it is, so a second run carries nothing. The
+zone is a `--donor` as well: a new `misc_model` or `script_model` may name one of its models.
+
+```
+> codol_mapc --base mp_rust.ff --exe C1.exe --map mp_rust.map --out out/mp_rust.ff --assets mod/c4fx/c4fx_assets.ff
+    --append-rawfile animlists/mp_rust.animlist=mod/c4fx/generated/animlists/map.animlist --rawfile animtrees/c4fx.atr=mod/c4fx/generated/animtrees/c4fx.atr
+  assets: carried from c4fx_assets.ff: 1 fx, 3 loaded_sound, 3 material, 1 sndcurve, 4 sound, 2 xanim, 2 xmodel ( and 4 assets they point at ); 0 the zone already has, 0 failed
+  container: the file has the length of the base file ( 27697429 bytes ), which the client checks
+```
+
+What goes with them, as for a built map ( `docs/CODOL.md`, "In the built map" ): **animations** need their names in
+the map's animlist - the client and the server build the animtrees from `animlists/<map>.animlist`, so the
+project's list is appended to the shipped map's ( `--append-rawfile` ), its animtree file added ( `--rawfile` ) - and
+a level script that precaches and plays them, which the dedicated server reads from its script folder; **effects**
+are placed by script ( `loadfx` / `playfx` ) - the two effect files of a shipped map are not edited; **streamed
+sounds** need their archive in the client's `main\` ( `codol_assets/README.md` ).
+
+Limits. A **material** that comes this way can be used by the carried models and effects; it is not put into
+`GfxWorld.materialMemory`, so a world brush face with it is still not drawn ( "What is not compiled" ). The file
+has to keep the length of the base file ( the client's table of stock zones ): what is carried must fit into what
+the better compression of the rebuild leaves - mp_rust with the test project ( 16 assets, 0.2 MB ) fits; when it
+does not, the report warns and the client refuses the zone. The server does not check the length.
+
+Checked: `codol_mapc_tests --assets <project zone>` - the unedited map with the project's assets and two rawfiles:
+every asset of the project's kinds is in the zone, every asset of the map still is, the appended list holds the
+old text and the new, the collision data reads as before, a second run carries nothing. **Not loaded by a client
+or a server yet.**
 
 ### Static models
 

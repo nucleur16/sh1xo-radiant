@@ -84,6 +84,19 @@ namespace codol::mapc
 		std::filesystem::path out;				// fast file to write
 		std::filesystem::path zone_out;			// optional: the inflated zone
 		std::vector<std::filesystem::path> donors;	// fast files a static model that the map zone does not have may be taken from
+		// A project's own assets ( a codol_assetc zone ): every top level asset of the types named - none named: xanim,
+		// sndcurve, loaded_sound, sound, fx, xmodel, material - is carried into the map zone with what it points at,
+		// as codol_assetc --carry does for a map compiled from scratch. Such a zone is a donor as well.
+		struct asset_source
+		{
+			std::filesystem::path zone;
+			std::vector<std::string> types;		// names as codol_linker --list prints them
+		};
+		std::vector<asset_source> assets;
+		// rawfiles: ( name, file ) pairs. `rawfiles` replaces or adds a rawfile; `rawfiles_appended` puts the file's text
+		// behind what the zone's rawfile of that name holds ( animlists/<map>.animlist of a shipped map, to which a
+		// project adds its animations ), or adds it when the zone has none
+		std::vector<std::pair<std::string, std::filesystem::path>> rawfiles, rawfiles_appended;
 		int level = 6;							// deflate level of the fast file
 		bool entities = true, models = true, brushes = true, surfaces = true;		// stages to run
 	};
@@ -98,6 +111,7 @@ namespace codol::mapc
 		int clip_models_moved = 0, clip_models_deleted = 0, clip_models_added = 0;
 		int brushes_replaced = 0, brushes_deleted = 0, brushes_added = 0, brush_sides_added = 0, planes_added = 0, leafs_touched = 0;
 		int surfaces_added = 0, vertices_added = 0, triangles_added = 0, faces_not_drawn = 0;
+		int assets_carried = 0, asset_dependencies = 0, rawfiles_set = 0;
 		std::uint64_t zone_bytes_before = 0, zone_bytes_after = 0;
 		std::vector<std::string> notes;			// what was done, per stage
 		std::vector<std::string> warnings;		// what was approximated or left out

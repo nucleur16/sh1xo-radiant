@@ -6,6 +6,10 @@
 //   codol_bsp_probe check <zone.ff> <C1.exe>                             the offline validators of codol_bsp on any map zone
 //   codol_bsp_probe portals|cells|terrain|smodels <zone.ff> <C1.exe>     how a map's portals, cells, terrain, static models are stored
 //   codol_bsp_probe sun <zone.ff> <C1.exe>                               what the sun and its shadows hang on ( header fields, lights, ranges )
+//   codol_bsp_probe lights <zone.ff> <C1.exe> [out dir]                  the primary lights with what hangs on each, the light definitions and their strips
+//   codol_bsp_probe lightcuts <zone.ff> <C1.exe> [edges]                 how surfaces are cut by the primary lights: seams between surfaces of one material and plane
+//   codol_bsp_probe lightat <zone.ff> <C1.exe> x y z                     what the lit shader reads at a point of the world
+//   codol_bsp_probe ents <zone.ff> <C1.exe> [text]                       the entities whose text holds text
 //   codol_bsp_probe patchworld <zone.ff> <C1.exe> <out.ff> <size> <offset>=<hex> ..   a copy with GfxWorld header bytes changed ( experiments )
 
 #include "codol_bsp/bsp.hpp"
@@ -685,6 +689,80 @@ int main(int argc, char** argv)
 				std::printf(" %d: %d,", k, n);
 			}
 			std::printf("\n");
+		}
+		return 0;
+	}
+	if (mode == "lightat" && argc >= 7)
+	{
+		// codol_bsp_probe lightat <zone.ff> <C1.exe> x y z: the triangles of the world the point lies on, with what the
+		// lit shader reads there - the surface's primary light, the two layers of the secondary lightmap ( and the light
+		// they give on a flat normal ), the primary lightmap's texel
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		const double p[3] = { std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]) };
+		const std::vector<c1::GfxWorldVertex> verts = world.vertices();
+		const std::vector<std::uint16_t> all_indices = world.indices();
+		const auto pointers = z.get_array<zone::zaddr>(world.raw.draw.lightmaps, 2u * static_cast<std::size_t>(world.raw.draw.lightmapCount));
+		for (std::size_t si = 0; si < world.surfaces.size(); si++)
+		{
+			const c1::GfxSurface& surf = world.surfaces[si].raw;
+			for (std::uint32_t t = 0; t < surf.triCount; t++)
+			{
+				const c1::GfxWorldVertex* v[3];
+				for (std::uint32_t k = 0; k < 3; k++)
+				{
+					v[k] = &verts[surf.firstVertex + all_indices[surf.baseIndex + 3 * t + k]];
+				}
+				double e1[3], e2[3], d[3], n[3];
+				for (int k = 0; k < 3; k++)
+				{
+					e1[k] = v[1]->xyz[k] - v[0]->xyz[k];
+					e2[k] = v[2]->xyz[k] - v[0]->xyz[k];
+					d[k] = p[k] - v[0]->xyz[k];
+				}
+				n[0] = e1[1] * e2[2] - e1[2] * e2[1];
+				n[1] = e1[2] * e2[0] - e1[0] * e2[2];
+				n[2] = e1[0] * e2[1] - e1[1] * e2[0];
+				const double nn = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+				if (nn < 1e-9 || std::fabs(d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) / std::sqrt(nn) > 0.5)
+				{
+					continue;
+				}
+				const double d11 = e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2], d12 = e1[0] * e2[0] + e1[1] * e2[1] + e1[2] * e2[2],
+					d22 = e2[0] * e2[0] + e2[1] * e2[1] + e2[2] * e2[2], dp1 = d[0] * e1[0] + d[1] * e1[1] + d[2] * e1[2], dp2 = d[0] * e2[0] + d[1] * e2[1] + d[2] * e2[2];
+				const double det = d11 * d22 - d12 * d12;
+				const double b = (d22 * dp1 - d12 * dp2) / det, c = (d11 * dp2 - d12 * dp1) / det;
+				if (b < 0 || c < 0 || b + c > 1)
+				{
+					continue;
+				}
+				const double u = (1 - b - c) * v[0]->lmapCoord[0] + b * v[1]->lmapCoord[0] + c * v[2]->lmapCoord[0];
+				const double w = (1 - b - c) * v[0]->lmapCoord[1] + b * v[1]->lmapCoord[1] + c * v[2]->lmapCoord[1];
+				std::printf("surface %zu ( %s ) primary light %u lightmap %u at ( %.4f %.4f )", si, std::string(world.surfaces[si].materialName).c_str(), surf.primaryLightIndex, surf.lightmapIndex, u, w);
+				zone::ImageView primary, secondary;
+				if (surf.lightmapIndex * 2u + 1 < pointers.size() && zone::read_image(z, pointers[surf.lightmapIndex * 2u], primary)
+					&& zone::read_image(z, pointers[surf.lightmapIndex * 2u + 1], secondary) && !secondary.pixels.empty() && !primary.pixels.empty())
+				{
+					const int sw = secondary.raw.width, sh = secondary.raw.height / 2, pw = primary.raw.width, ph = primary.raw.height;
+					const int x = std::clamp(static_cast<int>(u * sw), 0, sw - 1), y = std::clamp(static_cast<int>(w * sh), 0, sh - 1);
+					const std::uint8_t* up = secondary.pixels.data() + (static_cast<std::size_t>(y) * sw + x) * 4;
+					const std::uint8_t* low = up + static_cast<std::size_t>(sw) * sh * 4;
+					const double dx = up[3] / 255.0 * 4.08 - 2.08, dy = low[3] / 255.0 * 4.06451607 - 2.06451607, scale = 1.0 / std::sqrt(dx * dx + dy * dy + 1.0);
+					std::printf(": upper r g b a %u %u %u %u, lower %u %u %u %u; light on a flat normal %.3f %.3f %.3f; primary %u", up[2], up[1], up[0], up[3], low[2], low[1], low[0], low[3],
+						std::pow(up[2] / 255.0 + low[2] / 255.0 * scale, 2.0), std::pow(up[1] / 255.0 + low[1] / 255.0 * scale, 2.0), std::pow(up[0] / 255.0 + low[0] / 255.0 * scale, 2.0),
+						primary.pixels[static_cast<std::size_t>(std::clamp(static_cast<int>(w * ph), 0, ph - 1)) * pw + std::clamp(static_cast<int>(u * pw), 0, pw - 1)]);
+				}
+				std::printf("\n");
+			}
 		}
 		return 0;
 	}

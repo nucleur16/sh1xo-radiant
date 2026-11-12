@@ -26,6 +26,8 @@
 //                                    <name>.efx files of the same fx folder
 //     --fx-atlas <file>              texture atlas table of the shipped materials ( default <out dir>/codol_fxatlas.txt; made
 //                                    on first use, half a minute )
+//     --iwd-add <archive.iwd>        the files of a plain archive go into the --iwd archive as well. An --iwd whose name
+//                                    holds iw_sound, iw_image .. is written encrypted, as the game's own archives are
 //     --carry <zone.ff>[,<type> ..]  take assets of another fast file as they are, each with what it points at: by default
 //                                    its animations, sounds ( alias lists, loaded sounds, curves ) and effects; types as
 //                                    --verify prints them ( xanim, sound, sndcurve, loaded_sound, fx, xmodel, material ..,
@@ -36,6 +38,7 @@
 
 #include "codol_assets/fx.hpp"
 #include "codol_assets/link.hpp"
+#include "codol_render/iwd.hpp"
 #include "codol_render/texture.hpp"
 #include "codol_zone/assets.hpp"
 
@@ -337,6 +340,7 @@ int main(const int argc, char** argv)
 {
 	LinkOptions link;
 	fs::path out, sourceRoot, iwiDir, iwd, zoneOut, verifyFile;
+	std::vector<fs::path> iwdAdd;
 	std::vector<std::string> images, materials, models, rawfiles;
 	std::vector<std::string> anims, soundAliases;
 	fs::path soundRoot;
@@ -358,6 +362,7 @@ int main(const int argc, char** argv)
 		else if (a == "--source-root") sourceRoot = value();
 		else if (a == "--iwi-dir") iwiDir = value();
 		else if (a == "--iwd") iwd = value();
+		else if (a == "--iwd-add") iwdAdd.push_back(value());
 		else if (a == "--zone-out") zoneOut = value();
 		else if (a == "--image") images.push_back(value());
 		else if (a == "--material") materials.push_back(value());
@@ -593,15 +598,49 @@ int main(const int argc, char** argv)
 			}
 		}
 	}
-	if (!iwd.empty() && !(iwiFiles.empty() && sounds.streamedFiles.empty()))
+	// --iwd-add <plain archive.iwd>: its files go into the --iwd archive as well ( a project's sound archive written
+	// under a plain name becomes one with a name the game mounts )
+	std::vector<std::pair<std::string, std::vector<std::uint8_t>>> addedFiles;
+	for (const fs::path& from : iwdAdd)
+	{
+		std::string why;
+		const auto archive = codol::render::iwd_archive::open(from, nullptr, &why);
+		if (!archive)
+		{
+			return fail("--iwd-add " + from.string() + ": " + why);
+		}
+		for (const codol::render::iwd_entry& entry : archive->entries())
+		{
+			std::vector<std::uint8_t> bytes;
+			if (!archive->read(entry, bytes, &why))
+			{
+				return fail("--iwd-add " + from.string() + ": " + why);
+			}
+			addedFiles.emplace_back(entry.name, std::move(bytes));
+		}
+	}
+	if (!iwd.empty() && !(iwiFiles.empty() && sounds.streamedFiles.empty() && addedFiles.empty()))
 	{
 		auto packed = iwiFiles;
+		packed.insert(packed.end(), addedFiles.begin(), addedFiles.end());
 		packed.insert(packed.end(), sounds.streamedFiles.begin(), sounds.streamedFiles.end());
-		if (const Status s = write_iwd(iwd, packed); !s)
+		// an archive with one of the game's own names ( iw_sound_NN.iwd .. ) is encrypted like the game's
+		codol::render::iwd_key key{};
+		const bool encrypted = iwd_needs_key(iwd);
+		if (encrypted)
+		{
+			std::string why;
+			if (!codol::render::derive_iwd_key(link.exe.empty() ? link.install / "C1.exe" : link.exe, key, &why))
+			{
+				return fail("--iwd " + iwd.filename().string() + " has a name the game decrypts, and the key could not be read from the client: " + why);
+			}
+		}
+		if (const Status s = write_iwd(iwd, packed, encrypted ? &key : nullptr); !s)
 		{
 			return fail(s.message);
 		}
-		std::printf("wrote %s: %zu images, %zu streamed sound files\n", iwd.string().c_str(), iwiFiles.size(), sounds.streamedFiles.size());
+		std::printf("wrote %s%s: %zu images, %zu streamed sound files, %zu files of other archives\n", iwd.string().c_str(),
+			encrypted ? " ( encrypted like the game's archives )" : "", iwiFiles.size(), sounds.streamedFiles.size(), addedFiles.size());
 	}
 	if (iwd.empty() && !sounds.streamedFiles.empty())
 	{

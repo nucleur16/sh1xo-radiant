@@ -172,6 +172,8 @@ if ($archives.Count) {
   $projectNote += (($archives | ForEach-Object { "     main\$($_.Name)" }) -join "`r`n") + "  ->  <game>\main\`r`n"
   $projectNote += "   The streamed sound files ( sound\<file> ) of the map's sound aliases: a plain archive next to the game's own.`r`n"
   $projectNote += "   Without it the aliases exist and play nothing.`r`n"
+  $projectNote += "   NOTE ( codol_bsp/README.md, fifth round ): the client was seen NOT to open a plain archive, and to end when a`r`n"
+  $projectNote += "   streamed alias plays from an archive it does open ( iw_sound_NN.iwd ). Streamed sounds do not work yet: use loaded sounds.`r`n"
 }
 Set-Content "$presence\INSTALL.txt" -Encoding ASCII -Value @"
 $Name - where the files go ( <game> = the Call of Duty Online 1.1.1.13 folder, <server> = CoD4x_Server )

@@ -4,6 +4,9 @@
 
 #include "codol_mapc/server_check.hpp"
 
+#include <cstdio>
+#include <set>
+
 namespace codol::mapc
 {
 	ZoneDataId context::data(const zaddr address, const char* what) const
@@ -199,6 +202,162 @@ namespace codol::mapc
 		}
 	}
 
+	// A project's assets and rawfiles ( options::assets, rawfiles, rawfiles_appended ). What ZoneEditor::add_asset_closure
+	// does for a map compiled from scratch it does here: an animation, an alias list with its loaded sounds and curve, an
+	// effect with its materials, a model with materials, images and technique sets become top level assets of the map
+	// zone, behind what it has; an asset whose type and name the zone already has stays. The game finds them by name
+	// once the map is loaded. What this does not do: a material that comes this way is not put into the GfxWorld's
+	// material table - a world brush face with it still is not drawn ( stage_surfaces ).
+	void stage_assets(context& ctx)
+	{
+		static const char* const usual[] = { "xanim", "sndcurve", "loaded_sound", "sound", "fx", "xmodel", "material" };
+		bool changed = false;
+		for (const options::asset_source& source : ctx.opts.assets)
+		{
+			ZoneEditor donor;
+			if (const zone::Status s = donor.open(source.zone, ctx.key); !s)
+			{
+				ctx.warn("assets: " + source.zone.string() + ": " + s.message);
+				continue;
+			}
+			std::vector<std::int32_t> types;
+			if (source.types.empty())
+			{
+				for (const char* name : usual)
+				{
+					types.push_back(zone::asset_type_from_name(name));
+				}
+			}
+			for (const std::string& name : source.types)
+			{
+				const std::int32_t type = zone::asset_type_from_name(name);
+				if (type < 0)
+				{
+					ctx.warn("assets: '" + name + "' is no asset type ( " + source.zone.filename().string() + " )");
+					continue;
+				}
+				types.push_back(type);
+			}
+			std::map<std::string, int> carried;
+			int kept = 0, dependencies = 0, failed = 0;
+			std::set<std::pair<std::int32_t, std::string>> before;
+			for (std::size_t k = 0; k < ctx.editor.asset_count(); k++)
+			{
+				const zone::EditorAsset a = ctx.editor.asset(k);
+				before.emplace(a.type, a.name);
+			}
+			for (std::size_t k = 0; k < donor.asset_count(); k++)
+			{
+				const zone::EditorAsset a = donor.asset(k);
+				if (std::find(types.begin(), types.end(), a.type) == types.end())
+				{
+					continue;
+				}
+				if (ctx.editor.find_asset(a.type, a.name) != ZoneEditor::npos)
+				{
+					if (before.count({ a.type, a.name }))
+					{
+						kept++;
+					}
+					else
+					{
+						// it came along with an asset that points at it: one of the carried, not a dependency
+						carried[zone::asset_type_name(a.type)]++;
+						dependencies -= dependencies ? 1 : 0;
+					}
+					continue;
+				}
+				const std::size_t count = ctx.editor.asset_count();
+				if (const zone::Status s = ctx.editor.add_asset_closure(donor, k); !s)
+				{
+					ctx.warn("assets: " + zone::asset_type_name(a.type) + " '" + a.name + "' of " + source.zone.filename().string() + " could not be carried: " + s.message);
+					failed++;
+					continue;
+				}
+				carried[zone::asset_type_name(a.type)]++;
+				dependencies += static_cast<int>(ctx.editor.asset_count() - count - 1);
+				changed = true;
+			}
+			std::string list;
+			int total = 0;
+			for (const auto& [type, n] : carried)
+			{
+				list += format("%s%d %s", list.empty() ? "" : ", ", n, type.c_str());
+				total += n;
+			}
+			ctx.rep.assets_carried += total;
+			ctx.rep.asset_dependencies += dependencies;
+			ctx.note(format("assets: carried from %s: %s ( and %d assets they point at ); %d the zone already has, %d failed", source.zone.filename().string().c_str(),
+				list.empty() ? "nothing" : list.c_str(), dependencies, kept, failed));
+		}
+		const auto read_file = [&](const std::filesystem::path& file, std::vector<std::uint8_t>& bytes)
+		{
+			std::FILE* f = nullptr;
+#ifdef _WIN32
+			_wfopen_s(&f, file.c_str(), L"rb");
+#else
+			f = std::fopen(file.string().c_str(), "rb");
+#endif
+			if (!f)
+			{
+				return false;
+			}
+			std::uint8_t block[65536];
+			for (std::size_t got; (got = std::fread(block, 1, sizeof(block), f)) > 0;)
+			{
+				bytes.insert(bytes.end(), block, block + got);
+			}
+			std::fclose(f);
+			return true;
+		};
+		for (int pass = 0; pass < 2; pass++)
+		{
+			for (const auto& [name, file] : pass == 0 ? ctx.opts.rawfiles : ctx.opts.rawfiles_appended)
+			{
+				std::vector<std::uint8_t> bytes, now;
+				if (!read_file(file, bytes))
+				{
+					ctx.warn("rawfile '" + name + "': cannot read " + file.string());
+					continue;
+				}
+				std::size_t had = 0;
+				if (pass == 1)
+				{
+					// behind what the zone's rawfile holds; a line break between the two when the old text has none at its end
+					zone::RawFileView view;
+					const zaddr at = ctx.editor.zone().find_asset(c1::ASSET_TYPE_RAWFILE, name);
+					if (at && zone::read_rawfile(ctx.editor.zone(), at, view) && zone::rawfile_contents(view, now))
+					{
+						while (!now.empty() && now.back() == 0)
+						{
+							now.pop_back();
+						}
+						had = now.size();
+						if (!now.empty() && now.back() != '\n')
+						{
+							now.push_back('\n');
+						}
+					}
+					now.insert(now.end(), bytes.begin(), bytes.end());
+					bytes = std::move(now);
+				}
+				if (const zone::Status s = ctx.editor.set_rawfile(name, bytes); !s)
+				{
+					ctx.warn("rawfile '" + name + "': " + s.message);
+					continue;
+				}
+				ctx.rep.rawfiles_set++;
+				changed = true;
+				ctx.note(pass == 0 ? format("rawfile %s: %zu bytes from %s", name.c_str(), bytes.size(), file.filename().string().c_str())
+					: format("rawfile %s: %zu bytes of %s behind the %zu the zone had", name.c_str(), bytes.size() - had, file.filename().string().c_str(), had));
+			}
+		}
+		if (changed)
+		{
+			ctx.reload();		// the asset table moved
+		}
+	}
+
 	bool compile_zone(ZoneEditor& editor, const edit::document& baseline, const edit::document& edited, const options& opts, const zone::ClientKey& key,
 		std::vector<std::uint8_t>& zone_bytes, report& rep, std::string& error)
 	try
@@ -249,6 +408,14 @@ namespace codol::mapc
 				stage_entity_models(ctx);
 			}
 		}
+		if (!opts.assets.empty() || !opts.rawfiles.empty() || !opts.rawfiles_appended.empty())
+		{
+			if (rep.entities_changed)
+			{
+				ctx.reload();
+			}
+			stage_assets(ctx);
+		}
 		if (opts.models && (!d.models_moved.empty() || !d.models_deleted.empty() || !d.models_added.empty()))
 		{
 			if (rep.entities_changed)
@@ -284,7 +451,8 @@ namespace codol::mapc
 				"%u static models - accepted", info.brushes, info.brush_sides, info.brush_edges, info.planes, info.leaf_brush_nodes, info.leaf_brushes, info.inline_leaf_brushes,
 				info.static_models));
 		}
-		rep.identical = !rep.entities_changed && !rep.model_assets_added && rep.models_moved + rep.models_deleted + rep.models_added + rep.models_hidden == 0
+		rep.identical = !rep.entities_changed && !rep.model_assets_added && rep.assets_carried + rep.rawfiles_set == 0
+			&& rep.models_moved + rep.models_deleted + rep.models_added + rep.models_hidden == 0
 			&& rep.brushes_replaced + rep.brushes_deleted + rep.brushes_added + rep.surfaces_added == 0;
 		// leave the editor on the compiled zone, so that the caller can read the result back
 		{
@@ -358,7 +526,13 @@ namespace codol::mapc
 		}
 
 		std::vector<std::uint8_t> zone_bytes;
-		if (!compile_zone(editor, baseline, edited, opts, key, zone_bytes, rep, error))
+		// a project's zone is searched for the models of new instances and entities like any donor
+		options with_donors = opts;
+		for (const options::asset_source& source : opts.assets)
+		{
+			with_donors.donors.push_back(source.zone);
+		}
+		if (!compile_zone(editor, baseline, edited, with_donors, key, zone_bytes, rep, error))
 		{
 			return false;
 		}

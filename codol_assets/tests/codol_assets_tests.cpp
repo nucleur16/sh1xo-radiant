@@ -209,6 +209,30 @@ namespace
 		}
 		std::error_code ec;
 		fs::remove(file, ec);
+		// an archive with one of the game's names is encrypted: the same bytes come back through the reader with the key,
+		// the names are not readable without it, and a plain name needs no key
+		CHECK(!iwd_needs_key(file) && iwd_needs_key(scratch / "iw_sound_90.iwd") && iwd_needs_key(scratch / "localized_x_iw_image_01.iwd"));
+		std::array<std::uint8_t, 24> key{};
+		for (std::size_t k = 0; k < key.size(); k++)
+		{
+			key[k] = static_cast<std::uint8_t>(17 * k + 3);
+		}
+		const fs::path secret = scratch / "iw_sound_90.iwd";
+		CHECK(write_iwd(secret, files, &key));
+		{
+			const auto locked = codol::render::iwd_archive::open(secret, &key, &error);
+			CHECK(locked && locked->entries().size() == 2);
+			if (locked)
+			{
+				std::vector<std::uint8_t> a, b;
+				const auto* first = locked->find("images/a.iwi");
+				const auto* second = locked->find("images/b.iwi");
+				CHECK(first && second && locked->read(*first, a, &error) && a == files[0].second && locked->read(*second, b, &error) && b == files[1].second);
+			}
+			const auto open_plain = codol::render::iwd_archive::open(secret, nullptr, &error);
+			CHECK(open_plain && !open_plain->find("images/a.iwi"));
+		}
+		fs::remove(secret, ec);
 	}
 
 	void test_materials()

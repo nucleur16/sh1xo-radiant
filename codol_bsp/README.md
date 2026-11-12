@@ -27,8 +27,14 @@ client showed wrong was fixed ( cells that hid everything behind them, no dynami
 ( [Fourth round](#fourth-round-light-primary-lights-vision-sun-effects) ) read what the lit shaders do with the
 lightmaps out of the shaders themselves: the bake now writes the game's units ( a room with one light entity was
 nearly black ), light entities can be primary lights ( lit at run time, with baked visibility ), every map gets a
-vision file and a map with a sun its flare, and the effect scripts have the shape the client reads. What is
-approximate or missing is listed under [Limits](#limits-and-what-is-not-done).
+vision file and a map with a sun its flare, and the effect scripts have the shape the client reads. The **fifth
+round** ( [Fifth round](#fifth-round-light-cuts-spot-shadows-t-junctions-sound) ) closed gaps against the game's own
+compiler: surfaces are cut by the reach of the primary lights, light regions have a hull per cell with further
+planes, lights can be scriptable, every light definition of the install can be named, T-junctions are repaired -
+and it settled two open questions in the client: a primary spot **does** throw the shadows of players and script
+models ( shadow map, seen on a compiled map ), and a project's loaded sounds **do** play ( measured at the client's
+audio session ) while its streamed ones do not. What is approximate or missing is listed under
+[Limits](#limits-and-what-is-not-done).
 
 ## Build
 
@@ -227,7 +233,14 @@ the surface types brick and metal and pass through the decal.
    cell's tree ). Vertices per face ( no sharing ), triangles clockwise, texture coordinates by `codol_edit::face_uv`
    with the size of the material's colour map, tangent = u axis. Per cell an AABB tree ( binary, 8 surfaces per leaf )
    whose leaf runs are `sortedSurfIndex`.
-5. **Light** ( `light.cpp` ), see below.
+5. **Light** ( `light.cpp` ), see below. It also cuts faces by the reach of the primary lights ( "Primary lights" ).
+   Then **T-junctions** ( `tjunction.cpp` ): every face is its own polygon, so where the corner of one face lies
+   in the middle of an edge of another - a crate on a floor, a wall that ends halfway along another, a face the
+   light stage cut, a terrain mesh along a brush - the rasteriser may leave single pixels open along the joint.
+   As in the Quake map compilers every vertex of the world that lies on an edge of a face ( within 0.02 units )
+   becomes a vertex of that face, with the position of the other face's vertex to the bit and the edge's texture
+   and lightmap coordinates there, and the face is cut into triangles again so that no triangle has a vertex in
+   the middle of a side. The report counts them ( the yard: 226 vertices added to 73 faces ).
 6. **Write** ( `gfx_build.cpp`, `compile.cpp` ), then **validate** ( `validate.cpp`, `validate_render.cpp` ).
 
 ### Static models
@@ -394,11 +407,44 @@ missing was read as 0 - no sun, no sky, no ambient light. ) Not read: `diffusefr
 | `origin` | | |
 | `radius` | `600` | where the light ends. Radiant's own default is 200, which leaves a room of 512 units dark at the walls |
 | `intensity`, `_color` | `1`, `1 1 1` | brightness at the light, and hue |
-| `spawnflags` | `0` | 1 `PRIMARY_OMNI`, 2 `PRIMARY_SPOT`: a primary light; 8 `PRIMARY_NOSHADOWMAP`. 4 ( scriptable ) is not supported |
+| `spawnflags` | `0` | 1 `PRIMARY_OMNI`, 2 `PRIMARY_SPOT`: a primary light; 4 `PRIMARY_SCRIPTABLE`: a primary light a script can change ( below ); 8 `PRIMARY_NOSHADOWMAP` |
+| `maxturn`, `maxmove` | `0`, `0` | of a scriptable light: how far ( degrees, units ) a script may turn and move it. They become the record's rotation limit ( the cosine ) and translation limit |
 | `target` or `angles` | straight down | where a spot points: at the entity with that `targetname` ( the cone is then a circle of 64 units around it ), or along the angles |
 | `fov_outer`, `fov_inner` | 90, 0 ( primary omni: 120, 60 ) | the cone of a spot, in degrees. A light with `fov_outer` ( or a target ) is a spot also when it is only baked |
 | `exponent` | `0` | the fade from `fov_inner` to `fov_outer`: 0 a hard edge, 1 linear, higher steeper - as the game's spot shader has it |
-| `def` | `light_point_linear` | the falloff. Only this one is known; another name is reported and replaced |
+| `def` | `light_point_linear` | the light definition: the falloff picture. Any definition a zone of the install has ( below ); a name none has is reported and replaced |
+
+The classes `light_spot` and `light_omni` - what the primary lights of the shipped maps are called in their entity
+strings - are read like `light` and are a primary spot / omni light whatever their spawnflags say.
+
+**Light definitions.** The shipped maps name eleven ( `codol_bsp_probe lights` over every map of the install ):
+
+| definition | picture | maps |
+|---|---|---|
+| `light_point_linear` | `falloff_linear` | 39 |
+| `light_point_quadratic` | `falloff_quadratic` | 10 |
+| `white_light` | `falloff_linear` | 5 |
+| `light_point_linear_nocenter` / `_nocenter_02` / `_nomiddle` | `falloff_lin_nocenter` / `falloff_lin_nocenter_02` ( 128 texels ) / `falloff_lin_nomiddle` | 3 / 1 / 1 |
+| `light_point_dark_edges` | `falloff_center` ( coloured ) | 2 |
+| `light_no_falloff` | `falloff_none` | 2 |
+| `light_linear_bluefade`, `tungsten_lamp` | `falloff_linear_blue`, `falloff_tungsten` ( coloured ) | 1 each |
+| `light_point_inverse_quadratic` | `falloff_inverse_quadratic` | 1 |
+
+The install catalog lists which zone has which definition; the compiler reads it there ( picture name, sampler
+state ), reads the picture `images/<picture>.iwi` from the image archives - red, green and blue: some are coloured -
+and brings it to 32 texels. Every definition a primary light names gets a strip of 34 texels in row 0 of the
+secondary lightmaps, in the order of first use from texel 1, 35, 69 .. ( `lmapLookupStart`; the shipped maps: 1, 35,
+69, 103 ), and a `lightdef` asset; a picture the common zones do not have comes along as an image asset. Lights that
+are only baked use the curve of their definition too. At most 15 definitions per map.
+
+**Scriptable lights** ( `spawnflags 4`, alone or with 1 / 2 ). Found in four shipped maps ( mp_highrise 5,
+mp_cargoship_sh 3, mp_brl_derail 3, mp_underpass 1; `codol_bsp_probe ents <zone> <exe> pl#` ): the light is a primary
+light like any other - same record, limits 1 / 0 without `maxturn` / `maxmove` - **and stays an entity** of the map,
+class `light_spot` / `light_omni`, whose first key `"pl#"` is the index of its primary light. The dedicated server
+spawns it ( `light`, `light_spot`, `light_omni` are in its spawn table, `"pl#"` is a spawn field ), which is what a
+script's `getEnt( .., "targetname" )` and `setLightIntensity` / `setLightColor` work on. The compiler writes the
+same: the entity with `"pl#"` first, the other keys as the mapper gave them. Tested on the zone; that a script
+dims such a light in the client was not tried.
 
 `codol_bsp` prints what it read ( `light keys: sun ( 1.30 1.23 1.11 ) from ( .. ), ambient ( .. ), sky ( .. ); 2
 light entities, 1 of them primary` ). CoDOL Radiant gives a new `light` the keys `radius 600`, `intensity 1`,
@@ -416,27 +462,66 @@ is written the same way:
   over 120 degrees ), exponent, colour, the way back along the beam, origin, radius, the cosines of the half cone
   angles ( the "expanded" one equals the outer, as in every shipped light ), rotation limit 1, translation limit 0,
   the definition's name. An omni light has a cone too ( it places the shadow map ): 120 / 60 degrees downwards.
-* **the light definition** `light_point_linear` ( sampler state 0x62, `lmapLookupStart` 1 ) and its falloff in row
-  0 of every lightmap page: texel 0 a copy of the first value, 1 .. 32 the curve, 33 a copy of the last.
-* **a surface names one primary light**: the one that gives it the most light ( summed over its luxels, with
-  shadows ) - the sun or a light entity. The primary lightmap of the surface is that light's visibility; what the
-  other primary lights and the sun send to it is baked into the secondary lightmap like any light entity's.
+* **the light definitions** ( [Light keys](#light-keys) ): sampler state 0x62, `lmapLookupStart` 1, 35, 69 .., and
+  per definition its falloff in row 0 of every lightmap page: the texel before the strip a copy of the first
+  value, 32 texels of curve, a copy of the last.
+* **a surface names one primary light**, so **surfaces are cut by the lights' reach**. In the shipped maps
+  surfaces of one material in one plane that name different lights meet all over ( `codol_bsp_probe lightcuts`:
+  mp_vacant has 1863 such edges at its five spots - 1611 against surfaces without a primary light, 115 against the
+  sun's, 137 between two spots; 88 to 96 % of the triangles of a spot's surfaces reach into its radius ). Here:
+  every face a light entity can reach is sampled on a grid of 32 units in its plane ( which light gives the point
+  the most light, shadows and the sun included ); where the answer changes within a face, the face is cut along
+  grid lines around what each light entity wins, and each piece goes to a surface of its light. A floor under two
+  spots is lit by both at run time, each on its side; a floor that reaches beyond a lamp's circle names the lamp
+  only inside it. The primary lightmap of a surface is its light's visibility; what the other primary lights and
+  the sun send to it is baked into the secondary lightmap like any light entity's. The game's compiler cuts along
+  the pieces its BSP leaves of a face, not along a grid - the seams are elsewhere, the rule is the same.
 * **light grid entries** and **static models** name the primary light that gives their place the most light.
 * **shadow geometry**: per light entity the surfaces that name it, ascending, and the static models that do ( the
   shipped lists hold exactly those; the suns list models and no surfaces ).
-* **light region**: one hull per light entity - the ranges of everything it lights ( luxels, grid points, model
-  boxes ) along nine axes ( x, y, z, x + y, x - y, x + z, x - z, y + z, y - z; not normalised, relative to the
-  light's origin ), which is what the hulls of the shipped maps hold; no further axes ( the shipped hulls have
-  0 .. 8 of them ).
+* **light region**: per light entity **one hull per cell** it lights something in ( the shipped lights have up to
+  three hulls: a light that shines through a doorway ), the hull of the light's own cell first. A hull is the
+  ranges of what the light lights there ( luxels, grid points, model boxes ) along nine axes ( x, y, z, x + y,
+  x - y, x + z, x - z, y + z, y - z; not normalised, relative to the light's origin ) and **up to eight further
+  axes** with a unit direction. In the shipped hulls those are the diagonals of the cube ( by far the most frequent in mp_highrise
+  and mp_nuked ) and, for a spot, planes that touch its cone: `sin( half angle ) x beam + cos( half
+  angle ) x a direction across the beam`, eight of them 45 degrees apart - a point in the cone is never below 0
+  along one ( mp_vacant's light 2: six axes of exactly that form with ranges 0 .. 200 = its radius ). The compiler
+  takes of these twelve the ones that cut the most off the volume the nine ranges enclose. The game uses the
+  region to decide which entities a light's shadow map holds and which light lights a moving model
+  ( `C1.exe` 0xA858D0: a box outside every hull of a light is not drawn into its shadow map ). Not made: the
+  planes through the light and the edges of a doorway some shipped hulls have.
 * the header: `primaryLightCount`, the entity shadow visibility array ( run time ).
 
 In the client ( `shots\c4spot_a`, `c4spot_b`, `c4side_a`, `c4side_c`, `c4omni_b` ): the spot's cone on floor and
 wall with the colour of the light, the baked shadows of a brush and of a static model in it, the model and the
-player's weapon lit from the light's side; the same for the omni light. **Not seen: a player's shadow in such a
-light** - not on the compiled maps ( `c4side_a`: in the beam, the light behind ) and not made out under the spots
-of shipped mp_vacant ( `c4vac_c`, `c4vac_d`, `c4vac2_sheet` ); whether this client draws spot shadow maps at all
-was not established. What is missing compared to
-the game's compiler is listed under [Limits](#limits-and-what-is-not-done).
+player's weapon lit from the light's side; the same for the omni light.
+
+**Shadows of players and models in a primary spot** ( fifth round ). The client draws spot shadow maps, and a
+compiled map gets them:
+
+* *The code* ( `C1.exe`, the unpacked client ). The renderer's settings are registered at 0xA7C5xx; most names are
+  numbers, in the order of the earlier games: `sm_enable`, `1601` ( sm_sunEnable ), `1602` ( sm_spotEnable, on ),
+  `1603` ( sm_maxLights, 4 ), `1604` ( a saved 0 .. 4, 4 in the test client's config ), `1605` ( the least score
+  a light needs, 0.5 ), `1606` ( fade time ), `1607` / `1608` ( the two distances of the score, 64 and 0.125 ).
+  Every static surface that is drawn marks its primary light as used ( 0xABFE70 ); of the used lights that may
+  have a shadow map ( `canUseShadowMap`, sm_spotEnable ) up to four with the best score `brightness x radius /
+  distance` get one ( 0xA85330, 0xA86100 ), and their surfaces are drawn with the shadowed technique
+  ( 0xAB7400: light type + 3 ). An entity is drawn into a light's shadow map when its box is inside the light's
+  sphere, cone and region ( 0xA858D0, 0xA85030 ).
+* *The frames.* The harness's frame dump dll counts what a frame draws into ( `frame_stats.ps1` ): on a compiled
+  map with one spot and no sun a pass into a depth buffer of 1024 x 2048 with 4 draw calls and 2405 triangles
+  ( the surfaces that name the light and the static model in it ); with a script model in the beam 5 draw
+  calls and 4793 triangles; with three bots walking about 233 to 239 draw calls and 44722 to 48121 triangles.
+* *The pictures.* A script model hanging in the beam throws its shadow on the wall behind it ( `c5dyn_along` );
+  bots walking through the beam throw theirs, standing and crouching ( `c5bots_c8_crop`, `c5bots_c1` .. `c12`:
+  the silhouettes move from frame to frame ).
+
+The round before looked for the shadow of the player himself, standing in the beam. There is none: the first
+person view has no body, in the spot's light as in the sun's ( `c5side_beam`; third round `cv9_3` ). On shipped
+mp_vacant nothing was looked at again.
+
+What is missing compared to the game's compiler is listed under [Limits](#limits-and-what-is-not-done).
 
 ### Vision file, sun flare
 
@@ -512,7 +597,7 @@ Every compile ends with `validate_zone` and writes nothing when it fails:
   list exists.
 * The stages check themselves: leaf centres against their portals, lightmap charts do not overlap.
 
-`codol_bsp_tests` ( 327 checks with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
+`codol_bsp_tests` ( 411 checks with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
 per map: validation, the zone read by `codol_zone` and written again is byte identical, tree walk == brute force on
 3000 random segments ( `clip_trace` ), `codol_edit::import_fastfile` of the compiled zone gives back the map's brushes;
 box room: traces hit floor, wall, ceiling, crate, stacked crates where the map has them; two rooms: 3 cells, 4
@@ -532,7 +617,14 @@ colours count by their largest part ); a primary spot ( ComWorld record field by
 surface that names it, its shadow geometry = the surfaces that name it, one region hull that holds the floor under
 the light and not the far corner, light grid points that name it, its light not in the secondary lightmap ) and a
 primary omni light; a mapper's vision file with names, numbers and an unknown setting; the default sun flare
-( block valid, two materials, sprite size, direction of the ComWorld sun, the `.sun` rawfile ).
+( block valid, two materials, sprite size, direction of the ComWorld sun, the `.sun` rawfile ). Since the fifth
+round: two primary spots over one floor, the second scriptable with `light_point_quadratic` ( the floor's pieces
+name the light of their side and meet in the middle; both definitions with their strips at 1 and 35, the quadratic
+curve below the linear one; the picture of the second definition as an image of the zone; the record's limits
+from `maxturn` / `maxmove`; the entity with `"pl#" "3"` in the entity string and no other light; a hull with one to
+eight unit axes that holds the floor under the light and not a point beside the cone ); a definition no zone has is
+replaced with a warning; and T-junctions - counted on the zones of the box room, the two rooms, the content and
+the terrain map and the two spots: none, while the two spots compiled without the repair have some.
 
 `codol_mapc` `check_server_collision` reads the terrain as the server's decoder does ( partition ranges, vertex
 blocks, border runs, AABB tree nodes ); the shipped maps pass it.
@@ -645,6 +737,76 @@ map. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), the maps and th
 | **terrain borders** | walking ( W held ) across the west edge of the mound and over it ( x -300 -> 167, z 23 ), along its south and north edges ( 677 and 673 units, 5 and 15 off the line ), diagonally over a corner ( to 175 175, z 7 ) and down its north side: nowhere stuck, nowhere through. No seam between mound and ground | `c4terr_edge`, `c4walk_*` |
 | **Esc / class / resume, with deaths in between** ( the sequence before the one client crash of the third round ) | eight rounds, four deaths and respawns: the client stays up. The crash did not come back | `c4respawn_end` |
 
+### Fifth round: light cuts, spot shadows, T-junctions, sound
+
+The same harness. New in it: `frame_stats.ps1` ( the frame dump dll now also counts, per pair of render target and
+depth buffer, the draw calls and triangles of the frame that was just drawn - which shows a shadow map pass and
+what is in it ), `audio_peak.ps1` ( the peak level of the client's audio session over some seconds, from Windows'
+own meter: what the game sends to the sound card, on a machine nobody listens to ), and `stop_all.ps1` was seen
+to take the dll out of the test client's folder after every run ( checked each time: it was gone ). Pictures:
+`build-editor\bsptest\shots\`, maps and sources under `build-editor\bsptest\c5\`.
+
+| what | the client showed | pictures / numbers |
+|---|---|---|
+| **two primary spots over one floor** ( `mp_c5two`: the box room, two spots pointing down 440 units apart, the second with `light_point_quadratic`, bluish, `spawnflags 6` ) | 3 faces cut into 13 pieces, 10 surfaces became 14. Both pools of light on the one floor at run time, the white one and the dimmer blue one, meeting between the lamps; no line where the pieces meet - what looks like one along the middle is where the white light's cone ends ( the brightness falls evenly to the room's level there: profile of `c5two_top` ) | `c5two_both`, `c5two_top`, `c5two_along`, `c5two_seam` |
+| the same in `codol_viewtool` | the cone of a cut floor without a seam | `png\c5_spot_a`, `png\c5_spot_b` |
+| **shadow of a script model in a primary spot** ( `mp_c5dyn`: the fourth round's sideways spot, a `script_model` hanging in the beam ) | its shadow on the wall behind it, next to the baked shadow of the static model below; the frame has a pass into a 1024 x 2048 depth buffer: 4 draw calls / 2405 triangles without the script model, 5 / 4793 with it | `c5dyn_along`; `c5side_beam` ( without ) |
+| **shadows of players in a primary spot** ( `mp_c5bots`: the box room with path nodes, a spot along the floor, no sun, 3 bots ) | the bots' shadows on the far wall, standing and crouching, in other places from frame to frame; the shadow pass grows to 233 .. 239 draw calls / 44722 .. 48121 triangles | `c5bots_c8_crop`, `c5bots_c1` .. `c5bots_c12`, `c5bots_c_sheet` |
+| the player's own shadow | none, in the spot's light as in the sun's: the first person view has no body. That is what the fourth round was looking for | `c5side_beam` |
+| **T-junctions, terrain against brushes** | the yard packaged again ( 226 vertices added to 73 faces; with the project's effect, models and sounds ): buildings, crates, fence and the mound as before, no open pixels along the joints of the wall pieces or where the mound meets the ground. A missing pixel is easy to overlook, so it is also counted: on the test maps no vertex of the world is left in the middle of an unshared triangle side ( the tests ) | `c5yard_over`, `c5yard_edge`, `c5yard_mound`, `c5yard_props` |
+| **a project's loaded sounds** ( `mp_c5snd`: a closed room, the project's aliases carried into the map zone, a level script that plays them on request ) | measured at the client's audio session, 4 s each: silence 0.0000; `playLoopSound( "codol_test_hum" )` on an entity 2 m away 0.1371 ( mean 0.125 ); the entity moved 6000 units up 0.0001; back 0.1371; `stopLoopSound` 0.0000; `playSound( "codol_test_beep" )` 0.1682. So an alias of a project reaches the mixer, with its distance falloff | `audio_peak.ps1` |
+| **streamed sounds** | see below | |
+
+**Streamed sounds: what was found.** `codol_assetc --iwd` wrote a plain zip ( `zz_<project>_sounds.iwd` ) for the
+client's `main\`. The client never opens it: of the archives in `main\` it holds all of its own open
+( `iw_config_NN`, `iw_image_NN`, `iw_imagestripped_NN`, `iw_model_NN`, `iw_sound_NN` and the `localized_` ones ) and
+not ours, under that name or as `iw_c4fx_00.iwd` - an exclusive open of the file succeeds while the game runs.
+With the archive or without it a streamed alias plays nothing and logs nothing. An archive named like the game's,
+`iw_sound_04.iwd`, **is** opened ( held by the client ) - and those the game decrypts, so `codol_assetc` now
+writes an archive whose name holds `iw_sound`, `iw_image` .. encrypted as the game's are ( `codol_assets/README.md` ).
+With that archive in `main\` the client finds the file - and ends: `ambientPlay` of the streamed `.wav` alias stopped
+the client with an access violation at 0x6286DE ( the engine's `va()` on a thread that has none of the engine's
+thread data: something is reported from the stream's thread ), `playLoopSound` of a streamed `.mp3` alias ended it
+without a word. Without the archive both calls do nothing. Streams as such work in this client: shipped mp_vacant,
+whose level script calls `ambientPlay( "ambient_mp_vacant" )`, has sound all the time while the player stands still
+( peaks 0.07 .. 0.13 over three windows of 8 s ). What our archive lacks was not found: the game's entries are all
+deflated and carry extra fields ( NTFS times, and 20 bytes with the tag 0x9999 in the local header ), ours are
+stored without any. So **a project's streamed sounds do not work yet**: under a plain name the archive is ignored and
+the alias silent, under an `iw_sound` name the client ends when the alias plays. Use loaded sounds. Also seen:
+`ambientPlay` of a *loaded* alias drops the client to the menu ( `ERROR: 19 codol_test_hum codol_test/hum.wav` ), and
+`playSound` of a looping alias is a script error on the server.
+
+Not looked at in the client this round: a scriptable light changed by a script, the other light definitions
+( only `light_point_quadratic` ), an omni light's shadows, terrain borders ( nothing changed there ).
+
+### Script model animations
+
+`scriptModelPlayAnim` shows nothing in the client on `codol_dedrun`, for a project's animations and for the hanging
+clothes of shipped mp_crash_tropical alike. Looked at from the map's side only ( the server is not ours to change ):
+
+* **What a map has to bring, and does.** Client and server build their animtrees from the *animlists*: the rawfile
+  `animlists/<map>.animlist` of the map zone ( `=<tree>` lines, then animation names ) after `animlists/common.animlist`
+  ( the server's `codol_model_animation.c`, `CODOL_LoadClientAnimTrees`, which follows the client's loader at
+  0x40831E ); the `xanim` assets have to be in a mounted zone, and the level script precaches with `precacheMpAnim`.
+  `package_map.ps1` puts all of it into the map zone ( the project's `generated\animlists\map.animlist`,
+  `animtrees\<tree>.atr`, the animations ). The server's log of the packaged yard: `CoDOL animlists: mp_c4fx.animlist
+  loaded, 2 entries`, `mounted animtree: animtrees/mp_c4fx.atr`; its `codol_animmodelprobe` ( server only,
+  `developer 1` ): `10 client trees: 1=destructibles 2=vehicles 3=ac130 4=script_model 5=player_3rd_person 6=sentry_gun
+  7=dog 8=player 9=mp_c4fx 10=multiplayer` - the map's tree has a client id. For mp_crash_tropical the same with
+  `9=animated_props` and 15 list entries. No `cannot play animation .. prop left static` warning in either run:
+  `CODOL_ScrCmd_ScriptModelPlayAnim` found the precached name, resolved tree and entry and captured them for the
+  entity's snapshot.
+* **Where it is lost** is therefore behind that point, in what the server sends and the client makes of it - the
+  same for a shipped map. The server's own notes ( `src/codol/assets/codol_model_animation.h` ) say what the client
+  needs: for an entity of type 6 the snapshot field at +0x94 has to name the client's tree ( 4 bits ) and the field
+  at +0x60 the entry inside that tree, with the field at +0x6C zero ( client code at 0x43FCF9 ); and they name
+  what is not measured: that the entry index of the server's tree is the client's ( "an inference from the loader,
+  not a measured client dump" ), and the client's tree id is the server's replay of the client's registration order.
+  `codol_animmodelprobe` prints those three fields only for script models bound through the `setanim` family
+  ( `0 bound script models` here ), not for the `scriptModelPlayAnim` path - so from outside the server it cannot be
+  told which of the three is wrong on the wire. That probe, extended to every script model with a captured
+  animation, is the next step, and it is the server's.
+
 ## Scale
 
 x64 Release, this machine ( 32 threads ):
@@ -684,29 +846,29 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
   does not collide ) - contents other than "solid" ( bullets pass, see through for AI .. ) are not derived. Water
   materials are refused.
 * **Leaf brush trees** are one list per leaf ( the BSP keeps leafs small ); no split nodes are written.
-* **No T-junction repair**, no merging of coplanar faces; a face that is partly hidden is drawn whole. No crack
-  was found in the client's pictures of the yard.
+* No merging of coplanar faces; a face that is partly hidden is drawn whole. T-junctions are repaired between
+  faces of the world ( and within a brush model ); a terrain mesh whose edge does not run along the brushes it
+  meets still leaves the gap the mapper built.
 * **Automatic portals** only find planar, convex openings up to 72000 square units in the face of something solid
   ( the report says how many cross sections were left out and why ); open terrain is one cell; a mapper's portal
   brushes switch the search off. A face seen from several cells is drawn once per cell ( and has a lightmap chart
   per cell ).
-* **Light**: the world is grey for bounced light ( reflectivity 0.5, the materials' images are not read ); only the
-  `light_point_linear` falloff; a see through brush ( fence ) casts no baked shadow; reflection probes show the
+* **Light**: the world is grey for bounced light ( reflectivity 0.5, the materials' images are not read ); a see through brush ( fence ) casts no baked shadow; reflection probes show the
   scene without textures and their cube orientation is assumed; the outdoor image ( weather occlusion ) is empty;
   the light grid's 56 directions are taken from `codol_view`'s port of the model lighting lookup, not measured in
   the game. The worldspawn keys `diffusefraction`, `sundiffusecolor`, `radiosityscale`, `sunradiosity` and
   `maxbounces` are not read. That a surface under the open sky receives half of `skycolor x skylight` is fitted to
   one shipped map; how the game's compiler weighs `ambient` was not measured. The split of a luxel's light between
   the two lightmap layers ( up to 0.85 into the directed one ) is this compiler's own rule.
-* **Primary lights**: what is written is what the shipped zones hold, with these differences. A **surface** is as
-  large as the render stage made it ( faces of one material in a cell, per 1024 units ) and names one light: the
-  game's compiler cuts surfaces by the lights' reach, so there a floor can be lit by several primary lights side by
-  side - here the strongest gets the surface, the others are baked into it ( they still light it, without run time
-  shadows or highlights ). A **light region** is one hull of nine ranges; the shipped ones have several hulls per
-  light ( through a doorway ) and up to eight further planes each. `PRIMARY_SCRIPTABLE` ( a light script can move
-  or switch ), `maxturn` / `maxmove` are not supported; at most 253 primary lights. **A player's shadow in a
-  primary light was not seen** in the client, on a compiled map or a shipped one, so whether shadow geometry and
-  region are right for it is not shown; `codol_viewtool` draws primary lights without their shadow maps.
+* **Primary lights**: what is written is what the shipped zones hold, with these differences. **Surfaces** are cut
+  along a grid of 32 units around what a light wins, not along the pieces of the game compiler's BSP; a piece is
+  never smaller than a grid square, and the specular highlight of a light ends at the cut ( its diffuse light goes
+  on in the lightmap ). **Light regions**: a hull per cell with cone planes and diagonals; no planes through the
+  light and the edges of a portal. **Scriptable lights** are written as the shipped zones have them; a script
+  changing one was not tried in the client, and the baked visibility of a light that a script moves stays where
+  it was compiled. At most 253 primary lights, 15 light definitions. An **omni** light's shadows were not looked
+  at ( the shipped records allow them a shadow map as well ). `codol_viewtool` draws primary lights without their
+  shadow maps.
 * **Brush models** are drawn and collide, but are in no cell ( the engine places dynamic models itself ) and are lit
   by the lightmap of the place they were compiled at.
 * **Sky**: faces with a sky material become the sky surfaces of `skies[0]` with the material's cube map when its header
@@ -716,10 +878,11 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
 * **Effects and sounds**: `script_fx` / `script_sound` write the two effect files the client reads; the effect and
   sound assets have to be in a zone that is loaded - the common zones, or the map zone ( `package_map.ps1` carries a
   project's there ); a sound alias that is nowhere gives `Missing soundalias` lines in the client. Exploders and
-  interval sounds ( `createExploder`, `createIntervalSound` of the shipped files ) are not written. Sound was never
-  heard: this machine has no audio.
+  interval sounds ( `createExploder`, `createIntervalSound` of the shipped files ) are not written. A project's
+  loaded sounds play in the client ( fifth round: measured, not heard ); its **streamed** sounds do not - see there.
 * **Script model animations** do not move in the client on the test server - a shipped map's do not either ( fourth
-  round ) -, so a compiled animation has still not been seen moving.
+  round ) -, so a compiled animation has still not been seen moving. See [Script model
+  animations](#script-model-animations): nothing is missing on the map's side.
 * **Minimap**: the picture is the lightmapped scene from above, roofs included; the material is made by
   `codol_assetc` ( `package_map.ps1` ), the compiler itself only writes the picture. A room with a ceiling has a
   dark minimap.
