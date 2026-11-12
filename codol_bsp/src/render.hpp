@@ -77,6 +77,15 @@ namespace codol::bsp
 		std::vector<gfx::GfxLightGridColors> colors;
 	};
 
+	// a static model of the world ( world::models[ model ] )
+	struct render_smodel
+	{
+		int model = 0;
+		int cell = 0;
+		int primary_light = 1;
+		int reflection_probe = 1;
+	};
+
 	struct render_model
 	{
 		box3 box;
@@ -96,6 +105,7 @@ namespace codol::bsp
 		box3 bounds;
 		std::vector<std::int32_t> sky_surfaces;
 		zone_ref sky_image;
+		std::vector<render_smodel> smodels;
 		std::vector<std::vector<std::uint16_t>> light_surfaces;	// per primary light: the surfaces in its shadow geometry
 		std::uint32_t lit_opaque_end = 0, lit_trans_end = 0;
 	};

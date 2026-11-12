@@ -927,6 +927,24 @@ namespace codol::bsp
 			}
 		}
 
+		// ---- static models: the sun where it reaches the model's centre, the nearest probe of its cell. ( Their
+		// brightness comes from the light grid at run time; they are not in the lightmap and cast no baked shadow. )
+		for (render_smodel& s : rw.smodels)
+		{
+			const box3& box = w.models[static_cast<std::size_t>(s.model)].box;
+			const vec3 centre{ (box.mins[0] + box.maxs[0]) * 0.5, (box.mins[1] + box.maxs[1]) * 0.5, (box.mins[2] + box.maxs[2]) * 0.5 };
+			s.primary_light = !ctx.opts.light || rays.reaches_sky(centre, setup.sun) ? 1 : 0;
+			float best = 1e30f;
+			for (const std::uint8_t p : rw.cells[static_cast<std::size_t>(s.cell)].probes)
+			{
+				const vec3 d = centre - vec3{ rw.probes[p].origin[0], rw.probes[p].origin[1], rw.probes[p].origin[2] };
+				if (static_cast<float>(dot(d, d)) < best)
+				{
+					best = static_cast<float>(dot(d, d));
+					s.reflection_probe = p;
+				}
+			}
+		}
 		rw.light_surfaces.assign(w.lights.size(), {});
 	}
 }

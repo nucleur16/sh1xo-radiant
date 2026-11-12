@@ -278,6 +278,27 @@ namespace codol::bsp
 			}
 		}
 
+		// ---- static models: each in the cell its centre is in
+		for (std::size_t m = 0; m < w.models.size(); m++)
+		{
+			const map_model& model = w.models[m];
+			if (!model.ref.valid())
+			{
+				continue;
+			}
+			render_smodel s;
+			s.model = static_cast<int>(m);
+			s.cell = cell_of(vec3{ (model.box.mins[0] + model.box.maxs[0]) * 0.5, (model.box.mins[1] + model.box.maxs[1]) * 0.5,
+				(model.box.mins[2] + model.box.maxs[2]) * 0.5 });
+			rw.smodels.push_back(s);
+			rw.bounds.add(model.box);
+		}
+		if (rw.smodels.size() > 0xFFFF)
+		{
+			throw compile_error("more than 65535 static models");
+		}
+		rw.models[0].box = rw.bounds;
+
 		// ---- cells
 		if (vis.built)
 		{

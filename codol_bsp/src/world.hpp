@@ -141,6 +141,19 @@ namespace codol::bsp
 		std::vector<std::uint32_t> indices;		// counter clockwise from the visible side
 	};
 
+	// a misc_model: a static model of the world
+	struct map_model
+	{
+		std::string name;
+		float origin[3] = {};
+		float axis[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };	// forward, left, up
+		float scale = 1.0f;
+		// set by the render stage
+		zone_ref ref;					// the xmodel in the zone; !valid(): not found, the model is left out
+		box3 box;						// world box
+		bool collides = false;
+	};
+
 	struct map_light
 	{
 		int type = 2;					// ComPrimaryLight type: 1 sun, 2 spot, 3 omni
@@ -169,6 +182,7 @@ namespace codol::bsp
 		std::vector<map_entity> entities;	// [0] the worldspawn
 		std::vector<map_brush> brushes;
 		std::vector<map_patch> patches;
+		std::vector<map_model> models;
 		std::vector<map_light> lights;	// [0] none, [1] the sun, then the light entities
 		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed
 		std::vector<map_light> bake_lights;	// the light entities: baked into lightmaps and light grid

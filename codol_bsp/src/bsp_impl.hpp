@@ -178,6 +178,13 @@ namespace codol::bsp
 		void scan(const std::filesystem::path& install, const zone::ClientKey& key, std::vector<std::string>& warnings);
 	};
 
+	// what the compiler has to know about an xmodel that is placed in the world
+	struct model_desc
+	{
+		float mid[3] = {}, half[3] = {}, radius = 0;	// its box, in model space
+		int coll_surfs = 0;							// > 0: it has collision
+	};
+
 	// what the compiler has to know about a world material
 	struct material_desc
 	{
@@ -206,7 +213,8 @@ namespace codol::bsp
 		const material_desc& describe(std::string_view name);
 		// an image with its pixels ( e.g. a sky cube map, an outdoor map ) or as a reference by name
 		zone_ref image(std::string_view name, std::string* why = nullptr);
-		zone_ref model(std::string_view name, std::string* why = nullptr);
+		// an xmodel that is a top level asset of a donor or of a zone of the install, copied with everything it uses
+		zone_ref model(std::string_view name, std::string* why = nullptr, model_desc* desc = nullptr);
 
 		// a material of an open zone
 		zone_ref material_from(const Zone& donor, zaddr header);

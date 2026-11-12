@@ -30,7 +30,7 @@ int main(const int argc, char** argv)
 		else if (arg == "--cache") { opts.cache = value(); }
 		else if (arg == "--report") { report_file = value(); }
 		else if (arg == "--check") { check_file = value(); }
-		else if (arg == "--donor") { opts.donors.emplace_back(value()); }
+		else if (arg == "--donor" || arg == "--assets") { opts.donors.emplace_back(value()); }
 		else if (arg == "--rawfile")
 		{
 			const std::string pair = value();

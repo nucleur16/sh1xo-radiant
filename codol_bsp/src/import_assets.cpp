@@ -544,11 +544,76 @@ namespace codol::bsp
 		return s->find(c1::ASSET_TYPE_IMAGE, name, s->cat.image_zone, why, [&](const Zone& z, const zaddr h) { return s->image_from(z, h); });
 	}
 
-	zone_ref asset_importer::model(const std::string_view name, std::string* why)
+	zone_ref asset_importer::model(const std::string_view name, std::string* why, model_desc* desc)
 	{
-		if (why)
+		// An xmodel is copied as the donor zone has it ( ZoneEditor::add_asset_closure: the model and every asset it
+		// points into ), so it has to be a top level asset there: a model of the common zones, of a ported map, or
+		// one compiled by codol_assets. Models that only exist nested in a shipped map's gfx_map are not found.
+		const auto key_name = std::make_pair(static_cast<int>(c1::ASSET_TYPE_XMODEL), std::string(name));
+		std::vector<std::filesystem::path> files = s->donors;
+		if (const auto it = s->cat.model_zone.find(name); it != s->cat.model_zone.end())
 		{
-			*why = "xmodel '" + std::string(name) + "': static models are not compiled yet";
+			files.push_back(s->install / it->second);
+		}
+		for (const std::filesystem::path& file : files)
+		{
+			const std::string id = file.generic_string();
+			auto it = s->editors.find(id);
+			if (it == s->editors.end())
+			{
+				auto editor = std::make_unique<ZoneEditor>();
+				if (const zone::Status st = editor->open(file, s->key); !st)
+				{
+					if (why)
+					{
+						*why = file.filename().string() + ": " + st.message;
+					}
+					continue;
+				}
+				it = s->editors.emplace(id, std::move(editor)).first;
+			}
+			const ZoneEditor& donor = *it->second;
+			const std::size_t index = donor.find_asset(c1::ASSET_TYPE_XMODEL, name);
+			const zaddr header = donor.zone().find_asset(c1::ASSET_TYPE_XMODEL, name);
+			if (index == ZoneEditor::npos || !header)
+			{
+				continue;
+			}
+			if (desc)
+			{
+				const c1::XModel raw = donor.zone().get<c1::XModel>(header);
+				desc->coll_surfs = raw.numCollSurfs;
+				// XModel + 316: radius, then the box as centre and half size ( codol_mapc XMODEL_RADIUS / XMODEL_BOUNDS )
+				desc->radius = donor.zone().get<float>(header + 316);
+				const c1::Bounds box = donor.zone().get<c1::Bounds>(header + 320);
+				std::memcpy(desc->mid, box.midPoint, sizeof(desc->mid));
+				std::memcpy(desc->half, box.halfSize, sizeof(desc->half));
+			}
+			if (const auto known = s->by_name.find(key_name); known != s->by_name.end())
+			{
+				return known->second;
+			}
+			if (const zone::Status st = s->out.add_asset_closure(donor, index); !st)
+			{
+				if (why)
+				{
+					*why = "xmodel '" + std::string(name) + "' of " + file.filename().string() + ": " + st.message;
+				}
+				return {};
+			}
+			zone_ref ref;
+			ref.slot = true;
+			ref.asset = s->out.find_asset(c1::ASSET_TYPE_XMODEL, name);
+			if (ref.asset == ZoneEditor::npos)
+			{
+				return {};
+			}
+			s->by_name[key_name] = ref;
+			return ref;
+		}
+		if (why && why->empty())
+		{
+			*why = "no zone has xmodel '" + std::string(name) + "' as a top level asset";
 		}
 		return {};
 	}

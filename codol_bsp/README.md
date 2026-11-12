@@ -305,9 +305,21 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
 
 ## Limits and what is not done
 
-* **Static models** ( `misc_model` ) are not compiled into GfxWorld / clipMap. Up to 128 become `script_model`
-  entities ( drawn when the model is in a loaded zone, lit by the light grid, no collision, no baked shadow ); more
-  are left out. Carrying xmodels over needs an XModel writer like the material one.
+* **Static models** ( `misc_model`, keys `model`, `origin`, `angles`, `modelscale` ) are GfxWorld static models
+  ( draw instance, bounds, the AABB tree leaf of the cell their centre is in, the list of their primary light ) and,
+  when the xmodel has collision surfaces, clip map entries with a two level `smodelNodes` tree - the shapes
+  `codol_mapc` reads from the shipped zones. The xmodel is copied with `ZoneEditor::add_asset_closure`, so it has to
+  be a **top level asset** of a zone: the common zones, a ported map, a `codol_assets` project zone given with
+  `--assets` / `--donor`. Models that exist only nested in a shipped map's `gfx_map` are not found ( reported, left
+  out ). Seen in `codol_viewtool` ( `1 of 1 static` ). **Not shown**: collision - the server's `codol_sweepprobe`
+  passes through the compiled model, and equally through a shipped static model of mp_rust ( rock_tan_boulder_1 ), so
+  the probe does not tell; and nothing in the client. Models are lit by the light grid only: no baked shadow from or
+  onto them, cull distance is a guess ( 40 x radius, at least 2000 ).
+* **Client pictures** of the baked maps do not exist: on this machine every capture of the game's window is black while
+  no physical monitor is attached ( `Win32_PnPEntity` lists no monitor, only "Default Monitor" stand-ins; the window's
+  title bar and the rest of the desktop capture normally, the Direct3D area is 0 - also for a freshly started client
+  at its menu, by screen copy and by `PrintWindow` ). `tests/harness/client_views.ps1` takes the pictures and the
+  matching `codol_viewtool` renders once a monitor is on.
 * **Patches** collide through an 8 unit thick brush under every triangle, not through the clip map's terrain
   triangles ( `verts`, `partitions`, `aabbTrees` stay empty ). Patches of brush entities are left out.
 * **Leaf brush trees** are one list per leaf ( the BSP keeps leafs small ); no split nodes are written.

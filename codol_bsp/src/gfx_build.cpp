@@ -174,6 +174,8 @@ namespace codol::bsp
 
 		// ---- cells: AABB trees over their surfaces, and the sorted surface list ( the runs of the tree leaves )
 		std::vector<std::vector<GfxAabbTree>> trees(rw.cells.size());
+		std::vector<std::vector<std::uint16_t>> tree_model_lists;		// per cell: the root's static model list
+		std::vector<std::vector<std::uint32_t>> tree_model_starts;		// per cell, per node: where its run starts in that list
 		std::vector<std::uint16_t> sorted;
 		for (std::size_t c = 0; c < rw.cells.size(); c++)
 		{
@@ -187,13 +189,99 @@ namespace codol::bsp
 				}
 			}
 			tb.build(list);
+			// static models of the cell: each joins the leaf whose centre is nearest; a node's list is its children's
+			// lists back to back ( the root's is stored, the others point into it ), and the boxes grow to hold them
+			{
+				std::vector<std::vector<std::uint16_t>> leaf_models(tb.nodes.size());
+				bool any = false;
+				for (std::size_t m = 0; m < rw.smodels.size(); m++)
+				{
+					if (rw.smodels[m].cell != static_cast<int>(c))
+					{
+						continue;
+					}
+					any = true;
+					const box3& box = w.models[static_cast<std::size_t>(rw.smodels[m].model)].box;
+					std::size_t best = 0;
+					float best_d = 1e30f;
+					for (std::size_t n = 0; n < tb.nodes.size(); n++)
+					{
+						if (tb.nodes[n].childCount)
+						{
+							continue;
+						}
+						float d = 0;
+						for (int k = 0; k < 3; k++)
+						{
+							const float delta = (box.mins[k] + box.maxs[k]) * 0.5f - tb.nodes[n].bounds.midPoint[k];
+							d += delta * delta;
+						}
+						if (d < best_d)
+						{
+							best_d = d;
+							best = n;
+						}
+					}
+					leaf_models[best].push_back(static_cast<std::uint16_t>(m));
+				}
+				std::vector<std::uint16_t> cell_list;
+				std::vector<std::uint32_t> start(tb.nodes.size(), 0);
+				const auto walk = [&](const auto& self, const std::size_t n) -> box3
+				{
+					box3 box;
+					start[n] = static_cast<std::uint32_t>(cell_list.size());
+					if (tb.nodes[n].childCount)
+					{
+						const std::size_t first = n + static_cast<std::size_t>(tb.nodes[n].childrenOffset) / sizeof(GfxAabbTree);
+						for (std::size_t k = 0; k < tb.nodes[n].childCount; k++)
+						{
+							box.add(self(self, first + k));
+						}
+					}
+					else
+					{
+						for (const std::uint16_t m : leaf_models[n])
+						{
+							cell_list.push_back(m);
+							box.add(w.models[static_cast<std::size_t>(rw.smodels[m].model)].box);
+						}
+					}
+					tb.nodes[n].smodelIndexCount = static_cast<std::uint16_t>(cell_list.size() - start[n]);
+					if (box.valid())
+					{
+						box3 grown;
+						const c1::Bounds& old = tb.nodes[n].bounds;
+						if (list.empty() && n == 0)
+						{
+							grown = box;
+						}
+						else
+						{
+							for (int k = 0; k < 3; k++)
+							{
+								grown.mins[k] = std::min(old.midPoint[k] - old.halfSize[k], box.mins[k]);
+								grown.maxs[k] = std::max(old.midPoint[k] + old.halfSize[k], box.maxs[k]);
+							}
+						}
+						tb.nodes[n].bounds = grown.bounds();
+					}
+					return box;
+				};
+				if (any)
+				{
+					const box3 all = walk(walk, 0);
+					rw.cells[c].box.add(all);
+				}
+				tree_model_lists.push_back(std::move(cell_list));
+				tree_model_starts.push_back(std::move(start));
+			}
 			const std::size_t base = sorted.size();
 			for (GfxAabbTree& node : tb.nodes)
 			{
 				node.startSurfIndex = static_cast<std::uint16_t>(node.startSurfIndex + base);
 				node.surfaceCountNoDecal = node.surfaceCount;
 			}
-			if (list.empty())
+			if (list.empty() && tb.nodes[0].smodelIndexCount == 0)
 			{
 				tb.nodes[0].bounds = rw.cells[c].box.bounds();
 			}
@@ -228,7 +316,7 @@ namespace codol::bsp
 		header.bounds = rw.bounds.bounds();
 		header.checksum = w.checksum;
 		header.materialMemoryCount = static_cast<std::int32_t>(rw.materials.size());
-		header.dpvs.smodelCount = 0;
+		header.dpvs.smodelCount = static_cast<std::uint32_t>(rw.smodels.size());
 		header.dpvs.staticSurfaceCount = static_count;
 		header.dpvs.staticSurfaceCountNoDecal = static_count;
 		header.dpvs.litOpaqueSurfsBegin = 0;
@@ -286,9 +374,23 @@ namespace codol::bsp
 			b.add_array(counts);
 			b.follows(head, W_AABB_TREES);
 			b.add_array(std::vector<std::uint32_t>(trees.size(), FOLLOWS));
-			for (const auto& tree : trees)
+			for (std::size_t c = 0; c < trees.size(); c++)
 			{
-				b.add_array(tree);
+				const std::uint32_t chunk = b.add_array(trees[c]);
+				if (tree_model_lists[c].empty())
+				{
+					continue;
+				}
+				// the root's list follows the nodes; every other node with models points into it
+				b.follows(chunk, offsetof(GfxAabbTree, smodelIndexes));
+				const std::uint32_t list_chunk = b.add_array(tree_model_lists[c]);
+				for (std::size_t n = 1; n < trees[c].size(); n++)
+				{
+					if (trees[c][n].smodelIndexCount)
+					{
+						b.point(chunk, n * sizeof(GfxAabbTree) + offsetof(GfxAabbTree, smodelIndexes), list_chunk, 2 * tree_model_starts[c][n]);
+					}
+				}
 			}
 		}
 
@@ -465,19 +567,33 @@ namespace codol::bsp
 
 		// ---- per primary light: what casts shadows in it, and its region
 		{
-			std::vector<GfxShadowGeometry> geometry(light_count);
-			for (std::uint32_t l = 0; l < light_count && l < rw.light_surfaces.size(); l++)
+			// a light's static models are those whose primary light it is ( as in the shipped maps, where the suns
+			// list models and no surfaces )
+			std::vector<std::vector<std::uint16_t>> light_models(light_count);
+			for (std::size_t m = 0; m < rw.smodels.size(); m++)
 			{
-				geometry[l].surfaceCount = static_cast<std::uint16_t>(rw.light_surfaces[l].size());
-				geometry[l].sortedSurfIndex = rw.light_surfaces[l].empty() ? 0 : FOLLOWS;
+				light_models[static_cast<std::size_t>(std::min<int>(rw.smodels[m].primary_light, static_cast<int>(light_count) - 1))].push_back(static_cast<std::uint16_t>(m));
+			}
+			std::vector<GfxShadowGeometry> geometry(light_count);
+			for (std::uint32_t l = 0; l < light_count; l++)
+			{
+				const std::size_t surfs = l < rw.light_surfaces.size() ? rw.light_surfaces[l].size() : 0;
+				geometry[l].surfaceCount = static_cast<std::uint16_t>(surfs);
+				geometry[l].sortedSurfIndex = surfs ? FOLLOWS : 0;
+				geometry[l].smodelCount = static_cast<std::uint16_t>(light_models[l].size());
+				geometry[l].smodelIndex = light_models[l].empty() ? 0 : FOLLOWS;
 			}
 			b.follows(head, W_SHADOW_GEOM);
 			b.add_array(geometry);
-			for (std::uint32_t l = 0; l < light_count && l < rw.light_surfaces.size(); l++)
+			for (std::uint32_t l = 0; l < light_count; l++)
 			{
-				if (!rw.light_surfaces[l].empty())
+				if (geometry[l].surfaceCount)
 				{
 					b.add_array(rw.light_surfaces[l]);
+				}
+				if (!light_models[l].empty())
+				{
+					b.add_array(light_models[l]);
 				}
 			}
 			b.follows(head, W_LIGHT_REGION);
@@ -493,6 +609,28 @@ namespace codol::bsp
 		}
 		b.follows(head, dpvs + offsetof(c1::GfxWorldDpvsStatic, sortedSurfIndex));
 		b.add_array(sorted);
+		// static models: bounds + lighting origin, and further down the draw instances
+		std::vector<c1::GfxStaticModelInst> model_insts(rw.smodels.size());
+		std::vector<c1::GfxStaticModelDrawInst> model_draws(rw.smodels.size());
+		for (std::size_t m = 0; m < rw.smodels.size(); m++)
+		{
+			const map_model& model = w.models[static_cast<std::size_t>(rw.smodels[m].model)];
+			model_insts[m].bounds = model.box.bounds();
+			std::memcpy(model_insts[m].lightingOrigin, model_insts[m].bounds.midPoint, sizeof(model_insts[m].lightingOrigin));
+			c1::GfxStaticModelDrawInst& d = model_draws[m];
+			std::memcpy(d.origin, model.origin, sizeof(d.origin));
+			std::memcpy(d.axis, model.axis, sizeof(d.axis));
+			d.scale = model.scale;
+			// drawn up to 40 times its size away, at least 2000 units ( the shipped values vary per model )
+			d.cullDist = static_cast<std::uint16_t>(std::clamp(model.box.radius() * 40.0f, 2000.0f, 60000.0f));
+			d.reflectionProbeIndex = static_cast<std::uint8_t>(rw.smodels[m].reflection_probe);
+			d.primaryLightIndex = static_cast<std::uint8_t>(rw.smodels[m].primary_light);
+		}
+		if (!rw.smodels.empty())
+		{
+			b.follows(head, dpvs + offsetof(c1::GfxWorldDpvsStatic, smodelInsts));
+			b.add_array(model_insts);
+		}
 		if (surface_count)
 		{
 			b.follows(head, dpvs + offsetof(c1::GfxWorldDpvsStatic, surfaces));
@@ -503,6 +641,15 @@ namespace codol::bsp
 			}
 			b.follows(head, dpvs + offsetof(c1::GfxWorldDpvsStatic, surfacesBounds));
 			b.add_array(surface_bounds);
+		}
+		if (!rw.smodels.empty())
+		{
+			b.follows(head, dpvs + offsetof(c1::GfxWorldDpvsStatic, smodelDrawInsts));
+			const std::uint32_t chunk = b.add_array(model_draws);
+			for (std::size_t m = 0; m < rw.smodels.size(); m++)
+			{
+				point_ref(b, chunk, m * sizeof(c1::GfxStaticModelDrawInst) + offsetof(c1::GfxStaticModelDrawInst, model), w.models[static_cast<std::size_t>(rw.smodels[m].model)].ref);
+			}
 		}
 		hput(dpvs + offsetof(c1::GfxWorldDpvsStatic, surfaceMaterials), FOLLOWS);
 		hput(dpvs + offsetof(c1::GfxWorldDpvsStatic, surfaceCastsSunShadow), FOLLOWS);

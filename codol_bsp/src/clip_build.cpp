@@ -201,6 +201,34 @@ namespace codol::bsp
 	{
 		world& w = ctx.w;
 
+		// ---- static models: the xmodels are carried into the zone here, in front of the map assets
+		for (map_model& model : w.models)
+		{
+			model_desc desc;
+			std::string why;
+			model.ref = ctx.importer.model(model.name, &why, &desc);
+			if (!model.ref.valid())
+			{
+				ctx.rep.warnings.push_back("static model '" + model.name + "' is left out: " + why);
+				continue;
+			}
+			model.collides = desc.coll_surfs > 0;
+			// the model's box, placed
+			for (int corner = 0; corner < 8; corner++)
+			{
+				float p[3] = { model.origin[0], model.origin[1], model.origin[2] };
+				for (int a = 0; a < 3; a++)
+				{
+					const float local = (desc.mid[a] + (corner & (1 << a) ? desc.half[a] : -desc.half[a])) * model.scale;
+					for (int k = 0; k < 3; k++)
+					{
+						p[k] += model.axis[a][k] * local;
+					}
+				}
+				model.box.add(p);
+			}
+		}
+
 		// ---- materials
 		std::vector<std::string> material_names;
 		std::vector<clip_material_info> material_infos;
@@ -488,6 +516,48 @@ namespace codol::bsp
 		b.point(head, offsetof(c1::clipMap_t, name), 0, 0, REF_COM);
 		b.point(head, offsetof(c1::clipMap_t, planes), 0, 0, REF_GFX);
 
+		// static models with collision, sorted along x so that the runs of the tree's leafs are near each other
+		std::vector<int> colliding;
+		for (std::size_t m = 0; m < w.models.size(); m++)
+		{
+			if (w.models[m].ref.valid() && w.models[m].collides)
+			{
+				colliding.push_back(static_cast<int>(m));
+			}
+		}
+		std::sort(colliding.begin(), colliding.end(), [&](const int x, const int y)
+		{
+			return w.models[static_cast<std::size_t>(x)].origin[0] < w.models[static_cast<std::size_t>(y)].origin[0];
+		});
+		if (colliding.size() > 0xFFF0)
+		{
+			throw compile_error("more than 65520 static models with collision");
+		}
+		if (!colliding.empty())
+		{
+			std::vector<c1::cStaticModel_s> list(colliding.size());
+			for (std::size_t k = 0; k < list.size(); k++)
+			{
+				const map_model& model = w.models[static_cast<std::size_t>(colliding[k])];
+				std::memcpy(list[k].origin, model.origin, sizeof(model.origin));
+				for (int i = 0; i < 3; i++)
+				{
+					for (int j = 0; j < 3; j++)
+					{
+						list[k].invScaledAxis[i][j] = model.axis[i][j] / model.scale;		// as the shipped entries: the axis over the scale
+					}
+				}
+				list[k].absBounds = model.box.bounds();
+			}
+			b.put(head, offsetof(c1::clipMap_t, numStaticModels), static_cast<std::uint32_t>(list.size()));
+			b.follows(head, offsetof(c1::clipMap_t, staticModelList));
+			const std::uint32_t chunk = b.add_array(list);
+			for (std::size_t k = 0; k < list.size(); k++)
+			{
+				b.point_asset(chunk, k * sizeof(c1::cStaticModel_s), w.models[static_cast<std::size_t>(colliding[k])].ref.asset);
+			}
+		}
+
 		// materials
 		{
 			std::vector<c1::ClipMaterial> list(material_names.size());
@@ -645,13 +715,44 @@ namespace codol::bsp
 			b.add_array(brush_contents);
 		}
 
-		// the static model tree: one node over no models ( the root is read whatever the count )
+		// the static model tree: the root, and under it one leaf per run of up to 12 models ( a leaf names a run of
+		// staticModelList, a node its children as node index + model count ). Without models: one empty root, which
+		// is read whatever the count.
 		{
-			smodel_node node{};
-			box3 all = w.bounds;
-			node.bounds = all.bounds();
+			std::vector<smodel_node> nodes(1);
+			box3 all;
+			const std::size_t n = colliding.size();
+			if (n <= 12)
+			{
+				for (const int m : colliding)
+				{
+					all.add(w.models[static_cast<std::size_t>(m)].box);
+				}
+				nodes[0].childCount = static_cast<std::uint16_t>(n);
+			}
+			else
+			{
+				for (std::size_t first = 0; first < n; first += 12)
+				{
+					smodel_node leaf{};
+					box3 box;
+					for (std::size_t k = first; k < std::min(n, first + 12); k++)
+					{
+						box.add(w.models[static_cast<std::size_t>(colliding[k])].box);
+					}
+					leaf.bounds = box.bounds();
+					leaf.firstChild = static_cast<std::uint16_t>(first);
+					leaf.childCount = static_cast<std::uint16_t>(std::min<std::size_t>(12, n - first));
+					all.add(box);
+					nodes.push_back(leaf);
+				}
+				nodes[0].firstChild = static_cast<std::uint16_t>(n + 1);
+				nodes[0].childCount = static_cast<std::uint16_t>(nodes.size() - 1);
+			}
+			nodes[0].bounds = all.valid() ? all.bounds() : w.bounds.bounds();
+			b.put(head, offsetof(c1::clipMap_t, smodelNodeCount), static_cast<std::uint32_t>(nodes.size()));
 			b.follows(head, offsetof(c1::clipMap_t, smodelNodes));
-			b.add(node);
+			b.add_array(nodes);
 		}
 
 		// MapEnts, nested

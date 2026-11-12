@@ -348,23 +348,35 @@ namespace codol::bsp
 			}
 			if (out.classname == "misc_model")
 			{
-				// Not compiled into the world as a static model ( that needs the xmodel carried into the zone, cells,
-				// collision ): the model becomes a script_model entity, which the game spawns by name from the
-				// zones it has loaded. Drawn and lit by the light grid; no collision, no baked shadow.
-				// An entity each: more than a handful would use up the game's entities, so the rest is left out.
-				constexpr std::size_t MODEL_ENTITIES = 128;
-				rep.static_models++;
-				if (rep.static_models > MODEL_ENTITIES)
+				// a static model of the world: GfxWorld draw instance + clip map entry; no entity
+				map_model model;
+				model.name = std::string(out.value("model"));
+				model.origin[0] = static_cast<float>(out.origin.x);
+				model.origin[1] = static_cast<float>(out.origin.y);
+				model.origin[2] = static_cast<float>(out.origin.z);
+				parse_floats(out.value("modelscale", "1"), &model.scale, 1);
+				if (!(model.scale > 0))
 				{
-					if (rep.static_models == MODEL_ENTITIES + 1)
-					{
-						rep.warnings.push_back(format("misc_model: only the first %zu are kept ( as script_model entities ); static models are not compiled into the world",
-							MODEL_ENTITIES));
-					}
-					continue;
+					model.scale = 1.0f;
 				}
-				out.classname = "script_model";
-				out.set("classname", "script_model");
+				const vec3 angles = e->angles();
+				const double p = angles.x * 3.14159265358979 / 180.0, y = angles.y * 3.14159265358979 / 180.0, r = angles.z * 3.14159265358979 / 180.0;
+				const double sp = std::sin(p), cp = std::cos(p), sy = std::sin(y), cy = std::cos(y), sr = std::sin(r), cr = std::cos(r);
+				const double axis[3][3] = { { cp * cy, cp * sy, -sp }, { sr * sp * cy - cr * sy, sr * sp * sy + cr * cy, sr * cp },
+					{ cr * sp * cy + sr * sy, cr * sp * sy - sr * cy, cr * cp } };		// forward, left, up
+				for (int a = 0; a < 3; a++)
+				{
+					for (int k = 0; k < 3; k++)
+					{
+						model.axis[a][k] = static_cast<float>(axis[a][k]);
+					}
+				}
+				if (!model.name.empty())
+				{
+					w.models.push_back(std::move(model));
+					rep.static_models++;
+				}
+				continue;
 			}
 			if (out.classname == "misc_prefab" || out.classname == "reflection_probe" || out.classname == "info_null")
 			{

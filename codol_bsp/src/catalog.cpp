@@ -45,7 +45,7 @@ namespace codol::bsp
 				}
 				count++;
 			}
-			return format("codol_bsp catalog 3 %zu %016llx", count, static_cast<unsigned long long>(hash));
+			return format("codol_bsp catalog 4 %zu %016llx", count, static_cast<unsigned long long>(hash));
 		}
 	}
 
@@ -187,7 +187,7 @@ namespace codol::bsp
 				{
 					material_zone.emplace(name, relative);
 				}
-				else if (r.type == c1::ASSET_TYPE_XMODEL)
+				else if (r.type == c1::ASSET_TYPE_XMODEL && top.count(r.header))
 				{
 					model_zone.emplace(name, relative);
 				}
