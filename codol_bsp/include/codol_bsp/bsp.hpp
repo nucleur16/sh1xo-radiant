@@ -37,6 +37,14 @@ namespace codol::bsp
 		bool light = true;					// false: --no-light, flat lighting
 		bool vis = true;					// false: one cell, no portals
 		bool load_zone = true;				// also write <mapname>_load.ff
+		// optional: a picture of the map from above ( 512 x 512, 32 bit .tga ) for the minimap material
+		// compass_map_<mapname>. The map gets the two minimap_corner entities the picture fits and "northyaw" "90" when
+		// it has none.
+		std::filesystem::path minimap;
+		// optional: a folder that receives the generated scripts - maps/mp/<mapname>.gsc ( the level script; the
+		// dedicated server reads it from its script folder ), maps/mp/<mapname>_fx.gsc and
+		// maps/createfx/<mapname>_fx.gsc ( both also compiled into the zone as rawfiles )
+		std::filesystem::path scripts_out;
 		bool verbose = false;
 	};
 

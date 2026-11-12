@@ -1517,5 +1517,74 @@ namespace codol::bsp
 			}
 		}
 		rw.light_surfaces.assign(w.lights.size(), {});
+
+		// ---- the minimap picture: the map from above as the lightmaps light it, north ( + y ) up; where a ray from
+		// above meets nothing, the picture is see through
+		if (!ctx.opts.minimap.empty())
+		{
+			constexpr int SIZE = 512;
+			std::vector<std::uint8_t> pixels(static_cast<std::size_t>(SIZE) * SIZE * 4, 0);
+			const vec3 down{ 0, 0, -1 };
+			parallel_for(static_cast<std::size_t>(SIZE), [&](const std::size_t row)
+			{
+				for (int col = 0; col < SIZE; col++)
+				{
+					vec3 p{ w.minimap_mins[0] + (col + 0.5) * (w.minimap_maxs[0] - w.minimap_mins[0]) / SIZE,
+						w.minimap_maxs[1] - (static_cast<double>(row) + 0.5) * (w.minimap_maxs[1] - w.minimap_mins[1]) / SIZE, rw.bounds.maxs[2] + 16.0 };
+					float c[3] = { 0, 0, 0 };
+					bool found = false;
+					for (int step = 0; step < 16 && !found; step++)
+					{
+						const ray_world::sight s = rays.look(p, down, true);
+						if (s.what == ray_world::seen::nothing || (s.what == ray_world::seen::sky && s.t <= 0))
+						{
+							break;
+						}
+						const bool sky_brush = s.what == ray_world::seen::sky || (s.what == ray_world::seen::face && s.brush >= 0 && rays.sky[static_cast<std::size_t>(s.brush)]);
+						if (s.what == ray_world::seen::sky && s.t >= 1e8)
+						{
+							break;			// nothing below
+						}
+						if (sky_brush)
+						{
+							// through the sky: on below the brush
+							p.z -= s.t + 1.0;
+							for (int k = 0; k < 4096 && rays.in_solid(p); k++)
+							{
+								p.z -= 4.0;
+							}
+							continue;
+						}
+						found = true;
+						if (s.what == ray_world::seen::face && !emit.empty())
+						{
+							if (const std::size_t from = luxel_at(s.brush, s.face, p + down * s.t); from != npos)
+							{
+								for (int k = 0; k < 3; k++)
+								{
+									c[k] = emit[from * 3 + static_cast<std::size_t>(k)] / REFLECT;
+								}
+							}
+						}
+						else
+						{
+							c[0] = c[1] = c[2] = 0.35f;		// a static model, a face without a lightmap
+						}
+					}
+					std::uint8_t* out = &pixels[(row * SIZE + static_cast<std::size_t>(col)) * 4];
+					if (found)
+					{
+						// lightmap brightness, lifted so that shadow is not black on the compass
+						out[0] = to_byte(0.15f + 0.6f * std::min(c[2], 1.4f));
+						out[1] = to_byte(0.15f + 0.6f * std::min(c[1], 1.4f));
+						out[2] = to_byte(0.15f + 0.6f * std::min(c[0], 1.4f));
+						out[3] = 255;
+					}
+				}
+			});
+			write_tga(ctx.opts.minimap, SIZE, SIZE, pixels);
+			ctx.rep.notes.push_back("minimap: " + ctx.opts.minimap.string() + format(" ( %d x %d, the square ( %g %g ) - ( %g %g ) )", SIZE, SIZE, w.minimap_mins[0], w.minimap_mins[1],
+				w.minimap_maxs[0], w.minimap_maxs[1]));
+		}
 	}
 }
