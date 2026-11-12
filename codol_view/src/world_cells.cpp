@@ -259,18 +259,24 @@ namespace codol::view
 		int at = 0;
 		for (int step = 0; step < 256; step++)
 		{
+			// The engine's encoding ( IW R_CellForPoint; the node stream of every shipped map is consumed exactly by
+			// it, see codol_bsp/README.md ): a value up to the cell count is a leaf - 0: no cell, else cell + 1;
+			// anything above is a split by plane value - cellCount - 1, whose front child follows and whose back
+			// child is `nodes[ at + 1 ]` entries on.
 			const int value = nodes[static_cast<std::size_t>(at)];
-			if (value < static_cast<int>(cells.size()))
+			const int cell_count = static_cast<int>(cells.size());
+			if (value <= cell_count)
 			{
-				return value;
+				return value - 1;
 			}
-			if (value >= static_cast<int>(planes.size()) || at + 1 >= node_count)
+			const int plane_index = value - cell_count - 1;
+			if (plane_index >= static_cast<int>(planes.size()) || at + 1 >= node_count)
 			{
 				return -1;
 			}
-			const float4& plane = planes[static_cast<std::size_t>(value)];
+			const float4& plane = planes[static_cast<std::size_t>(plane_index)];
 			const float side = plane.x * point.x + plane.y * point.y + plane.z * point.z - plane.w;
-			at = side >= 0 ? at + 2 : at + nodes[static_cast<std::size_t>(at) + 1];
+			at = side > 0 ? at + 2 : at + nodes[static_cast<std::size_t>(at) + 1];
 			if (at < 0 || at >= node_count)
 			{
 				return -1;

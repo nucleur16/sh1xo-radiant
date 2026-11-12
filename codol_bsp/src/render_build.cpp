@@ -1,6 +1,6 @@
 // Brush faces -> render surfaces.
 
-#include "render.hpp"
+#include "vis.hpp"
 
 namespace codol::bsp
 {
@@ -11,7 +11,7 @@ namespace codol::bsp
 
 		struct pending_face
 		{
-			int brush, face, material, model;
+			int brush, face, material, model, cell;
 			std::int64_t group;
 		};
 	}
@@ -19,6 +19,10 @@ namespace codol::bsp
 	void build_render_surfaces(compile_context& ctx, render_world& rw)
 	{
 		world& w = ctx.w;
+
+		// ---- what is hidden, and which cell sees what
+		vis_result vis;
+		build_vis(ctx, vis);
 
 		// ---- the faces that are drawn, and their materials
 		std::map<std::string, int> material_index;
@@ -74,7 +78,12 @@ namespace codol::bsp
 				}
 				centre = centre * (1.0 / static_cast<double>(face.winding.size()));
 				const auto cell = [](const double v) { return static_cast<std::int64_t>(std::floor(v / SURFACE_GRID)) & 0xFFFFF; };
-				faces.push_back({ static_cast<int>(bi), static_cast<int>(fi), index, brush.model, cell(centre.x) | (cell(centre.y) << 20) | (cell(centre.z) << 40) });
+				// a face that is seen from several cells is drawn by each of them ( a surface belongs to one cell )
+				static const std::vector<int> first_cell{ 0 };
+				for (const int c : vis.built && brush.model == 0 && !face.cells.empty() ? face.cells : first_cell)
+				{
+					faces.push_back({ static_cast<int>(bi), static_cast<int>(fi), index, brush.model, c, cell(centre.x) | (cell(centre.y) << 20) | (cell(centre.z) << 40) });
+				}
 			}
 		}
 
@@ -82,7 +91,7 @@ namespace codol::bsp
 		const auto rank = [&](const pending_face& f)
 		{
 			const render_material& m = rw.materials[static_cast<std::size_t>(f.material)];
-			return std::make_tuple(f.model != 0 ? f.model : 0, f.model != 0 ? 0 : m.draw_class, m.desc->sort_key, f.material, f.group, f.brush, f.face);
+			return std::make_tuple(f.model != 0 ? f.model : 0, f.model != 0 ? 0 : m.draw_class, m.desc->sort_key, f.material, f.cell, f.group, f.brush, f.face);
 		};
 		std::sort(faces.begin(), faces.end(), [&](const pending_face& a, const pending_face& c) { return rank(a) < rank(c); });
 
@@ -94,6 +103,7 @@ namespace codol::bsp
 			const render_material& material = rw.materials[static_cast<std::size_t>(first.material)];
 			surface.material = first.material;
 			surface.model = first.model;
+			surface.cell = first.cell;
 			surface.sky = material.desc->sky;
 			if (surface.sky)
 			{
@@ -101,7 +111,8 @@ namespace codol::bsp
 				surface.lightmap = 31;
 				surface.primary_light = 0;
 			}
-			for (; at < faces.size() && faces[at].model == first.model && faces[at].material == first.material && faces[at].group == first.group; at++)
+			for (; at < faces.size() && faces[at].model == first.model && faces[at].material == first.material && faces[at].cell == first.cell
+				&& faces[at].group == first.group; at++)
 			{
 				const map_brush& brush = w.brushes[static_cast<std::size_t>(faces[at].brush)];
 				const map_face& face = brush.faces[static_cast<std::size_t>(faces[at].face)];
@@ -119,6 +130,7 @@ namespace codol::bsp
 				rf.first_vertex = static_cast<std::uint32_t>(surface.vertices.size());
 				rf.vertex_count = static_cast<std::uint32_t>(face.winding.size());
 				rf.brush = faces[at].brush;
+				rf.face = faces[at].face;
 				std::memcpy(rf.normal, normal, sizeof(normal));
 				for (const vec3& p : face.winding)
 				{
@@ -184,10 +196,26 @@ namespace codol::bsp
 			}
 		}
 
-		// ---- one cell around everything
-		render_cell cell;
-		cell.box = rw.bounds;
-		rw.cells.push_back(std::move(cell));
-		rw.cell_nodes = { 1 };			// a leaf: cell 0 ( stored + 1; 0 would be "no cell" )
+		// ---- cells
+		if (vis.built)
+		{
+			rw.cells = std::move(vis.cells);
+			rw.cell_nodes = std::move(vis.cell_nodes);
+			for (const render_surface& surface : rw.surfaces)
+			{
+				if (surface.model == 0)
+				{
+					rw.cells[static_cast<std::size_t>(surface.cell)].box.add(surface.box);
+				}
+			}
+		}
+		else
+		{
+			// one cell around everything
+			render_cell cell;
+			cell.box = rw.bounds;
+			rw.cells.push_back(std::move(cell));
+			rw.cell_nodes = { 1 };			// a leaf: cell 0 ( stored + 1; 0 would be "no cell" )
+		}
 	}
 }

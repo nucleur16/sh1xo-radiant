@@ -20,6 +20,7 @@ namespace codol::bsp::test
 		std::string ceiling = "me_concrete_riverwall";
 		std::string crate = "ch_woodplank01_sh";
 		std::string other = "me_cargocontainer_usmc_ext_wall";
+		std::string sky = "sky_killhouse_sh";
 	};
 
 	inline void set_key(edit::document& doc, const edit::object_id entity, const char* key, const std::string& value)
@@ -112,13 +113,22 @@ namespace codol::bsp::test
 	}
 
 	// M1: a hollow room, floor 1024 x 1024, 320 high, a few crates, spawn points, a light
-	inline void make_box_room(edit::document& doc, const materials& m = {})
+	// skylight: the half of the ceiling over x > 0 is sky, so the sun shines in
+	inline void make_box_room(edit::document& doc, const materials& m = {}, const bool skylight = false)
 	{
 		doc.new_map();
 		world_keys(doc);
 		const double h = 512, t = 16, top = 320;
 		wall(doc, { -h - t, -h - t, -t }, { h + t, h + t, 0 }, { 0, 0, 1 }, m.floor);
-		wall(doc, { -h - t, -h - t, top }, { h + t, h + t, top + t }, { 0, 0, -1 }, m.ceiling);
+		if (skylight)
+		{
+			wall(doc, { -h - t, -h - t, top }, { 0, h + t, top + t }, { 0, 0, -1 }, m.ceiling);
+			wall(doc, { 0, -h - t, top }, { h + t, h + t, top + t }, { 0, 0, -1 }, m.sky);
+		}
+		else
+		{
+			wall(doc, { -h - t, -h - t, top }, { h + t, h + t, top + t }, { 0, 0, -1 }, m.ceiling);
+		}
 		wall(doc, { -h - t, -h - t, 0 }, { -h, h + t, top }, { 1, 0, 0 }, m.wall);
 		wall(doc, { h, -h - t, 0 }, { h + t, h + t, top }, { -1, 0, 0 }, m.wall);
 		wall(doc, { -h, -h - t, 0 }, { h, -h, top }, { 0, 1, 0 }, m.other);
@@ -137,5 +147,46 @@ namespace codol::bsp::test
 		path_nodes(doc, { -416, -416, 0 }, { 416, 416, 0 }, 104, 16);
 		const std::vector<std::pair<std::string, std::string>> light = { { "_color", "1 0.85 0.6" }, { "radius", "400" }, { "intensity", "1.5" } };
 		doc.create_point_entity("light", { 300, -300, 200 }, light);
+	}
+
+	// M3: two rooms joined by a corridor. Every brush is textured on all sides, so the compiler has faces to remove.
+	// Room A: x -1024 .. -256, room B: x 256 .. 1024, both y -384 .. 384 and 256 high; the corridor between them is
+	// 128 wide and 128 high. leak: a gap of 200 units in room B's south wall.
+	inline void make_two_rooms(edit::document& doc, const materials& m = {}, const bool leak = false)
+	{
+		doc.new_map();
+		world_keys(doc);
+		const auto box = [&](const vec3& mins, const vec3& maxs, const std::string& material) { return doc.create_box(mins, maxs, material); };
+		box({ -1040, -400, -16 }, { 1040, 400, 0 }, m.floor);
+		for (const double side : { -1.0, 1.0 })
+		{
+			const double x0 = side < 0 ? -1040 : 240, x1 = side < 0 ? -240 : 1040;
+			box({ x0, -400, 256 }, { x1, 400, 272 }, m.ceiling);
+			box({ x0, 384, 0 }, { x1, 400, 256 }, m.wall);
+			box({ x0, -400, 0 }, { leak && side > 0 ? x1 - 200 : x1, -384, 256 }, m.wall);
+			const double outer0 = side < 0 ? -1040 : 1024, outer1 = side < 0 ? -1024 : 1040;
+			box({ outer0, -384, 0 }, { outer1, 384, 256 }, m.wall);
+			// the wall towards the corridor, with the doorway
+			const double inner0 = side < 0 ? -256 : 240, inner1 = side < 0 ? -240 : 256;
+			box({ inner0, -384, 0 }, { inner1, -64, 256 }, m.other);
+			box({ inner0, 64, 0 }, { inner1, 384, 256 }, m.other);
+			box({ inner0, -64, 128 }, { inner1, 64, 256 }, m.other);
+		}
+		box({ -240, -80, 0 }, { 240, -64, 128 }, m.wall);
+		box({ -240, 64, 0 }, { 240, 80, 128 }, m.wall);
+		box({ -240, -80, 128 }, { 240, 80, 144 }, m.ceiling);
+		std::vector<edit::object_id> crates;
+		crates.push_back(box({ 600, -200, 0 }, { 664, -136, 64 }, m.crate));
+		crates.push_back(box({ 600, -200, 64 }, { 664, -136, 128 }, m.crate));
+		crates.push_back(box({ -700, 200, 0 }, { -636, 264, 64 }, m.crate));
+		doc.select(crates);
+		doc.set_detail(true);
+		doc.deselect_all();
+		game_entities(doc, { -640, 0, 0 }, 240, 0);
+		game_entities(doc, { 640, 0, 0 }, 240, 0);
+		airdrop_prefab(doc, { -960, -340, 0 });
+		path_nodes(doc, { -960, -320, 0 }, { -320, 320, 0 }, 128, 16);
+		path_nodes(doc, { 320, -320, 0 }, { 960, 320, 0 }, 128, 16);
+		path_nodes(doc, { -256, 0, 0 }, { 256, 0, 0 }, 128, 16);
 	}
 }

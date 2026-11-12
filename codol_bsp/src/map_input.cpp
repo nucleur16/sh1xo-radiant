@@ -192,7 +192,7 @@ namespace codol::bsp
 						light.dir[k] = -forward[k];
 					}
 				}
-				w.lights.push_back(light);
+				w.bake_lights.push_back(light);
 				rep.lights++;
 				continue;		// not part of the entity string
 			}
@@ -250,6 +250,14 @@ namespace codol::bsp
 				}
 				if (ignored || b.faces.size() < 4)
 				{
+					// a portal brush: its "portal" faces separate cells, the brush itself is nothing
+					for (map_face& face : b.faces)
+					{
+						if (face.material == "portal" && out.world)
+						{
+							w.portal_faces.push_back(std::move(face));
+						}
+					}
 					continue;
 				}
 				if (source->has_content("nonColliding"))
@@ -294,6 +302,8 @@ namespace codol::bsp
 		{
 			w.sun_color[k] = color[k] * sunlight;
 			w.ambient[k] = ambient + sky_color[k] * skylight;
+			w.ambient_light[k] = ambient;
+			w.sky_light[k] = sky_color[k] * skylight;
 			w.lights[1].color[k] = w.sun_color[k];
 			w.lights[1].dir[k] = w.sun_dir[k];
 		}

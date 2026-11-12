@@ -41,6 +41,24 @@ namespace
 			std::printf("%s\n", error.c_str());
 			return false;
 		}
+		codol::bsp::test::make_box_room(doc, {}, true);
+		if (!doc.save_map_file(dir / "sky_room.map", error))
+		{
+			std::printf("%s\n", error.c_str());
+			return false;
+		}
+		codol::bsp::test::make_two_rooms(doc);
+		if (!doc.save_map_file(dir / "two_rooms.map", error))
+		{
+			std::printf("%s\n", error.c_str());
+			return false;
+		}
+		codol::bsp::test::make_two_rooms(doc, {}, true);
+		if (!doc.save_map_file(dir / "two_rooms_leak.map", error))
+		{
+			std::printf("%s\n", error.c_str());
+			return false;
+		}
 		return true;
 	}
 }

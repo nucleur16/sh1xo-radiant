@@ -14,6 +14,7 @@ namespace codol::bsp
 		std::uint32_t first_vertex = 0, vertex_count = 0;	// inside its surface; a convex polygon, in winding order
 		float normal[3] = {};
 		int brush = -1;					// world::brushes index, -1: not from a brush
+		int face = -1;					// face of that brush
 	};
 
 	struct render_surface

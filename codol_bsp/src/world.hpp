@@ -98,6 +98,7 @@ namespace codol::bsp
 		std::vector<vec3> winding;		// counter clockwise seen from outside; empty: the face has no area
 		std::vector<int> corner;		// per winding point: index into map_brush::corners
 		int clip_material = -1;
+		std::vector<int> cells;			// the cells the face is seen from ( vis stage ); empty: cell 0
 		bool draw = false;				// has a world material and is not removed by csg
 		bool visible = true;			// cleared when the face lies inside another opaque brush / faces the void
 	};
@@ -159,12 +160,16 @@ namespace codol::bsp
 		std::vector<map_entity> entities;	// [0] the worldspawn
 		std::vector<map_brush> brushes;
 		std::vector<map_light> lights;	// [0] none, [1] the sun, then the light entities
+		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed
+		std::vector<map_light> bake_lights;	// the light entities: baked into lightmaps and light grid
 		plane_pool planes;
 		box3 bounds;					// of all brushes of the world model
 		int model_count = 1;
 		float sun_dir[3] = { 0.35f, 0.25f, 0.9f };		// towards the sun
 		float sun_color[3] = { 1.4f, 1.3f, 1.1f };
-		float ambient[3] = { 0.25f, 0.27f, 0.32f };
+		float ambient[3] = { 0.25f, 0.27f, 0.32f };		// ambient + sky light: what a flat ( --no-light ) map is lit with
+		float ambient_light[3] = { 0.05f, 0.05f, 0.05f };	// worldspawn "ambient"
+		float sky_light[3] = { 0.4f, 0.45f, 0.5f };		// worldspawn "skycolor" x "skylight": what a surface that sees the whole sky receives
 		std::uint32_t checksum = 0;
 		bool planes_final = false;		// the plane array was written: no stage may add to it
 
