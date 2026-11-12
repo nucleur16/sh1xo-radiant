@@ -137,6 +137,28 @@ namespace codol::zone
 		std::uint32_t pointers = 0;		// zone pointers inside it
 	};
 
+	// ---- assets made from nothing ( add_new_asset ) ------------------------------------------------
+	// A pointer field of a new piece of data: to another piece of the same new asset, or to a top level asset
+	// that the zone already has.
+	struct ZoneNewPointer
+	{
+		std::uint32_t offset = 0;			// of the 32 bit field inside its piece
+		std::uint32_t piece = 0;			// target: index into the piece list ..
+		std::uint32_t pieceOffset = 0;
+		std::size_t asset = static_cast<std::size_t>(-1);	// .. or, when set, the header slot of this top level asset
+	};
+
+	// One read of the game's loaders: a struct, an array, a string ( with its terminator ). Pointer fields that are
+	// not listed in `pointers` are plain bytes ( 0: null, 0xFFFFFFFF: the data follows in the stream ).
+	struct ZoneNewPiece
+	{
+		std::vector<std::uint8_t> bytes;
+		bool string = false;
+		std::vector<ZoneNewPointer> pointers;
+		// u16 fields that hold a script string ( bone names .. ): offset and text; the zone's list grows as needed
+		std::vector<std::pair<std::uint32_t, std::string>> scriptStrings;
+	};
+
 	class ZoneEditor
 	{
 	public:
@@ -198,6 +220,16 @@ namespace codol::zone
 		// zone's script string list, which grows by the strings it lacks. Fails ( and changes nothing ) when a pointer
 		// cannot be re-targeted: the asset shares data other than strings with another asset of its zone.
 		Status add_asset(const ZoneEditor& donor, std::size_t donorIndex, std::size_t position = npos, bool withDependencies = false);
+
+		// add_asset with dependencies, for assets that share data with other top level assets of their zone ( the
+		// technique sets of a map zone share techniques, passes and shaders ): every asset of the donor that the
+		// copied one points into is copied as well, in front of it, and so on.
+		Status add_asset_closure(const ZoneEditor& donor, std::size_t donorIndex, std::size_t position = npos);
+
+		// Appends ( or inserts in front of `position` ) a top level asset that is given as the pieces of stream data
+		// the game's loaders read for it, in the order they read them: header first. Nothing is checked here;
+		// write() runs the loaders over it and fails when the pieces do not fit the header.
+		Status add_new_asset(std::int32_t type, std::string_view name, std::span<const ZoneNewPiece> pieces, std::size_t position = npos);
 
 		// Replaces a top level asset with one of another zone ( same type ); pointers of other assets to the
 		// replaced asset's header keep working. Same rules as add_asset.

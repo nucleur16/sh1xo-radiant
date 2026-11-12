@@ -1,0 +1,585 @@
+// codol_assetc: source assets -> a fast file with native 1.1.1.13 assets. Asset Manager + converter + linker_pc.
+//
+//   codol_assetc --install <dir> --out <zone.ff> [options] [assets]
+//     --exe <C1.exe>                 default <install>/C1.exe
+//     --base <zone.ff>               add to an existing zone instead of making a new one
+//     --name <zone name>             name of a new zone ( default: the output file name )
+//     --matlib <file>                material library cache ( default <out dir>/codol_matlib.txt; made on first use, 20 s )
+//     --copy-techsets                copy every technique set into the zone instead of naming those of the common zones
+//     --source-root <dir>            where the image files of GDT materials are looked for
+//     --iwi-dir <dir>                write images/<name>.iwi of the streamed images there
+//     --iwd <file.iwd>               .. and / or pack them into a plain .iwd ( name it without iw_image, see README )
+//     --zone-out <file>              also write the inflated zone
+//
+//     --image <name>=<file>[,use=color|normal|specular|detail|ui|function][,format=dxt1|dxt3|dxt5|rgba|rgb|la|l|a]
+//                                 [,streamed][,nomips][,nopicmip][,clamp][,flipy]
+//     --material <file.mtl>          every material of the file
+//     --material gdt:<file.gdt>[:<entry>]   the material entries of a GDT ( one, or all ); their images are compiled too
+//     --xmodel <name>=<lod0.xmodel_export>[@dist][,<lod1>[@dist] ..][,collision=<lod>][,contents=<n>][,mtl:<export name>=<material>]
+//                                 [,hitloc:<bone>=<class>]
+//     --rawfile <name>=<file>
+//
+//   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
+//     loads the file with the game's loaders, writes it again ( must be identical ), lists what is in it
+
+#include "codol_assets/link.hpp"
+#include "codol_render/texture.hpp"
+#include "codol_zone/assets.hpp"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <set>
+
+using namespace codol::assets;
+namespace fs = std::filesystem;
+namespace c1 = codol::c1;
+namespace z = codol::zone;
+
+namespace
+{
+	std::vector<std::string> split(const std::string& text, const char separator)
+	{
+		std::vector<std::string> out;
+		std::size_t at = 0;
+		while (true)
+		{
+			const std::size_t next = text.find(separator, at);
+			out.push_back(text.substr(at, next == std::string::npos ? std::string::npos : next - at));
+			if (next == std::string::npos)
+			{
+				break;
+			}
+			at = next + 1;
+		}
+		return out;
+	}
+
+	int fail(const std::string& message)
+	{
+		std::fprintf(stderr, "codol_assetc: %s\n", message.c_str());
+		return 1;
+	}
+
+	struct ImageRequest
+	{
+		std::string name;
+		fs::path file;
+		ImageOptions options;
+		bool useGiven = false;
+	};
+
+	bool parse_image(const std::string& spec, ImageRequest& out, std::string& error)
+	{
+		const std::size_t equal = spec.find('=');
+		if (equal == std::string::npos || equal == 0)
+		{
+			error = "--image wants <name>=<file>";
+			return false;
+		}
+		out.name = spec.substr(0, equal);
+		const std::vector<std::string> parts = split(spec.substr(equal + 1), ',');
+		out.file = parts[0];
+		for (std::size_t k = 1; k < parts.size(); k++)
+		{
+			const std::string& p = parts[k];
+			const std::string value = p.find('=') == std::string::npos ? std::string() : p.substr(p.find('=') + 1);
+			if (p.rfind("use=", 0) == 0)
+			{
+				out.useGiven = true;
+				out.options.use = value == "color" ? ImageUse::color : value == "normal" ? ImageUse::normal : value == "specular" ? ImageUse::specular
+					: value == "detail" ? ImageUse::detail : value == "ui" ? ImageUse::ui : ImageUse::function;
+				if (value != "color" && value != "normal" && value != "specular" && value != "detail" && value != "ui" && value != "function")
+				{
+					error = "unknown image use '" + value + "'";
+					return false;
+				}
+			}
+			else if (p.rfind("format=", 0) == 0)
+			{
+				const std::pair<const char*, ImageFormat> formats[] = { { "dxt1", ImageFormat::dxt1 }, { "dxt3", ImageFormat::dxt3 }, { "dxt5", ImageFormat::dxt5 },
+					{ "rgba", ImageFormat::rgba32 }, { "rgb", ImageFormat::rgb24 }, { "la", ImageFormat::luminance_alpha8 }, { "l", ImageFormat::luminance8 },
+					{ "a", ImageFormat::alpha8 } };
+				bool found = false;
+				for (const auto& [name, format] : formats)
+				{
+					if (value == name)
+					{
+						out.options.format = format;
+						found = true;
+					}
+				}
+				if (!found)
+				{
+					error = "unknown image format '" + value + "'";
+					return false;
+				}
+			}
+			else if (p == "streamed")
+			{
+				out.options.streamed = true;
+			}
+			else if (p == "nomips")
+			{
+				out.options.mips = 0;
+			}
+			else if (p == "nopicmip")
+			{
+				out.options.noPicmip = 1;
+			}
+			else if (p == "clamp")
+			{
+				out.options.clampU = out.options.clampV = true;
+			}
+			else if (p == "flipy")
+			{
+				out.options.flipNormalY = true;
+			}
+			else
+			{
+				error = "unknown image option '" + p + "'";
+				return false;
+			}
+		}
+		return true;
+	}
+
+	ImageUse use_of_sampler(const std::string& sampler)
+	{
+		return sampler == "normalMap" ? ImageUse::normal : sampler == "specularMap" ? ImageUse::specular : sampler == "detailMap" ? ImageUse::detail : ImageUse::color;
+	}
+
+	int verify(const fs::path& file, const fs::path& install, fs::path exe)
+	{
+		exe = exe.empty() ? install / "C1.exe" : exe;
+		z::ClientKey key;
+		if (const z::Status s = key.load_from_exe(exe); !s)
+		{
+			return fail(s.message);
+		}
+		z::ZoneEditor editor;
+		if (const z::Status s = editor.open(file, key); !s)
+		{
+			return fail(file.string() + ": " + s.message);
+		}
+		std::vector<std::uint8_t> original, again;
+		if (const z::Status s = z::read_fastfile(file, key, original); !s)
+		{
+			return fail(s.message);
+		}
+		if (const z::Status s = editor.write(again); !s)
+		{
+			return fail("write: " + s.message);
+		}
+		const z::Zone& zone = editor.zone();
+		std::printf("%s: the game's loaders consume the zone to the last byte: %zu top level assets, %zu with nested ones, %zu warnings\n", file.filename().string().c_str(),
+			zone.assets().size(), zone.all_assets().size(), zone.warnings().size());
+		std::printf("read -> write: %s ( %zu bytes )\n", original == again ? "identical" : "DIFFERENT", again.size());
+		int bad = original == again ? 0 : 1;
+		for (const z::XAssetEntry& e : zone.assets())
+		{
+			const std::string name(zone.asset_name(e.type, e.header));
+			if (e.type == c1::ASSET_TYPE_IMAGE)
+			{
+				z::ImageView v;
+				z::read_image(zone, e.header, v);
+				std::string state = v.streamed ? "streamed ( images/" + name + ".iwi )" : "inline";
+				if (!v.streamed)
+				{
+					codol::render::embedded_image image;
+					image.d3d_format = v.loadDef.format;
+					image.level_count = v.loadDef.levelCount;
+					image.flags = v.loadDef.flags;
+					image.width = v.raw.width;
+					image.height = v.raw.height;
+					image.map_type = v.raw.mapType;
+					image.data_size = static_cast<std::uint32_t>(v.pixels.size());
+					codol::render::texture_upload upload;
+					std::string error;
+					const bool ok = codol::render::build_embedded_upload(image, v.pixels, upload, &error);
+					state += ok ? ", " + std::to_string(upload.levels) + " levels decode" : ", DOES NOT DECODE: " + error;
+					bad += ok ? 0 : 1;
+				}
+				std::printf("  image     %-40s %4u x %-4u semantic %u format 0x%08X %s\n", name.c_str(), v.raw.width, v.raw.height, v.raw.semantic, v.loadDef.format, state.c_str());
+			}
+			else if (e.type == c1::ASSET_TYPE_MATERIAL)
+			{
+				z::MaterialView v;
+				z::read_material(zone, e.header, v);
+				std::string textures;
+				for (const z::MaterialTexture& t : v.textures)
+				{
+					textures += " " + std::string(t.imageName);
+				}
+				std::printf("  material  %-40s techset %s%s, sort %u, %zu state bits, textures:%s\n", name.c_str(), std::string(v.techsetName).c_str(),
+					zone.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, v.techsetName) ? "" : " ( by name )", v.raw.sortKey, v.stateBits.size(), textures.c_str());
+			}
+			else if (e.type == c1::ASSET_TYPE_XMODEL)
+			{
+				z::ModelView v;
+				z::read_model(zone, e.header, v, true);
+				std::size_t vertices = 0, triangles = 0;
+				for (const z::ModelLod& lod : v.lods)
+				{
+					for (const z::SurfaceView& s : lod.surfs.surfaces)
+					{
+						vertices += s.vertCount;
+						triangles += s.triCount;
+					}
+				}
+				std::printf("  xmodel    %-40s %zu bones, %zu LODs, %zu vertices, %zu triangles, %d collision surfaces, materials:", name.c_str(), v.bones.size(), v.lods.size(),
+					vertices, triangles, v.raw.numCollSurfs);
+				for (const std::string_view m : v.materialNames)
+				{
+					std::printf(" %.*s", static_cast<int>(m.size()), m.data());
+				}
+				std::printf("\n");
+			}
+			else
+			{
+				std::printf("  %-9s %s\n", z::asset_type_name(e.type).c_str(), name.c_str());
+			}
+		}
+		return bad;
+	}
+}
+
+int main(const int argc, char** argv)
+{
+	LinkOptions link;
+	fs::path out, sourceRoot, iwiDir, iwd, zoneOut, verifyFile;
+	std::vector<std::string> images, materials, models, rawfiles;
+	bool nameGiven = false;
+	for (int k = 1; k < argc; k++)
+	{
+		const std::string a = argv[k];
+		const auto value = [&]() -> std::string { return k + 1 < argc ? argv[++k] : std::string(); };
+		if (a == "--install") link.install = value();
+		else if (a == "--exe") link.exe = value();
+		else if (a == "--out") out = value();
+		else if (a == "--base") link.base = value();
+		else if (a == "--name") { link.zoneName = value(); nameGiven = true; }
+		else if (a == "--matlib") link.libraryCache = value();
+		else if (a == "--copy-techsets") link.copyAllTechsets = true;
+		else if (a == "--source-root") sourceRoot = value();
+		else if (a == "--iwi-dir") iwiDir = value();
+		else if (a == "--iwd") iwd = value();
+		else if (a == "--zone-out") zoneOut = value();
+		else if (a == "--image") images.push_back(value());
+		else if (a == "--material") materials.push_back(value());
+		else if (a == "--xmodel") models.push_back(value());
+		else if (a == "--rawfile") rawfiles.push_back(value());
+		else if (a == "--verify") verifyFile = value();
+		else return fail("unknown option " + a + " ( usage: see the head of codol_assetc.cpp or the README )");
+	}
+	if (link.install.empty())
+	{
+		return fail("--install <1.1.1.13 install> is needed");
+	}
+	if (!verifyFile.empty())
+	{
+		return verify(verifyFile, link.install, link.exe);
+	}
+	if (out.empty())
+	{
+		return fail("--out <zone.ff> is needed");
+	}
+	if (!nameGiven)
+	{
+		link.zoneName = out.stem().string();
+	}
+	if (link.libraryCache.empty())
+	{
+		link.libraryCache = out.parent_path() / "codol_matlib.txt";
+	}
+
+	AssetLinker linker;
+	if (const Status s = linker.begin(link); !s)
+	{
+		return fail(s.message);
+	}
+
+	// ---- material definitions first: they say what the images are used for
+	std::vector<MaterialDef> defs;
+	for (const std::string& spec : materials)
+	{
+		std::vector<std::uint8_t> bytes;
+		std::vector<MaterialDef> parsed;
+		if (spec.rfind("gdt:", 0) == 0)
+		{
+			// gdt:<file>[:<entry>] - the file may hold a drive colon
+			std::string file = spec.substr(4), entry;
+			const std::size_t colon = file.rfind(':');
+			if (colon != std::string::npos && colon > 1)
+			{
+				entry = file.substr(colon + 1);
+				file = file.substr(0, colon);
+			}
+			if (const Status s = z::read_file(file, bytes); !s)
+			{
+				return fail(s.message);
+			}
+			if (const Status s = parse_gdt_materials({ reinterpret_cast<const char*>(bytes.data()), bytes.size() }, parsed); !s)
+			{
+				return fail(file + ": " + s.message);
+			}
+			if (!entry.empty())
+			{
+				std::erase_if(parsed, [&](const MaterialDef& d) { return d.name != entry; });
+				if (parsed.empty())
+				{
+					return fail(file + " has no material entry '" + entry + "'");
+				}
+			}
+			const fs::path root = sourceRoot.empty() ? fs::path(file).parent_path() : sourceRoot;
+			for (const MaterialDef& def : parsed)
+			{
+				for (const MaterialTextureRef& texture : def.textures)
+				{
+					const auto source = def.imageFiles.find(texture.sampler);
+					if (source != def.imageFiles.end())
+					{
+						std::string path = source->second;
+						for (char& c : path)
+						{
+							c = c == '\\' ? '/' : c;
+						}
+						images.push_back(texture.image + "=" + (root / path).string() + ",use="
+							+ (texture.sampler == "normalMap" ? "normal" : texture.sampler == "specularMap" ? "specular" : texture.sampler == "detailMap" ? "detail" : "color"));
+					}
+				}
+			}
+		}
+		else
+		{
+			if (const Status s = z::read_file(spec, bytes); !s)
+			{
+				return fail(s.message);
+			}
+			if (const Status s = parse_material_text({ reinterpret_cast<const char*>(bytes.data()), bytes.size() }, parsed); !s)
+			{
+				return fail(spec + ": " + s.message);
+			}
+		}
+		defs.insert(defs.end(), parsed.begin(), parsed.end());
+	}
+
+	// ---- images
+	std::vector<std::pair<std::string, std::vector<std::uint8_t>>> iwiFiles;
+	std::set<std::string> done;
+	for (const std::string& spec : images)
+	{
+		ImageRequest request;
+		std::string error;
+		if (!parse_image(spec, request, error))
+		{
+			return fail(error);
+		}
+		if (!done.insert(request.name).second)
+		{
+			continue;
+		}
+		if (!request.useGiven)
+		{
+			for (const MaterialDef& def : defs)
+			{
+				for (const MaterialTextureRef& texture : def.textures)
+				{
+					if (texture.image == request.name)
+					{
+						request.options.use = (def.type == "2d" || def.techset == "2d") ? ImageUse::ui : use_of_sampler(texture.sampler);
+					}
+				}
+			}
+		}
+		SourceImage source;
+		if (const Status s = load_image(request.file, source); !s)
+		{
+			return fail(s.message);
+		}
+		CompiledImage compiled;
+		if (const Status s = compile_image(request.name, source, request.options, compiled); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = linker.add_image(compiled); !s)
+		{
+			return fail(s.message);
+		}
+		std::printf("image %s: %u x %u %s, %d levels, %u bytes, %s\n", compiled.name.c_str(), compiled.width, compiled.height,
+			codol::render::iwi_format_name(static_cast<codol::render::iwi_format>(compiled.iwiFormat)), compiled.levelCount, compiled.data_bytes(),
+			compiled.streamed ? "streamed" : "inline");
+		if (compiled.streamed)
+		{
+			iwiFiles.emplace_back("images/" + compiled.name + ".iwi", write_iwi(compiled));
+		}
+	}
+	if (!iwiDir.empty())
+	{
+		for (const auto& [name, bytes] : iwiFiles)
+		{
+			std::error_code ec;
+			fs::create_directories((iwiDir / name).parent_path(), ec);
+			if (const Status s = z::write_file(iwiDir / name, bytes); !s)
+			{
+				return fail(s.message);
+			}
+		}
+	}
+	if (!iwd.empty() && !iwiFiles.empty())
+	{
+		if (const Status s = write_iwd(iwd, iwiFiles); !s)
+		{
+			return fail(s.message);
+		}
+		std::printf("wrote %s: %zu images\n", iwd.string().c_str(), iwiFiles.size());
+	}
+	else if (!iwiFiles.empty() && iwiDir.empty())
+	{
+		std::printf("warning: %zu streamed image(s) and neither --iwi-dir nor --iwd: the game will not find their pixels\n", iwiFiles.size());
+	}
+
+	// ---- materials
+	std::map<std::string, std::int32_t> surfaceFlags;		// material -> surface flags of its collision triangles
+	for (const MaterialDef& def : defs)
+	{
+		CompiledMaterial compiled;
+		if (const Status s = compile_material(def, linker.library(), compiled); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = linker.add_material(compiled); !s)
+		{
+			return fail(s.message);
+		}
+		for (int type = 0; type < 32; type++)
+		{
+			if (compiled.header.surfaceTypeBits & (1u << type))
+			{
+				surfaceFlags[compiled.name] = (type + 1) << 20;		// shipped collision surfaces: surface type number << 20
+			}
+		}
+		std::printf("material %s: techset %s, sort %u, %zu textures, state %s\n", compiled.name.c_str(), compiled.techset.c_str(), compiled.header.sortKey,
+			compiled.textures.size(), compiled.stateShipped ? "as shipped materials have it" : "derived");
+	}
+
+	// ---- models
+	for (const std::string& spec : models)
+	{
+		const std::size_t equal = spec.find('=');
+		if (equal == std::string::npos || equal == 0)
+		{
+			return fail("--xmodel wants <name>=<file.xmodel_export>");
+		}
+		ModelOptions options;
+		options.name = spec.substr(0, equal);
+		options.collisionFlagsByMaterial = surfaceFlags;
+		for (const std::string& part : split(spec.substr(equal + 1), ','))
+		{
+			if (part.rfind("collision=", 0) == 0)
+			{
+				options.collisionLod = std::atoi(part.c_str() + 10);
+			}
+			else if (part.rfind("contents=", 0) == 0)
+			{
+				options.contents = static_cast<std::int32_t>(std::strtol(part.c_str() + 9, nullptr, 0));
+			}
+			else if (part.rfind("hitloc:", 0) == 0 && part.find('=') != std::string::npos)
+			{
+				options.partClassification[part.substr(7, part.find('=') - 7)] = static_cast<std::uint8_t>(std::atoi(part.c_str() + part.find('=') + 1));
+			}
+			else if (part.rfind("mtl:", 0) == 0 && part.find('=') != std::string::npos)
+			{
+				options.materialNames[part.substr(4, part.find('=') - 4)] = part.substr(part.find('=') + 1);
+			}
+			else
+			{
+				ModelLodSource lod;
+				std::string file = part;
+				if (const std::size_t at = part.rfind('@'); at != std::string::npos)
+				{
+					lod.distance = static_cast<float>(std::atof(part.c_str() + at + 1));
+					file = part.substr(0, at);
+				}
+				if (const Status s = load_xmodel_export(file, lod.mesh); !s)
+				{
+					return fail(s.message);
+				}
+				options.lods.push_back(std::move(lod));
+			}
+		}
+		// export names CODOL-AssetExplorer makes of "mc/mtl_x": "codol_mc_mtl_x"
+		for (const ModelLodSource& lod : options.lods)
+		{
+			for (const std::string& name : lod.mesh.materials)
+			{
+				if (options.materialNames.count(name) || linker.editor().find_asset(c1::ASSET_TYPE_MATERIAL, name) != z::ZoneEditor::npos || name.rfind("codol_", 0) != 0)
+				{
+					continue;
+				}
+				std::string native = name.substr(6);
+				if (const std::size_t under = native.find('_'); under != std::string::npos)
+				{
+					native[under] = '/';
+				}
+				options.materialNames[name] = native;
+			}
+		}
+		CompiledModel compiled;
+		if (const Status s = compile_model(options, compiled); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = linker.add_model(compiled); !s)
+		{
+			return fail(s.message);
+		}
+		std::size_t vertices = 0, triangles = 0, surfaces = 0;
+		for (const CompiledLod& lod : compiled.lods)
+		{
+			for (const CompiledSurface& s : lod.surfaces)
+			{
+				vertices += s.vertices.size();
+				triangles += s.indices.size() / 3;
+				surfaces++;
+			}
+		}
+		std::printf("xmodel %s: %zu bones, %zu LODs, %zu surfaces, %zu vertices, %zu triangles, %zu collision surfaces\n", compiled.name.c_str(), compiled.boneNames.size(),
+			compiled.lods.size(), surfaces, vertices, triangles, compiled.collision.size());
+	}
+
+	for (const std::string& spec : rawfiles)
+	{
+		const std::size_t equal = spec.find('=');
+		std::vector<std::uint8_t> bytes;
+		if (equal == std::string::npos || !z::read_file(spec.substr(equal + 1), bytes))
+		{
+			return fail("--rawfile wants <name>=<readable file>");
+		}
+		if (const Status s = linker.add_rawfile(spec.substr(0, equal), bytes); !s)
+		{
+			return fail(s.message);
+		}
+	}
+
+	for (const std::string& line : linker.log())
+	{
+		std::printf("  %s\n", line.c_str());
+	}
+	std::vector<std::uint8_t> zoneBytes;
+	if (const Status s = linker.write_zone(zoneBytes); !s)
+	{
+		return fail("the game's loaders do not accept the zone: " + s.message);
+	}
+	if (!zoneOut.empty())
+	{
+		z::write_file(zoneOut, zoneBytes);
+	}
+	if (const Status s = z::write_fastfile(out, zoneBytes, linker.key()); !s)
+	{
+		return fail(s.message);
+	}
+	std::printf("wrote %s: %zu assets, zone %zu bytes\n", out.string().c_str(), linker.editor().asset_count(), zoneBytes.size());
+	return 0;
+}
