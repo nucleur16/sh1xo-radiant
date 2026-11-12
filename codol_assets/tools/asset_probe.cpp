@@ -302,6 +302,74 @@ namespace
 
 namespace
 {
+	// every surface that is in a zone: the XSurface fields the model compiler has to fill
+	int surfs(const fs::path& folder, const ClientKey& key, const fs::path& out)
+	{
+		std::FILE* f = std::fopen(out.string().c_str(), "wb");
+		if (!f)
+		{
+			return 1;
+		}
+		std::fprintf(f, "zone\tmodel\tbones\tlod\tsurf\ttileMode\tdeformed\tflags\tunk3\tverts\ttris\tbaseTri\tbaseVert\tinfo\tblend\tunk36\tlists\tunk48\tpartBits\ttrees\tlistsContiguous\ttrisInLists\tbinormal\tsurfsUnk10\tsurfsUnk44\n");
+		std::set<std::string> seen;
+		for (const fs::path& ff : zones_of(folder))
+		{
+			Zone zone;
+			if (!zone.open(ff, key))
+			{
+				continue;
+			}
+			for (const AssetRecord& r : zone.all_assets())
+			{
+				if (r.type != c1::ASSET_TYPE_XMODEL || zone.reference(r.header))
+				{
+					continue;
+				}
+				ModelView v;
+				if (!read_model(zone, r.header, v, true) || v.isReference || !seen.insert(std::string(v.name)).second)
+				{
+					continue;
+				}
+				for (std::size_t l = 0; l < v.lods.size(); l++)
+				{
+					const ModelSurfsView& ms = v.lods[l].surfs;
+					for (std::size_t s = 0; s < ms.surfaces.size(); s++)
+					{
+						const SurfaceView& sv = ms.surfaces[s];
+						const auto lists = sv.rigid_lists();
+						std::uint32_t trees = 0, vsum = 0, tsum = 0;
+						bool contiguous = true;
+						for (std::size_t k = 0; k < lists.size(); k++)
+						{
+							c1::XRigidVertList raw;
+							std::memcpy(&raw, sv.rigidBytes.data() + k * sizeof(raw), sizeof(raw));
+							trees += raw.collisionTree ? 1 : 0;
+							contiguous = contiguous && lists[k].triOffset == tsum;
+							vsum += lists[k].vertCount;
+							tsum += lists[k].triCount;
+						}
+						int plus = 0, minus = 0, other = 0;
+						for (const SurfaceVertex& vert : sv.vertices())
+						{
+							plus += vert.binormalSign == 1.0f ? 1 : 0;
+							minus += vert.binormalSign == -1.0f ? 1 : 0;
+							other += vert.binormalSign != 1.0f && vert.binormalSign != -1.0f ? 1 : 0;
+						}
+						std::fprintf(f, "%s\t%.*s\t%u\t%zu\t%zu\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%d,%d,%d,%d\t%d\t%02X%02X%02X%02X\t%u\t%02X%02X%02X%02X\t%08X\t%u\t%d\t%d\t%d/%d/%d\t%02X%02X\t%02X%02X%02X%02X\n",
+							ff.stem().string().c_str(), static_cast<int>(v.name.size()), v.name.data(), v.raw.numBones, l, s, sv.raw.tileMode, sv.raw.deformed, sv.raw.flags,
+							sv.raw._unk3, sv.vertCount, sv.triCount, sv.raw.baseTriIndex, sv.raw.baseVertIndex, sv.raw.vertInfoCount[0], sv.raw.vertInfoCount[1],
+							sv.raw.vertInfoCount[2], sv.raw.vertInfoCount[3], sv.raw.vertsBlend ? 1 : 0, sv.raw._unk36[0], sv.raw._unk36[1], sv.raw._unk36[2], sv.raw._unk36[3],
+							sv.raw.vertListCount, sv.raw._unk48[0], sv.raw._unk48[1], sv.raw._unk48[2], sv.raw._unk48[3], sv.raw.partBits[0], trees, contiguous ? 1 : 0,
+							vsum == sv.vertCount && tsum == sv.triCount ? 1 : 0, plus, minus, other, ms.raw._unk10[0], ms.raw._unk10[1], ms.raw._unk44[0], ms.raw._unk44[1],
+							ms.raw._unk44[2], ms.raw._unk44[3]);
+					}
+				}
+			}
+		}
+		std::fclose(f);
+		return 0;
+	}
+
 	int iwis(const fs::path& install, const fs::path& exe, const fs::path& out)
 	{
 		namespace r = codol::render;
@@ -371,6 +439,10 @@ int main(const int argc, char** argv)
 	if (command == "materials")
 	{
 		return materials(argv[2], key, argv[4]);
+	}
+	if (command == "surfs")
+	{
+		return surfs(argv[2], key, argv[4]);
 	}
 	if (command == "models")
 	{

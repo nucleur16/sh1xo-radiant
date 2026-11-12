@@ -5,6 +5,10 @@
 //   codol_asset_verify image-roundtrip <install> <C1.exe> <use> <image> ..     shipped image -> source -> compile -> IWI ->
 //                                                                              codol_render; PSNR per level
 //   codol_asset_verify image-file <file> <use> <out.iwi> [<out.png>]           a source file through the compiler
+//   codol_asset_verify material-roundtrip <install> <C1.exe> <library cache> [<every n-th>] [<dump dir>]
+//                                                 shipped material -> definition text -> compile; match rate per field
+
+#include "verify.hpp"
 
 #include "codol_assets/image.hpp"
 
@@ -14,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -249,6 +254,10 @@ int main(const int argc, char** argv)
 	{
 		Archives archives;
 		return archives.open(argv[2], argv[3]) ? image_roundtrip(archives, use, std::vector<std::string>(argv + 5, argv + argc)) : 1;
+	}
+	if (command == "material-roundtrip" && argc >= 5)
+	{
+		return material_roundtrip(argv[2], argv[3], argv[4], argc > 5 ? std::max(1, std::atoi(argv[5])) : 1, argc > 6 ? argv[6] : "");
 	}
 	if (command == "image-file" && argc >= 5 && parse_use(argv[3], use))
 	{

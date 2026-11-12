@@ -781,7 +781,9 @@ namespace codol::assets
 		header.width = image.width;
 		header.height = image.height;
 		header.depth = 1;
-		header.delayLoad = image.streamed ? 2 : 0;
+		// 2 in 80 % of the streamed images and in the inline images that materials use ( $identitynormalmap of
+		// code_post_gfx_mp, $white of the map zones, the pad icons ); 0 only in $white of the default zone, lightmaps ..
+		header.delayLoad = 2;
 		header.name = c1::ZPTR_INLINE;
 		zone::ZoneNewPiece piece;
 		piece.bytes.assign(reinterpret_cast<const std::uint8_t*>(&header), reinterpret_cast<const std::uint8_t*>(&header) + sizeof(header));
