@@ -116,6 +116,7 @@ namespace codol::bsp
 		bool collides = true;			// has a cbrush_t
 		bool opaque = false;			// structural and solid: blocks sight ( bsp, csg, flood fill )
 		int clip_index = -1;			// cbrush_t index
+		int patch = -1;				// >= 0: the collision of a triangle of world::patches[ patch ], not a brush of the map
 	};
 
 	struct map_entity
@@ -130,6 +131,14 @@ namespace codol::bsp
 
 		std::string_view value(std::string_view key, std::string_view fallback = {}) const;
 		void set(std::string_view key, std::string_view text);
+	};
+
+	// a patch as its tessellation ( codol_edit build_patch_mesh )
+	struct map_patch
+	{
+		std::string material;
+		std::vector<edit::mesh_vertex> vertices;
+		std::vector<std::uint32_t> indices;		// counter clockwise from the visible side
 	};
 
 	struct map_light
@@ -159,6 +168,7 @@ namespace codol::bsp
 		std::string bsp_name;			// maps/mp/mp_x.d3dbsp
 		std::vector<map_entity> entities;	// [0] the worldspawn
 		std::vector<map_brush> brushes;
+		std::vector<map_patch> patches;
 		std::vector<map_light> lights;	// [0] none, [1] the sun, then the light entities
 		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed
 		std::vector<map_light> bake_lights;	// the light entities: baked into lightmaps and light grid

@@ -28,6 +28,74 @@ namespace codol::bsp
 		std::map<std::string, int> material_index;
 		std::set<std::string> missing;
 		std::vector<pending_face> faces;
+		const auto material_of = [&](const std::string& map_name)
+		{
+			const std::string name = "wc/" + map_name;
+			if (const auto it = material_index.find(name); it != material_index.end())
+			{
+				return it->second;
+			}
+			const material_desc& desc = ctx.importer.describe(name);
+			if (!desc.ref.valid())
+			{
+				if (missing.insert(name).second)
+				{
+					ctx.rep.warnings.push_back("render: material '" + name + "' is not drawn: " + desc.why);
+				}
+				material_index.emplace(name, -1);
+				return -1;
+			}
+			render_material m;
+			m.name = name;
+			m.ref = desc.ref;
+			m.desc = &desc;
+			m.draw_class = desc.sort_key >= static_cast<int>(gfx::SORT_KEY_LIT_DECAL) && !desc.sky ? 1 : 0;
+			const int index = static_cast<int>(rw.materials.size());
+			rw.materials.push_back(std::move(m));
+			material_index.emplace(name, index);
+			return index;
+		};
+		const auto grid_cell = [](const double v) { return static_cast<std::int64_t>(std::floor(v / SURFACE_GRID)) & 0xFFFFF; };
+		// the cell a point is in, by the node stream the game walks
+		const auto cell_of = [&](const vec3& p)
+		{
+			if (!vis.built)
+			{
+				return 0;
+			}
+			std::size_t at = 0;
+			const int cells = static_cast<int>(vis.cells.size());
+			while (at < vis.cell_nodes.size())
+			{
+				const int value = vis.cell_nodes[at];
+				if (value <= cells)
+				{
+					return std::max(value - 1, 0);
+				}
+				const c1::cplane_s& plane = w.planes.planes[static_cast<std::size_t>(value - cells - 1)];
+				const double d = plane.normal[0] * p.x + plane.normal[1] * p.y + plane.normal[2] * p.z - plane.dist;
+				at = d > 0 ? at + 2 : at + vis.cell_nodes[at + 1];
+			}
+			return 0;
+		};
+		// patches: every triangle of the tessellation is a face; "brush" -1 - patch, "face" the triangle
+		for (std::size_t pi = 0; pi < w.patches.size(); pi++)
+		{
+			const map_patch& patch = w.patches[pi];
+			const int index = is_tool_material(patch.material) ? -1 : material_of(patch.material);
+			for (std::size_t t = 0; index >= 0 && t + 2 < patch.indices.size(); t += 3)
+			{
+				vec3 centre{};
+				for (int k = 0; k < 3; k++)
+				{
+					const edit::mesh_vertex& v = patch.vertices[patch.indices[t + static_cast<std::size_t>(k)]];
+					centre = centre + vec3{ v.position[0], v.position[1], v.position[2] } * (1.0 / 3.0);
+				}
+				const edit::mesh_vertex& first = patch.vertices[patch.indices[t]];
+				const int c = cell_of(centre + vec3{ first.normal[0], first.normal[1], first.normal[2] } * 2.0);
+				faces.push_back({ -1 - static_cast<int>(pi), static_cast<int>(t / 3), index, 0, c, grid_cell(centre.x) | (grid_cell(centre.y) << 20) | (grid_cell(centre.z) << 40) });
+			}
+		}
 		for (std::size_t bi = 0; bi < w.brushes.size(); bi++)
 		{
 			map_brush& brush = w.brushes[bi];
@@ -39,33 +107,7 @@ namespace codol::bsp
 				{
 					continue;
 				}
-				const std::string name = "wc/" + face.material;
-				int index;
-				if (const auto it = material_index.find(name); it != material_index.end())
-				{
-					index = it->second;
-				}
-				else
-				{
-					const material_desc& desc = ctx.importer.describe(name);
-					if (!desc.ref.valid())
-					{
-						if (missing.insert(name).second)
-						{
-							ctx.rep.warnings.push_back("render: material '" + name + "' is not drawn: " + desc.why);
-						}
-						material_index.emplace(name, -1);
-						continue;
-					}
-					render_material m;
-					m.name = name;
-					m.ref = desc.ref;
-					m.desc = &desc;
-					m.draw_class = desc.sort_key >= static_cast<int>(gfx::SORT_KEY_LIT_DECAL) && !desc.sky ? 1 : 0;
-					index = static_cast<int>(rw.materials.size());
-					rw.materials.push_back(std::move(m));
-					material_index.emplace(name, index);
-				}
+				const int index = material_of(face.material);
 				if (index < 0)
 				{
 					continue;
@@ -77,12 +119,12 @@ namespace codol::bsp
 					centre = centre + p;
 				}
 				centre = centre * (1.0 / static_cast<double>(face.winding.size()));
-				const auto cell = [](const double v) { return static_cast<std::int64_t>(std::floor(v / SURFACE_GRID)) & 0xFFFFF; };
+
 				// a face that is seen from several cells is drawn by each of them ( a surface belongs to one cell )
 				static const std::vector<int> first_cell{ 0 };
 				for (const int c : vis.built && brush.model == 0 && !face.cells.empty() ? face.cells : first_cell)
 				{
-					faces.push_back({ static_cast<int>(bi), static_cast<int>(fi), index, brush.model, c, cell(centre.x) | (cell(centre.y) << 20) | (cell(centre.z) << 40) });
+					faces.push_back({ static_cast<int>(bi), static_cast<int>(fi), index, brush.model, c, grid_cell(centre.x) | (grid_cell(centre.y) << 20) | (grid_cell(centre.z) << 40) });
 				}
 			}
 		}
@@ -114,12 +156,52 @@ namespace codol::bsp
 			for (; at < faces.size() && faces[at].model == first.model && faces[at].material == first.material && faces[at].cell == first.cell
 				&& faces[at].group == first.group; at++)
 			{
-				const map_brush& brush = w.brushes[static_cast<std::size_t>(faces[at].brush)];
-				const map_face& face = brush.faces[static_cast<std::size_t>(faces[at].face)];
-				if (surface.vertices.size() + face.winding.size() > SURFACE_VERTICES)
+				if (surface.vertices.size() + 64 > SURFACE_VERTICES)
 				{
 					break;
 				}
+				if (faces[at].brush < 0)
+				{
+					// a triangle of a patch
+					const map_patch& patch = w.patches[static_cast<std::size_t>(-1 - faces[at].brush)];
+					render_face rf;
+					rf.first_vertex = static_cast<std::uint32_t>(surface.vertices.size());
+					rf.vertex_count = 3;
+					rf.brush = faces[at].brush;
+					rf.face = faces[at].face;
+					for (int k = 0; k < 3; k++)
+					{
+						const edit::mesh_vertex& in = patch.vertices[patch.indices[static_cast<std::size_t>(faces[at].face) * 3 + static_cast<std::size_t>(k)]];
+						c1::GfxWorldVertex v{};
+						std::memcpy(v.xyz, in.position, sizeof(v.xyz));
+						v.binormalSign = 1.0f;
+						v.color = static_cast<std::uint32_t>(in.color[2]) | (static_cast<std::uint32_t>(in.color[1]) << 8) | (static_cast<std::uint32_t>(in.color[0]) << 16)
+							| (static_cast<std::uint32_t>(in.color[3]) << 24);
+						// the mesh has its coordinates in units of a 256 texel texture
+						v.texCoord[0] = in.uv[0] * 256.0f / static_cast<float>(material.desc->width);
+						v.texCoord[1] = in.uv[1] * 256.0f / static_cast<float>(material.desc->height);
+						v.lmapCoord[0] = v.lmapCoord[1] = 0.5f;
+						const vec3 n{ in.normal[0], in.normal[1], in.normal[2] };
+						vec3 t = cross(std::fabs(n.z) < 0.99 ? vec3{ 0, 0, 1 } : vec3{ 0, 1, 0 }, n);
+						t = t * (1.0 / std::max(length(t), 1e-9));
+						const float tangent[3] = { static_cast<float>(t.x), static_cast<float>(t.y), static_cast<float>(t.z) };
+						v.normal = pack_unit_vector(in.normal);
+						v.tangent = pack_unit_vector(tangent);
+						if (k == 0)
+						{
+							std::memcpy(rf.normal, in.normal, sizeof(rf.normal));
+						}
+						surface.vertices.push_back(v);
+						surface.box.add(v.xyz);
+					}
+					surface.indices.push_back(static_cast<std::uint16_t>(rf.first_vertex));
+					surface.indices.push_back(static_cast<std::uint16_t>(rf.first_vertex + 2));
+					surface.indices.push_back(static_cast<std::uint16_t>(rf.first_vertex + 1));
+					surface.faces.push_back(rf);
+					continue;
+				}
+				const map_brush& brush = w.brushes[static_cast<std::size_t>(faces[at].brush)];
+				const map_face& face = brush.faces[static_cast<std::size_t>(faces[at].face)];
 				vec3 u_axis, v_axis;
 				edit::face_texture_axes(face.plane.normal, face.texture.rotation, u_axis, v_axis);
 				const float normal[3] = { static_cast<float>(face.plane.normal.x), static_cast<float>(face.plane.normal.y), static_cast<float>(face.plane.normal.z) };

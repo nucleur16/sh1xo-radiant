@@ -202,6 +202,76 @@ namespace codol::bsp
 				if (doc.kind(child) == edit::object_kind::patch)
 				{
 					rep.patches++;
+					// a patch ( terrain mesh or curve ): its tessellation is drawn, and every triangle gets a thin
+					// brush under it to collide with
+					edit::mesh mesh;
+					const edit::patch* source_patch = doc.find_patch(child);
+					if (!out.world || !source_patch || !doc.build_mesh(child, mesh, 4) || mesh.indices.size() < 3)
+					{
+						if (!out.world)
+						{
+							rep.warnings.push_back(format("patch %u belongs to a brush entity; patches are only compiled in the worldspawn", child));
+						}
+						continue;
+					}
+					map_patch patch;
+					patch.material = source_patch->material;
+					if (patch.material.rfind("wc/", 0) == 0)
+					{
+						patch.material.erase(0, 3);
+					}
+					patch.vertices = mesh.vertices;
+					patch.indices = mesh.indices;
+					const int patch_index = static_cast<int>(w.patches.size());
+					for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+					{
+						vec3 corner[3];
+						for (int k = 0; k < 3; k++)
+						{
+							const edit::mesh_vertex& v = mesh.vertices[mesh.indices[t + static_cast<std::size_t>(k)]];
+							corner[k] = { v.position[0], v.position[1], v.position[2] };
+						}
+						vec3 normal = cross(corner[1] - corner[0], corner[2] - corner[0]);
+						const double area = length(normal);
+						if (area < 1.0)
+						{
+							continue;
+						}
+						normal = normal * (1.0 / area);
+						const vec3 points[6] = { corner[0], corner[1], corner[2], corner[0] - normal * 8.0, corner[1] - normal * 8.0, corner[2] - normal * 8.0 };
+						std::vector<edit::plane> planes;
+						std::vector<std::vector<int>> hull;
+						if (!edit::convex_hull(points, planes, hull))
+						{
+							continue;
+						}
+						map_brush b;
+						b.entity = entity_index;
+						b.patch = patch_index;
+						b.detail = true;
+						b.corners.assign(points, points + 6);
+						for (const vec3& p : points)
+						{
+							b.box.add(p);
+						}
+						for (std::size_t f = 0; f < planes.size(); f++)
+						{
+							map_face face;
+							face.plane = planes[f];
+							face.material = patch.material;
+							face.texture.material = patch.material;
+							face.corner = hull[f];
+							for (const int v : hull[f])
+							{
+								face.winding.push_back(points[v]);
+							}
+							face.visible = false;		// the patch is drawn, not the brush
+							b.faces.push_back(std::move(face));
+						}
+						out.brushes.push_back(static_cast<int>(w.brushes.size()));
+						w.brushes.push_back(std::move(b));
+					}
+					w.patches.push_back(std::move(patch));
 					continue;
 				}
 				const edit::brush* source = doc.find_brush(child);
@@ -276,7 +346,27 @@ namespace codol::bsp
 				}
 				out.set("model", format("*%d", out.model));
 			}
-			if (out.classname == "misc_model" || out.classname == "misc_prefab" || out.classname == "reflection_probe" || out.classname == "info_null")
+			if (out.classname == "misc_model")
+			{
+				// Not compiled into the world as a static model ( that needs the xmodel carried into the zone, cells,
+				// collision ): the model becomes a script_model entity, which the game spawns by name from the
+				// zones it has loaded. Drawn and lit by the light grid; no collision, no baked shadow.
+				// An entity each: more than a handful would use up the game's entities, so the rest is left out.
+				constexpr std::size_t MODEL_ENTITIES = 128;
+				rep.static_models++;
+				if (rep.static_models > MODEL_ENTITIES)
+				{
+					if (rep.static_models == MODEL_ENTITIES + 1)
+					{
+						rep.warnings.push_back(format("misc_model: only the first %zu are kept ( as script_model entities ); static models are not compiled into the world",
+							MODEL_ENTITIES));
+					}
+					continue;
+				}
+				out.classname = "script_model";
+				out.set("classname", "script_model");
+			}
+			if (out.classname == "misc_prefab" || out.classname == "reflection_probe" || out.classname == "info_null")
 			{
 				out.in_ents = false;
 			}

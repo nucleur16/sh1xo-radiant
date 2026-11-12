@@ -10,6 +10,9 @@ public class W32shot {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT p);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr h, uint f);
 }
 '@
 [void][W32shot]::SetProcessDPIAware()
@@ -22,7 +25,13 @@ if (-not $Full) {
     $r = New-Object W32shot+RECT; [void][W32shot]::GetClientRect($p.MainWindowHandle, [ref]$r)
     $pt = New-Object W32shot+POINT; [void][W32shot]::ClientToScreen($p.MainWindowHandle, [ref]$pt)
     if ($r.R -gt 0) { $x = $pt.X; $y = $pt.Y; $w = $r.R; $h = $r.B }
-  }
+    # only the game is captured: the window is brought to the front, and nothing is saved while another window covers it
+    [void][W32shot]::SetForegroundWindow($p.MainWindowHandle); Start-Sleep -Milliseconds 400
+    foreach ($f in @(@(0.5, 0.5), @(0.1, 0.1), @(0.9, 0.1), @(0.1, 0.9), @(0.9, 0.9))) {
+      $q = New-Object W32shot+POINT; $q.X = [int]($x + $w * $f[0]); $q.Y = [int]($y + $h * $f[1])
+      if ([W32shot]::GetAncestor([W32shot]::WindowFromPoint($q), 2) -ne $p.MainWindowHandle) { 'NOT CAPTURED: another window covers the game window'; return }
+    }
+  } else { 'NOT CAPTURED: no game window'; return }
 }
 $bmp = New-Object System.Drawing.Bitmap $w, $h
 $g = [System.Drawing.Graphics]::FromImage($bmp)

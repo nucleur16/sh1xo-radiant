@@ -929,7 +929,7 @@ namespace codol::bsp
 		// ---- faces: hidden ones, and the cells the others are seen from
 		for (map_brush& b : w.brushes)
 		{
-			if (b.model != 0)
+			if (b.model != 0 || b.patch >= 0)
 			{
 				continue;
 			}

@@ -189,4 +189,134 @@ namespace codol::bsp::test
 		path_nodes(doc, { 320, -320, 0 }, { 960, 320, 0 }, 128, 16);
 		path_nodes(doc, { -256, 0, 0 }, { 256, 0, 0 }, 128, 16);
 	}
+
+	// M5: two rooms with one wall between them. The doorway holds a portal brush; a door ( script_brushmodel ) stands
+	// open beside it, a trigger_multiple fills a corner, a terrain patch is a platform in room 1, the ceiling of room 2
+	// is sky, and there are a misc_model, a spot light and a reflection probe.
+	inline void make_content(edit::document& doc, const materials& m = {})
+	{
+		doc.new_map();
+		world_keys(doc);
+		const auto box = [&](const vec3& mins, const vec3& maxs, const std::string& material) { return doc.create_box(mins, maxs, material); };
+		box({ -528, -272, -16 }, { 544, 272, 0 }, m.floor);
+		box({ -528, -272, 192 }, { 16, 272, 208 }, m.ceiling);
+		wall(doc, { 16, -272, 192 }, { 544, 272, 208 }, { 0, 0, -1 }, m.sky);
+		box({ -528, -272, 0 }, { -512, 272, 192 }, m.wall);
+		box({ 528, -272, 0 }, { 544, 272, 192 }, m.wall);
+		box({ -512, 256, 0 }, { 528, 272, 192 }, m.wall);
+		box({ -512, -272, 0 }, { 528, -256, 192 }, m.wall);
+		// the wall between the rooms, with a doorway 96 wide and 112 high
+		box({ 0, -256, 0 }, { 16, -48, 192 }, m.other);
+		box({ 0, 48, 0 }, { 16, 256, 192 }, m.other);
+		box({ 0, -48, 112 }, { 16, 48, 192 }, m.other);
+		// the portal brush in the doorway: one face is the portal
+		wall(doc, { 4, -48, 0 }, { 12, 48, 112 }, { 1, 0, 0 }, "portal");
+		// a door, open
+		{
+			const edit::object_id door = box({ 20, 52, 0 }, { 28, 148, 112 }, m.crate);
+			doc.deselect_all();
+			doc.select(door);
+			const std::vector<std::pair<std::string, std::string>> keys = { { "targetname", "test_door" } };
+			doc.create_brush_entity("script_brushmodel", keys);
+			doc.deselect_all();
+		}
+		// a trigger
+		{
+			const edit::object_id trigger = box({ 400, -240, 0 }, { 512, -128, 96 }, "trigger");
+			doc.deselect_all();
+			doc.select(trigger);
+			const std::vector<std::pair<std::string, std::string>> keys = { { "targetname", "test_trigger" } };
+			doc.create_brush_entity("trigger_multiple", keys);
+			doc.deselect_all();
+		}
+		// a terrain patch: a platform 24 above the floor of room 1
+		doc.create_terrain_patch({ -400, -150, 24 }, { -208, 42, 24 }, 5, 5, 2, m.crate);
+		doc.deselect_all();
+		const std::vector<edit::object_id> crate = { box({ 200, 100, 0 }, { 264, 164, 64 }, m.crate) };
+		doc.select(crate);
+		doc.set_detail(true);
+		doc.deselect_all();
+		game_entities(doc, { -256, 0, 0 }, 180, 0);
+		game_entities(doc, { 272, 0, 0 }, 180, 0);
+		airdrop_prefab(doc, { -470, -230, 0 });
+		path_nodes(doc, { -448, -192, 0 }, { -64, 192, 0 }, 128, 16);
+		path_nodes(doc, { 80, -192, 0 }, { 464, 192, 0 }, 128, 16);
+		const std::vector<std::pair<std::string, std::string>> model = { { "model", "com_plasticcase_green_big_us_dirt" }, { "angles", "0 30 0" } };
+		doc.create_point_entity("misc_model", { -100, 150, 0 }, model);
+		const std::vector<std::pair<std::string, std::string>> spot = { { "_color", "0.6 0.8 1" }, { "radius", "500" }, { "intensity", "2" }, { "fov_outer", "70" },
+			{ "fov_inner", "40" }, { "angles", "80 0 0" } };
+		doc.create_point_entity("light", { -256, 0, 180 }, spot);
+		doc.create_point_entity("reflection_probe", { -256, 0, 96 });
+		doc.create_point_entity("reflection_probe", { 272, 0, 96 });
+	}
+
+	// M6: n x n rooms of 512 x 512, every room joined to its neighbours by doorways, crates in each. All brushes are
+	// textured on all sides.
+	inline void make_big(edit::document& doc, const int n, const materials& m = {})
+	{
+		doc.new_map();
+		world_keys(doc);
+		const auto box = [&](const vec3& mins, const vec3& maxs, const std::string& material) { return doc.create_box(mins, maxs, material); };
+		const double size = 512, t = 16, height = 192, half = n * size * 0.5;
+		std::vector<edit::object_id> crates;
+		for (int i = 0; i <= n; i++)
+		{
+			for (int j = 0; j < n; j++)
+			{
+				// walls along y at x = i ( between room i - 1 and i ), and along x at y = i: with a doorway unless on the outside
+				const double at = -half + i * size, lo = -half + j * size;
+				const bool outer = i == 0 || i == n;
+				if (outer)
+				{
+					box({ at - t / 2, lo, 0 }, { at + t / 2, lo + size, height }, m.wall);
+					box({ lo, at - t / 2, 0 }, { lo + size, at + t / 2, height }, m.wall);
+					continue;
+				}
+				box({ at - t / 2, lo, 0 }, { at + t / 2, lo + 192, height }, m.other);
+				box({ at - t / 2, lo + 320, 0 }, { at + t / 2, lo + size, height }, m.other);
+				box({ at - t / 2, lo + 192, 112 }, { at + t / 2, lo + 320, height }, m.other);
+				box({ lo, at - t / 2, 0 }, { lo + 192, at + t / 2, height }, m.wall);
+				box({ lo + 320, at - t / 2, 0 }, { lo + size, at + t / 2, height }, m.wall);
+				box({ lo + 192, at - t / 2, 112 }, { lo + 320, at + t / 2, height }, m.wall);
+			}
+		}
+		for (int i = 0; i < n; i++)
+		{
+			for (int j = 0; j < n; j++)
+			{
+				const double x = -half + i * size, y = -half + j * size;
+				box({ x, y, -t }, { x + size, y + size, 0 }, m.floor);
+				if ((i + j) % 3 == 0)
+				{
+					wall(doc, { x, y, height }, { x + size, y + size, height + t }, { 0, 0, -1 }, m.sky);
+				}
+				else
+				{
+					box({ x, y, height }, { x + size, y + size, height + t }, m.ceiling);
+				}
+				crates.push_back(box({ x + 96, y + 96, 0 }, { x + 160, y + 160, 64 }, m.crate));
+				crates.push_back(box({ x + 352, y + 380, 0 }, { x + 416, y + 444, 48 }, m.crate));
+				if ((i * 7 + j * 3) % 5 == 0)
+				{
+					spawn(doc, "mp_dm_spawn", { x + 256, y + 256, 8 }, (i * 90 + j * 45) % 360);
+					spawn(doc, "mp_tdm_spawn", { x + 256, y + 200, 8 }, (i * 45 + j * 90) % 360);
+				}
+				doc.create_point_entity("node_pathnode", { x + 256, y + 256, 16 });
+				doc.create_point_entity("node_pathnode", { x + 256, y + 16, 16 });
+				doc.create_point_entity("node_pathnode", { x + 16, y + 256, 16 });
+			}
+		}
+		// the outside of the grid: the outer walls are half inside it, close the gap around the floors and ceilings
+		box({ -half - t, -half - t, -t }, { half + t, -half, height + t }, m.wall);
+		box({ -half - t, half, -t }, { half + t, half + t, height + t }, m.wall);
+		box({ -half - t, -half, -t }, { -half, half, height + t }, m.wall);
+		box({ half, -half, -t }, { half + t, half, height + t }, m.wall);
+		doc.select(crates);
+		doc.set_detail(true);
+		doc.deselect_all();
+		spawn(doc, "mp_tdm_spawn_allies_start", { -half + 200, -half + 256, 8 }, 0);
+		spawn(doc, "mp_tdm_spawn_axis_start", { half - 200, half - 256, 8 }, 180);
+		spawn(doc, "mp_global_intermission", { 0, 40, 120 }, 90);
+		airdrop_prefab(doc, { -half + 60, -half + 40, 0 });
+	}
 }

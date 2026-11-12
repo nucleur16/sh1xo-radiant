@@ -469,24 +469,39 @@ namespace codol::bsp
 				}
 				for (const render_face& rf : surface.faces)
 				{
-					if (rf.brush < 0 || chart_of.count({ rf.brush, rf.face }))
+					if (chart_of.count({ rf.brush, rf.face }))
 					{
 						continue;
 					}
-					const map_face& face = w.brushes[static_cast<std::size_t>(rf.brush)].faces[static_cast<std::size_t>(rf.face)];
+					// the face as the surface has it: a brush face, or a triangle of a patch
+					std::vector<vec3> polygon;
+					for (std::uint32_t k = 0; k < rf.vertex_count; k++)
+					{
+						const c1::GfxWorldVertex& v = surface.vertices[rf.first_vertex + k];
+						polygon.push_back({ v.xyz[0], v.xyz[1], v.xyz[2] });
+					}
 					chart c;
 					c.brush = rf.brush;
 					c.face = rf.face;
-					c.normal = face.plane.normal;
+					c.normal = cross(polygon[1] - polygon[0], polygon[2] - polygon[0]);
+					if (length(c.normal) < 1e-6)
+					{
+						continue;
+					}
+					c.normal = c.normal * (1.0 / length(c.normal));
+					if (dot(c.normal, vec3{ rf.normal[0], rf.normal[1], rf.normal[2] }) < 0)
+					{
+						c.normal = c.normal * -1.0;
+					}
 					vec3 v_axis;
 					edit::face_texture_axes(c.normal, 0.0, c.u_axis, v_axis);
 					c.u_axis = c.u_axis - c.normal * dot(c.u_axis, c.normal);
 					c.u_axis = c.u_axis * (1.0 / std::max(length(c.u_axis), 1e-9));
 					c.v_axis = cross(c.normal, c.u_axis);
-					c.origin = c.normal * face.plane.dist;
+					c.origin = c.normal * dot(c.normal, polygon[0]);
 					c.u_min = c.v_min = 1e30;
 					c.u_max = c.v_max = -1e30;
-					for (const vec3& p : face.winding)
+					for (const vec3& p : polygon)
 					{
 						const double u = dot(p - c.origin, c.u_axis), v = dot(p - c.origin, c.v_axis);
 						c.u_min = std::min(c.u_min, u);
@@ -514,6 +529,28 @@ namespace codol::bsp
 			}
 			ctx.rep.notes.push_back(format("light: %zu faces in the lightmap, one luxel is %.1f units; %zu light entities, %d sky directions", charts.size(), luxel,
 				w.bake_lights.size(), direction_count));
+			// self check: no two charts share a luxel
+			{
+				std::vector<std::uint8_t> used(static_cast<std::size_t>(LM_W) * LM_H, 0);
+				bool overlap = false;
+				for (const chart& c : charts)
+				{
+					for (int y = c.y; y < c.y + c.h && !overlap; y++)
+					{
+						for (int x = c.x; x < c.x + c.w; x++)
+						{
+							std::uint8_t& u = used[static_cast<std::size_t>(y) * LM_W + static_cast<std::size_t>(x)];
+							overlap = overlap || u;
+							u = 1;
+						}
+					}
+				}
+				if (overlap)
+				{
+					throw compile_error("light: internal error, lightmap charts overlap");
+				}
+				ctx.rep.notes.push_back(format("light: the %zu charts do not overlap ( checked )", charts.size()));
+			}
 
 			render_lightmap lightmap;
 			lightmap.primary.assign(static_cast<std::size_t>(LM_W) * 2 * LM_H * 2, 0);
@@ -585,6 +622,8 @@ namespace codol::bsp
 				}
 			}
 			rw.lightmaps.push_back(std::move(lightmap));
+			ctx.rep.notes.push_back(format("light: the sun reaches %zu of %zu faces", static_cast<std::size_t>(std::count(sun_lit.begin(), sun_lit.end(), std::uint8_t{ 1 })),
+				charts.size()));
 
 			// lightmap coordinates of the vertices
 			for (render_surface& surface : rw.surfaces)
@@ -622,11 +661,57 @@ namespace codol::bsp
 			GfxLightGrid& h = grid.header;
 			h.hasLightRegions = 0;
 			h.lastSunPrimaryLightIndex = 1;
+			// The grid covers the map; a map whose brushes reach far beyond where anything happens ( sky boxes, clip
+			// walls ) gets a grid around its entities, and at most GRID_SAMPLES points are sampled.
+			constexpr double GRID_SAMPLES = 3.0e6;
+			box3 region = rw.bounds;
+			const auto samples_of = [](const box3& b)
+			{
+				return (static_cast<double>(b.maxs[0] - b.mins[0]) / 32 + 1) * (static_cast<double>(b.maxs[1] - b.mins[1]) / 32 + 1)
+					* (static_cast<double>(b.maxs[2] - b.mins[2]) / 64 + 1);
+			};
+			if (samples_of(region) > GRID_SAMPLES)
+			{
+				// where the game takes place: spawn points and path nodes, else every point entity
+				box3 play;
+				for (int pass = 0; pass < 2 && !play.valid(); pass++)
+				{
+					for (const map_entity& e : w.entities)
+					{
+						if (!e.world && e.brushes.empty() && !e.value("origin").empty()
+							&& (pass == 1 || e.classname.rfind("mp_", 0) == 0 || e.classname.rfind("node_", 0) == 0))
+						{
+							play.add(e.origin);
+						}
+					}
+				}
+				if (play.valid())
+				{
+					play.expand(512.0f);
+					for (int k = 0; k < 3; k++)
+					{
+						region.mins[k] = std::max(region.mins[k], play.mins[k]);
+						region.maxs[k] = std::min(region.maxs[k], play.maxs[k]);
+					}
+				}
+				while (samples_of(region) > GRID_SAMPLES)
+				{
+					for (int k = 0; k < 3; k++)
+					{
+						const float trim = (region.maxs[k] - region.mins[k]) * 0.05f;
+						region.mins[k] += trim;
+						region.maxs[k] -= trim;
+					}
+				}
+				ctx.rep.warnings.push_back(format("light: the light grid does not cover the whole map ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ) but ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f )",
+					rw.bounds.mins[0], rw.bounds.mins[1], rw.bounds.mins[2], rw.bounds.maxs[0], rw.bounds.maxs[1], rw.bounds.maxs[2], region.mins[0], region.mins[1],
+					region.mins[2], region.maxs[0], region.maxs[1], region.maxs[2]));
+			}
 			int mins[3], maxs[3];
 			for (int k = 0; k < 3; k++)
 			{
-				mins[k] = grid_coord(rw.bounds.mins[k], k);
-				maxs[k] = grid_coord(rw.bounds.maxs[k], k);
+				mins[k] = grid_coord(region.mins[k], k);
+				maxs[k] = grid_coord(region.maxs[k], k);
 			}
 			maxs[2] = std::min(maxs[2], mins[2] + 250);
 			h.rowAxis = 0;
