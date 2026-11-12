@@ -152,6 +152,8 @@ namespace codol::bsp
 		zone_ref ref;					// the xmodel in the zone; !valid(): not found, the model is left out
 		box3 box;						// world box
 		bool collides = false;
+		float last_lod_dist = 0;		// of the xmodel
+		std::vector<vec3> triangles;	// LOD 0 placed in the world, 3 points per triangle: what casts the model's baked shadow
 	};
 
 	struct map_light
@@ -164,6 +166,15 @@ namespace codol::bsp
 		float cos_half_fov_outer = 0, cos_half_fov_inner = 0;
 		std::string def = "light_point_linear";
 		bool primary = true;
+	};
+
+	// an effect or a looping sound placed in the map ( script_fx / script_sound ): a line of the createfx script
+	struct map_fx
+	{
+		std::string fx;					// effect, as loadfx names it ( "fire/firelp_med_pm" ); empty: a sound
+		std::string alias;				// sound alias
+		float origin[3] = {}, angles[3] = { 270, 0, 0 };
+		float delay = -15;				// < 0: a one shot effect that starts with the map ( the createfx convention ), else looped every `delay` seconds
 	};
 
 	// clipMap / GfxWorld plane array ( one array, stored by the GfxWorld )
@@ -187,7 +198,10 @@ namespace codol::bsp
 		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed
 		std::vector<map_light> bake_lights;	// the light entities: baked into lightmaps and light grid
 		plane_pool planes;
-		box3 bounds;					// of all brushes of the world model
+		box3 bounds;					// of all brushes and patches of the world model
+		box3 patch_bounds;
+		std::vector<map_fx> fx;
+		float minimap_mins[2] = {}, minimap_maxs[2] = {};	// the square the minimap picture shows ( north = + y up )
 		int model_count = 1;
 		float sun_dir[3] = { 0.35f, 0.25f, 0.9f };		// towards the sun
 		float sun_color[3] = { 1.4f, 1.3f, 1.1f };
@@ -232,4 +246,6 @@ namespace codol::bsp
 	asset_builder build_clip_map(compile_context& ctx);
 	void resolve_refs(asset_builder& b, const world& w);
 	void validate_render(std::span<const std::uint8_t> zone_bytes, std::vector<std::string>& problems, std::string* summary);
+	// 32 bit .tga, rows from the top; pixels as b g r a
+	void write_tga(const std::filesystem::path& file, int width, int height, const std::vector<std::uint8_t>& bgra);
 }

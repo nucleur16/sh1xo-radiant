@@ -169,6 +169,7 @@ namespace codol::bsp
 	{
 		std::map<std::string, std::string, std::less<>> material_zone;		// material name -> fast file ( relative to the install )
 		std::map<std::string, std::string, std::less<>> model_zone;			// xmodel that is a top level asset -> fast file
+		std::map<std::string, std::string, std::less<>> nested_model_zone;	// xmodel nested in another asset ( a map's gfx_map ) -> fast file
 		std::map<std::string, clip_material_info, std::less<>> clip_materials;
 		std::map<std::string, std::string, std::less<>> image_zone;			// image with pixels in a zone -> fast file
 
@@ -183,6 +184,9 @@ namespace codol::bsp
 	{
 		float mid[3] = {}, half[3] = {}, radius = 0;	// its box, in model space
 		int coll_surfs = 0;							// > 0: it has collision
+		bool nested = false;							// written again from a model nested in another asset
+		float last_lod_dist = 0;						// draw distance of its last LOD ( 1000000: no limit )
+		std::vector<float> triangles;					// LOD 0 in model space, 9 floats per triangle ( light bake: shadows )
 	};
 
 	// what the compiler has to know about a world material
@@ -194,6 +198,12 @@ namespace codol::bsp
 		int sort_key = 4;
 		std::string techset;
 		bool sky = false;
+		bool alpha_test = false, blend = false;	// by the technique set's name ( wc_l_sm_t0.. / _b0.., unlit_blend .. )
+		// A brush with such a face hides nothing: alpha tested, or blended with a decal sort key ( 6 .. 13 ). Blended
+		// materials with other keys are left to the mapper's flags: shipped maps have them on whole walls
+		// ( wc/me_cinderblock_wall2_sh of mp_killhouse_sh: wc_l_sm_b0c0q0n0s0p0, sort 14 ).
+		bool see_through = false;
+		std::uint32_t surface_type_bits = 0;
 		zone_ref sky_image;				// the cube map of a sky material, when its pixels or header are in a zone
 		std::string sky_image_name;
 	};

@@ -79,7 +79,8 @@ namespace codol::bsp
 
 		struct builder
 		{
-			std::vector<clip_brush>& brushes;
+			const std::vector<box3>& boxes;		// of the items: the collision brushes, then the terrain partitions
+			const std::vector<std::int32_t>& contents;
 			std::vector<tree_node> nodes;
 			std::vector<tree_leaf> leafs;		// [0]: the empty leaf
 
@@ -100,7 +101,7 @@ namespace codol::bsp
 						std::vector<float> candidates;
 						for (const int b : list)
 						{
-							for (const float v : { brushes[static_cast<std::size_t>(b)].box.mins[axis], brushes[static_cast<std::size_t>(b)].box.maxs[axis] })
+							for (const float v : { boxes[static_cast<std::size_t>(b)].mins[axis], boxes[static_cast<std::size_t>(b)].maxs[axis] })
 							{
 								if (v > region.mins[axis] + 0.01f && v < region.maxs[axis] - 0.01f)
 								{
@@ -117,7 +118,7 @@ namespace codol::bsp
 							std::size_t front = 0, back = 0;
 							for (const int b : list)
 							{
-								const box3& box = brushes[static_cast<std::size_t>(b)].box;
+								const box3& box = boxes[static_cast<std::size_t>(b)];
 								front += box.maxs[axis] > dist;
 								back += box.mins[axis] < dist;
 							}
@@ -141,15 +142,15 @@ namespace codol::bsp
 					leaf.brushes = list;
 					for (const int b : list)
 					{
-						const clip_brush& brush = brushes[static_cast<std::size_t>(b)];
-						box3 part = brush.box;
+						const box3& item_box = boxes[static_cast<std::size_t>(b)];
+						box3 part = item_box;
 						for (int k = 0; k < 3; k++)
 						{
 							part.mins[k] = std::max(part.mins[k], region.mins[k]);
 							part.maxs[k] = std::min(part.maxs[k], region.maxs[k]);
 						}
 						leaf.box.add(part);
-						leaf.contents |= brush.contents;
+						leaf.contents |= contents[static_cast<std::size_t>(b)];
 					}
 					leaf.box.expand(LEAF_PAD);
 					leafs.push_back(std::move(leaf));
@@ -162,7 +163,7 @@ namespace codol::bsp
 				std::vector<int> front, back;
 				for (const int b : list)
 				{
-					const box3& box = brushes[static_cast<std::size_t>(b)].box;
+					const box3& box = boxes[static_cast<std::size_t>(b)];
 					if (box.maxs[best_axis] > best_dist)
 					{
 						front.push_back(b);
@@ -213,6 +214,17 @@ namespace codol::bsp
 				continue;
 			}
 			model.collides = desc.coll_surfs > 0;
+			model.last_lod_dist = desc.last_lod_dist;
+			for (std::size_t k = 0; k + 2 < desc.triangles.size(); k += 3)
+			{
+				vec3 p{ model.origin[0], model.origin[1], model.origin[2] };
+				for (int a = 0; a < 3; a++)
+				{
+					const double local = static_cast<double>(desc.triangles[k + static_cast<std::size_t>(a)]) * model.scale;
+					p = p + vec3{ model.axis[a][0], model.axis[a][1], model.axis[a][2] } * local;
+				}
+				model.triangles.push_back(p);
+			}
 			// the model's box, placed
 			for (int corner = 0; corner < 8; corner++)
 			{
@@ -241,7 +253,26 @@ namespace codol::bsp
 				return it->second;
 			}
 			bool known = false;
-			const clip_material_info info = material_info(ctx.cat, name, known);
+			clip_material_info info = material_info(ctx.cat, name, known);
+			if (!known && !is_tool_material(name))
+			{
+				// a material no shipped map has on a brush ( a modder's own ): what its definition says - the surface type
+				// as the shipped clip materials carry it ( type number << 20 ), solid unless it is blended ( a decal )
+				const material_desc& desc = ctx.importer.describe("wc/" + name);
+				if (desc.ref.valid())
+				{
+					int type = 0;
+					for (int bit = 0; bit < 32 && !type; bit++)
+					{
+						type = desc.surface_type_bits & (1u << bit) ? bit + 1 : 0;
+					}
+					info.surface_flags = type << 20;
+					info.contents = desc.see_through && desc.blend ? 0 : 1;
+					known = true;
+					ctx.rep.notes.push_back(format("collision: '%s' is on no brush of a shipped map; from its material: surface type %d, %s", name.c_str(), type,
+						info.contents ? "solid" : "does not collide ( a decal )"));
+				}
+			}
 			if (!known)
 			{
 				unknown.insert(name);
@@ -273,6 +304,16 @@ namespace codol::bsp
 			}
 			mb.contents = contents;
 			mb.opaque = mb.model == 0 && !mb.detail && (contents & 1) != 0;
+			// a brush that can be seen through ( an alpha tested or blended material on a face ) hides nothing and
+			// splits no cell, whatever its flags
+			for (std::size_t f = 0; f < mb.faces.size() && mb.opaque; f++)
+			{
+				if (!is_tool_material(mb.faces[f].material))
+				{
+					const material_desc& desc = ctx.importer.describe("wc/" + mb.faces[f].material);
+					mb.opaque = !(desc.ref.valid() && desc.see_through);
+				}
+			}
 			if (!mb.collides || contents == 0)
 			{
 				mb.collides = false;
@@ -391,8 +432,252 @@ namespace codol::bsp
 			ctx.rep.warnings.push_back("collision: no shipped map uses '" + name + "' on a brush; its sides are solid without a surface type");
 		}
 
-		// ---- BSP over the world's brushes
-		builder tree{ brushes };
+		// ---- terrain: the triangles of the patches, as the clip map stores them ( verts, triIndices, partitions with
+		// their borders, AABB trees per leaf ). Shapes and rules read off the shipped maps with codol_bsp_probe terrain:
+		//   * a triangle's corners are stored so that cross( v1 - v0, v2 - v0 ) points away from the side one stands on;
+		//   * a partition is a group of triangles of one material that lie together ( here: up to 16 );
+		//   * a border is an edge two triangles share whose surface does not go on beyond it seen from above ( a
+		//     silhouette edge: the brink of a ledge, the fold of an overhang ) - open edges have none ( 177 of 20572 in mp_rust ) -
+		//     as a line in the xy plane: normal pointing away from the surface, the edge's start along it, its
+		//     length, the height at the start and the slope;
+		//   * triEdgeIsWalkable: three bits per triangle, set for the triangles one can stand on ( normal z >= 0.7 ).
+		struct terrain_tri
+		{
+			std::uint32_t v[3];
+			float normal[3];
+			int partition = 0;
+		};
+		struct terrain_partition
+		{
+			std::vector<std::uint32_t> tris;
+			box3 box;
+			int material = 0;
+			std::uint32_t first_tri = 0, first_border = 0, border_count = 0;
+		};
+		struct terrain_border
+		{
+			float eq[3], z_base, z_slope, start, length;
+		};
+		static_assert(sizeof(terrain_border) == 28);
+		std::vector<std::array<float, 3>> terrain_verts;
+		std::vector<terrain_tri> terrain_tris;
+		std::vector<terrain_partition> partitions;
+		std::vector<terrain_border> borders;
+		std::vector<std::uint32_t> walkable;
+		{
+			std::map<std::array<float, 3>, std::uint32_t> vertex_index;
+			const auto vertex_of = [&](const edit::mesh_vertex& v)
+			{
+				const std::array<float, 3> key = { static_cast<float>(v.position[0]), static_cast<float>(v.position[1]), static_cast<float>(v.position[2]) };
+				const auto [it, added] = vertex_index.emplace(key, static_cast<std::uint32_t>(terrain_verts.size()));
+				if (added)
+				{
+					terrain_verts.push_back(key);
+				}
+				return it->second;
+			};
+			std::vector<terrain_tri> unordered;
+			std::vector<std::pair<int, std::vector<std::uint32_t>>> groups;		// material, triangles: one per patch, then split
+			for (const map_patch& patch : w.patches)
+			{
+				const int material = material_of(patch.material);
+				if (material_infos[static_cast<std::size_t>(material)].contents == 0)
+				{
+					continue;			// a decal, a non colliding material
+				}
+				std::vector<std::uint32_t> list;
+				for (std::size_t t = 0; t + 2 < patch.indices.size(); t += 3)
+				{
+					const edit::mesh_vertex& a = patch.vertices[patch.indices[t]];
+					const edit::mesh_vertex& b = patch.vertices[patch.indices[t + 1]];
+					const edit::mesh_vertex& c = patch.vertices[patch.indices[t + 2]];
+					const vec3 pa{ a.position[0], a.position[1], a.position[2] }, pb{ b.position[0], b.position[1], b.position[2] }, pc{ c.position[0], c.position[1], c.position[2] };
+					vec3 normal = cross(pb - pa, pc - pa);		// the patch's indices run counter clockwise seen from the visible side
+					const double area = length(normal);
+					if (area < 0.01)
+					{
+						continue;
+					}
+					normal = normal * (1.0 / area);
+					terrain_tri tri;
+					tri.v[0] = vertex_of(a);
+					tri.v[1] = vertex_of(c);
+					tri.v[2] = vertex_of(b);
+					if (tri.v[0] == tri.v[1] || tri.v[1] == tri.v[2] || tri.v[0] == tri.v[2])
+					{
+						continue;
+					}
+					tri.normal[0] = static_cast<float>(normal.x);
+					tri.normal[1] = static_cast<float>(normal.y);
+					tri.normal[2] = static_cast<float>(normal.z);
+					list.push_back(static_cast<std::uint32_t>(unordered.size()));
+					unordered.push_back(tri);
+				}
+				if (!list.empty())
+				{
+					groups.emplace_back(material, std::move(list));
+				}
+			}
+			if (terrain_verts.size() > 0xFFFF)
+			{
+				throw compile_error(format("the patches have %zu collision vertices; this compiler writes one vertex block ( 65535 )", terrain_verts.size()));
+			}
+			const auto centre = [&](const std::uint32_t t, const int axis)
+			{
+				const terrain_tri& tri = unordered[t];
+				return terrain_verts[tri.v[0]][static_cast<std::size_t>(axis)] + terrain_verts[tri.v[1]][static_cast<std::size_t>(axis)] + terrain_verts[tri.v[2]][static_cast<std::size_t>(axis)];
+			};
+			constexpr std::size_t PARTITION_TRIS = 16;
+			while (!groups.empty())
+			{
+				auto [material, list] = std::move(groups.back());
+				groups.pop_back();
+				box3 box;
+				for (const std::uint32_t t : list)
+				{
+					for (const std::uint32_t v : unordered[t].v)
+					{
+						box.add(terrain_verts[v].data());
+					}
+				}
+				if (list.size() > PARTITION_TRIS)
+				{
+					int axis = 0;
+					for (int k = 1; k < 3; k++)
+					{
+						if (box.maxs[k] - box.mins[k] > box.maxs[axis] - box.mins[axis])
+						{
+							axis = k;
+						}
+					}
+					std::sort(list.begin(), list.end(), [&](const std::uint32_t x, const std::uint32_t y)
+					{
+						const float cx = centre(x, axis), cy = centre(y, axis);
+						return cx != cy ? cx < cy : x < y;
+					});
+					const std::size_t half = list.size() / 2;
+					groups.emplace_back(material, std::vector<std::uint32_t>(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(half)));
+					groups.emplace_back(material, std::vector<std::uint32_t>(list.begin() + static_cast<std::ptrdiff_t>(half), list.end()));
+					continue;
+				}
+				terrain_partition p;
+				p.material = material;
+				p.box = box;
+				p.first_tri = static_cast<std::uint32_t>(terrain_tris.size());
+				for (const std::uint32_t t : list)
+				{
+					p.tris.push_back(static_cast<std::uint32_t>(terrain_tris.size()));
+					terrain_tris.push_back(unordered[t]);
+					terrain_tris.back().partition = static_cast<int>(partitions.size());
+				}
+				partitions.push_back(std::move(p));
+			}
+			// borders
+			std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<std::pair<std::uint32_t, std::uint32_t>>> edges;		// -> ( triangle, third vertex )
+			for (std::uint32_t t = 0; t < terrain_tris.size(); t++)
+			{
+				for (int c = 0; c < 3; c++)
+				{
+					const std::uint32_t x = terrain_tris[t].v[c], y = terrain_tris[t].v[(c + 1) % 3];
+					edges[{ std::min(x, y), std::max(x, y) }].emplace_back(t, terrain_tris[t].v[(c + 2) % 3]);
+				}
+			}
+			std::vector<std::vector<terrain_border>> per_partition(partitions.size());
+			for (const auto& [edge, users] : edges)
+			{
+				if (users.size() < 2)
+				{
+					continue;
+				}
+				const std::array<float, 3>& a = terrain_verts[edge.first];
+				const std::array<float, 3>& b = terrain_verts[edge.second];
+				const double dx = static_cast<double>(b[0]) - a[0], dy = static_cast<double>(b[1]) - a[1], l = std::sqrt(dx * dx + dy * dy);
+				if (l < 0.01)
+				{
+					continue;
+				}
+				double n[2] = { -dy / l, dx / l };
+				const double d = n[0] * a[0] + n[1] * a[1];
+				double low = 0, high = 0;
+				int inner = -1;
+				for (const auto& [t, third] : users)
+				{
+					const double side = n[0] * terrain_verts[third][0] + n[1] * terrain_verts[third][1] - d;
+					low = std::min(low, side);
+					high = std::max(high, side);
+					if (std::fabs(side) > 0.01 && inner < 0)
+					{
+						inner = static_cast<int>(t);
+					}
+				}
+				if (inner < 0 || (low < -0.01 && high > 0.01) || std::getenv("CODOL_BSP_NO_BORDERS"))
+				{
+					continue;			// a wall's own diagonal, or the surface goes on beyond the edge ( the variable: an experiment )
+				}
+				if (high > 0.01)
+				{
+					n[0] = -n[0];
+					n[1] = -n[1];
+				}
+				terrain_border e;
+				e.eq[0] = static_cast<float>(n[0]);
+				e.eq[1] = static_cast<float>(n[1]);
+				e.eq[2] = static_cast<float>(n[0] * a[0] + n[1] * a[1]);
+				const double sa = n[1] * a[0] - n[0] * a[1], sb = n[1] * b[0] - n[0] * b[1];
+				const std::array<float, 3>& first = sa <= sb ? a : b;
+				const std::array<float, 3>& second = sa <= sb ? b : a;
+				e.start = static_cast<float>(std::min(sa, sb));
+				e.length = static_cast<float>(std::fabs(sb - sa));
+				e.z_base = first[2];
+				e.z_slope = static_cast<float>((static_cast<double>(second[2]) - first[2]) / std::max(1e-6, std::fabs(sb - sa)));
+				std::vector<terrain_border>& list = per_partition[static_cast<std::size_t>(terrain_tris[static_cast<std::size_t>(inner)].partition)];
+				if (list.size() < 255)
+				{
+					list.push_back(e);
+				}
+			}
+			for (std::size_t p = 0; p < partitions.size(); p++)
+			{
+				partitions[p].first_border = static_cast<std::uint32_t>(borders.size());
+				partitions[p].border_count = static_cast<std::uint32_t>(per_partition[p].size());
+				borders.insert(borders.end(), per_partition[p].begin(), per_partition[p].end());
+			}
+			walkable.assign((terrain_tris.size() * 3 + 31) / 32, 0);
+			for (std::size_t t = 0; t < terrain_tris.size(); t++)
+			{
+				if (terrain_tris[t].normal[2] >= 0.7f)
+				{
+					for (std::size_t bit = 3 * t; bit < 3 * t + 3; bit++)
+					{
+						walkable[bit >> 5] |= 1u << (bit & 31);
+					}
+				}
+			}
+			if (!terrain_tris.empty())
+			{
+				ctx.rep.notes.push_back(format("collision: terrain of %zu patches: %zu triangles, %zu vertices, %zu partitions, %zu borders", w.patches.size(), terrain_tris.size(),
+					terrain_verts.size(), partitions.size(), borders.size()));
+			}
+		}
+
+		// ---- BSP over the world's brushes and terrain partitions
+		std::vector<box3> item_boxes;
+		std::vector<std::int32_t> item_contents;
+		for (const clip_brush& cb : brushes)
+		{
+			item_boxes.push_back(cb.box);
+			item_contents.push_back(cb.contents);
+		}
+		for (const terrain_partition& p : partitions)
+		{
+			// a little room around a partition: a flat one ( a level piece of terrain ) has no thickness, and an item that
+			// lies in a split plane would be on neither side of it
+			box3 padded = p.box;
+			padded.expand(LEAF_PAD);
+			item_boxes.push_back(padded);
+			item_contents.push_back(material_infos[static_cast<std::size_t>(p.material)].contents);
+		}
+		builder tree{ item_boxes, item_contents };
 		tree.leafs.push_back({});
 		std::vector<int> world_list;
 		for (std::size_t b = 0; b < brushes.size(); b++)
@@ -401,6 +686,10 @@ namespace codol::bsp
 			{
 				world_list.push_back(static_cast<int>(b));
 			}
+		}
+		for (std::size_t p = 0; p < partitions.size(); p++)
+		{
+			world_list.push_back(static_cast<int>(brushes.size() + p));
 		}
 		box3 region = w.bounds;
 		region.expand(64.0f);
@@ -438,17 +727,114 @@ namespace codol::bsp
 			brush_nodes.push_back(node);
 			return static_cast<std::int32_t>(brush_nodes.size() - 1);
 		};
+		// a leaf's terrain: per material one AABB tree whose leafs name partitions; the roots of a leaf follow each other
+		struct aabb_node
+		{
+			float origin[3];
+			std::uint16_t material, child_count;
+			float half[3];
+			std::uint32_t index;			// first child, or the partition
+		};
+		static_assert(sizeof(aabb_node) == 32);
+		std::vector<aabb_node> aabbs;
+		const auto fill_aabb = [&](const auto& self, const std::size_t node, std::vector<int> list, const int material) -> void
+		{
+			box3 box;
+			for (const int p : list)
+			{
+				box.add(partitions[static_cast<std::size_t>(p)].box);
+			}
+			const c1::Bounds bounds = box.bounds();
+			std::memcpy(aabbs[node].origin, bounds.midPoint, 12);
+			std::memcpy(aabbs[node].half, bounds.halfSize, 12);
+			aabbs[node].material = static_cast<std::uint16_t>(material);
+			if (list.size() == 1)
+			{
+				aabbs[node].child_count = 0;
+				aabbs[node].index = static_cast<std::uint32_t>(list[0]);
+				return;
+			}
+			// up to 15 children ( the shipped trees have 2 .. 15 ); more partitions: runs along the longest axis
+			int axis = 0;
+			for (int k = 1; k < 3; k++)
+			{
+				if (box.maxs[k] - box.mins[k] > box.maxs[axis] - box.mins[axis])
+				{
+					axis = k;
+				}
+			}
+			std::sort(list.begin(), list.end(), [&](const int x, const int y)
+			{
+				const box3& bx = partitions[static_cast<std::size_t>(x)].box;
+				const box3& by = partitions[static_cast<std::size_t>(y)].box;
+				const float cx = bx.mins[axis] + bx.maxs[axis], cy = by.mins[axis] + by.maxs[axis];
+				return cx != cy ? cx < cy : x < y;
+			});
+			const std::size_t children = std::min<std::size_t>(15, list.size()), per = (list.size() + children - 1) / children;
+			std::vector<std::vector<int>> runs;
+			for (std::size_t at = 0; at < list.size(); at += per)
+			{
+				runs.emplace_back(list.begin() + static_cast<std::ptrdiff_t>(at), list.begin() + static_cast<std::ptrdiff_t>(std::min(list.size(), at + per)));
+			}
+			const std::size_t first = aabbs.size();
+			aabbs.resize(first + runs.size());
+			aabbs[node].child_count = static_cast<std::uint16_t>(runs.size());
+			aabbs[node].index = static_cast<std::uint32_t>(first);
+			for (std::size_t r = 0; r < runs.size(); r++)
+			{
+				self(self, first + r, std::move(runs[r]), material);
+			}
+		};
 		std::vector<c1::cLeaf_t> leafs(tree.leafs.size());
 		for (std::size_t l = 1; l < tree.leafs.size(); l++)
 		{
 			const tree_leaf& leaf = tree.leafs[l];
-			if (leaf.brushes.size() > 32767)
+			std::vector<int> leaf_brush_list;
+			std::map<int, std::vector<int>> leaf_terrain;		// material -> partitions
+			std::int32_t brush_contents_of_leaf = 0, terrain_contents = 0;
+			for (const int item : leaf.brushes)
+			{
+				if (static_cast<std::size_t>(item) < brushes.size())
+				{
+					leaf_brush_list.push_back(item);
+					brush_contents_of_leaf |= brushes[static_cast<std::size_t>(item)].contents;
+				}
+				else
+				{
+					const int p = item - static_cast<int>(brushes.size());
+					leaf_terrain[partitions[static_cast<std::size_t>(p)].material].push_back(p);
+					terrain_contents |= material_infos[static_cast<std::size_t>(partitions[static_cast<std::size_t>(p)].material)].contents;
+				}
+			}
+			if (leaf_brush_list.size() > 32767)
 			{
 				throw compile_error("a collision leaf holds more than 32767 brushes");
 			}
-			leafs[l].brushContents = leaf.contents;
+			leafs[l].brushContents = brush_contents_of_leaf;
 			leafs[l].bounds = leaf.box.bounds();
-			leafs[l].leafBrushNode = add_list(leaf.brushes, leaf.contents);
+			// a leaf without brushes names node 0 and has no brush contents, so the list is never looked at
+			leafs[l].leafBrushNode = leaf_brush_list.empty() ? 0 : add_list(leaf_brush_list, brush_contents_of_leaf);
+			if (!leaf_terrain.empty())
+			{
+				const std::size_t first_root = aabbs.size();
+				if (first_root + leaf_terrain.size() > 0xFFFF)
+				{
+					throw compile_error("the terrain has more than 65535 collision tree roots");
+				}
+				aabbs.resize(first_root + leaf_terrain.size());
+				std::size_t root_at = first_root;
+				for (auto& [material, list] : leaf_terrain)
+				{
+					fill_aabb(fill_aabb, root_at++, std::move(list), material);
+				}
+				leafs[l].firstCollAabbIndex = static_cast<std::uint16_t>(first_root);
+				leafs[l].collAabbCount = static_cast<std::uint16_t>(leaf_terrain.size());
+				leafs[l].terrainContents = terrain_contents;
+			}
+		}
+		if (!aabbs.empty())
+		{
+			ctx.rep.notes.push_back(format("collision: %zu terrain tree nodes", aabbs.size()));
 		}
 
 		// ---- sub models
@@ -544,7 +930,9 @@ namespace codol::bsp
 				{
 					for (int j = 0; j < 3; j++)
 					{
-						list[k].invScaledAxis[i][j] = model.axis[i][j] / model.scale;		// as the shipped entries: the axis over the scale
+						// the inverse of the scaled axis: transpose( axis ) / scale. Every clip entry of the shipped maps
+						// checked is that ( codol_bsp_probe smodels ), and the engine's point trace reads it so.
+						list[k].invScaledAxis[i][j] = model.axis[j][i] / model.scale;
 					}
 				}
 				list[k].absBounds = model.box.bounds();
@@ -680,6 +1068,62 @@ namespace codol::bsp
 					b.point(chunk, n * sizeof(c1::cLeafBrushNode_s) + offsetof(c1::cLeafBrushNode_s, data), leaf_brushes_chunk, 2 * list_start[n]);
 				}
 			}
+		}
+
+		// terrain: vertices, triangle indices ( relative to vertex block 0 ), the walkable bits, borders, partitions
+		// ( their border pointers lead into the border array, in running order ), AABB trees
+		if (!terrain_tris.empty())
+		{
+			b.put(head, offsetof(c1::clipMap_t, vertCount), static_cast<std::uint32_t>(terrain_verts.size()));
+			b.follows(head, offsetof(c1::clipMap_t, verts));
+			b.add_array(terrain_verts);
+			std::vector<std::uint16_t> indices;
+			for (const terrain_tri& t : terrain_tris)
+			{
+				for (const std::uint32_t v : t.v)
+				{
+					indices.push_back(static_cast<std::uint16_t>(v));
+				}
+			}
+			b.put(head, offsetof(c1::clipMap_t, triCount), static_cast<std::int32_t>(terrain_tris.size()));
+			b.follows(head, offsetof(c1::clipMap_t, triIndices));
+			b.add_array(indices);
+			b.follows(head, offsetof(c1::clipMap_t, triEdgeIsWalkable));
+			b.add_array(walkable);
+			std::uint32_t borders_chunk = 0;
+			if (!borders.empty())
+			{
+				b.put(head, offsetof(c1::clipMap_t, borderCount), static_cast<std::int32_t>(borders.size()));
+				b.follows(head, offsetof(c1::clipMap_t, borders));
+				borders_chunk = b.add_array(borders);
+			}
+			struct packed_partition
+			{
+				std::uint8_t tri_count, border_count, vert_block, pad;
+				std::uint32_t first_tri;
+				c1::zptr borders;
+			};
+			static_assert(sizeof(packed_partition) == 12);
+			std::vector<packed_partition> packed_partitions(partitions.size());
+			for (std::size_t p = 0; p < partitions.size(); p++)
+			{
+				packed_partitions[p].tri_count = static_cast<std::uint8_t>(partitions[p].tris.size());
+				packed_partitions[p].border_count = static_cast<std::uint8_t>(partitions[p].border_count);
+				packed_partitions[p].first_tri = partitions[p].first_tri;
+			}
+			b.put(head, offsetof(c1::clipMap_t, partitionCount), static_cast<std::int32_t>(partitions.size()));
+			b.follows(head, offsetof(c1::clipMap_t, partitions));
+			const std::uint32_t chunk = b.add_array(packed_partitions);
+			for (std::size_t p = 0; p < partitions.size(); p++)
+			{
+				if (partitions[p].border_count)
+				{
+					b.point(chunk, p * sizeof(packed_partition) + offsetof(packed_partition, borders), borders_chunk, 28 * partitions[p].first_border);
+				}
+			}
+			b.put(head, offsetof(c1::clipMap_t, aabbTreeCount), static_cast<std::int32_t>(aabbs.size()));
+			b.follows(head, offsetof(c1::clipMap_t, aabbTrees));
+			b.add_array(aabbs);
 		}
 
 		b.follows(head, offsetof(c1::clipMap_t, cmodels));

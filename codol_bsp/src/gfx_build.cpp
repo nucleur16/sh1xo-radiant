@@ -621,8 +621,11 @@ namespace codol::bsp
 			std::memcpy(d.origin, model.origin, sizeof(d.origin));
 			std::memcpy(d.axis, model.axis, sizeof(d.axis));
 			d.scale = model.scale;
-			// drawn up to 40 times its size away, at least 2000 units ( the shipped values vary per model )
-			d.cullDist = static_cast<std::uint16_t>(std::clamp(model.box.radius() * 40.0f, 2000.0f, 60000.0f));
+			// The draw distance of the model's last LOD times the instance's scale; 0 ( never culled ) when that does not
+			// fit 16 bits. 9539 of the 9542 instances with LODs in mp_rust, mp_highrise and mp_shipment_long are exactly
+			// that ( codol_bsp_probe smodels <zone> <exe> csv ); the other 3 differ by the rounding of the scale.
+			const float cull = model.last_lod_dist * model.scale;
+			d.cullDist = cull > 0.0f && cull <= 65535.0f ? static_cast<std::uint16_t>(cull) : std::uint16_t{ 0 };
 			d.reflectionProbeIndex = static_cast<std::uint8_t>(rw.smodels[m].reflection_probe);
 			d.primaryLightIndex = static_cast<std::uint8_t>(rw.smodels[m].primary_light);
 		}

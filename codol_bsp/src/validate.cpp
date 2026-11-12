@@ -17,8 +17,14 @@ namespace codol::bsp
 		}
 		else if (summary)
 		{
-			*summary += format("server collision ok: %u planes, %u brushes, %u sides, %u leafs, %u leaf brush nodes, %u sub models; ", info.planes, info.brushes,
+			*summary += format("server collision ok: %u planes, %u brushes, %u sides, %u leafs, %u leaf brush nodes, %u sub models", info.planes, info.brushes,
 				info.brush_sides, info.leafs, info.leaf_brush_nodes, info.sub_models);
+			if (info.terrain_triangles)
+			{
+				*summary += format(", terrain %u triangles / %u partitions / %u borders / %u tree nodes", info.terrain_triangles, info.terrain_partitions, info.terrain_borders,
+					info.terrain_tree_nodes);
+			}
+			*summary += "; ";
 		}
 		validate_render(zone_bytes, problems, summary);
 		return problems.size() == before;

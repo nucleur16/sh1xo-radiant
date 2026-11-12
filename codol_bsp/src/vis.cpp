@@ -568,7 +568,8 @@ namespace codol::bsp
 		for (std::size_t e = 1; e < w.entities.size(); e++)
 		{
 			const map_entity& entity = w.entities[e];
-			if (!entity.brushes.empty() || entity.value("origin").empty())
+			// the corners of the minimap lie on the outline of the map, often outside it: they tell nothing about a leak
+			if (!entity.brushes.empty() || entity.value("origin").empty() || entity.value("targetname") == "minimap_corner")
 			{
 				continue;
 			}

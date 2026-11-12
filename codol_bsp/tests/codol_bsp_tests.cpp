@@ -1,7 +1,11 @@
 // codol_bsp_tests: writes the test maps, compiles them and checks the result.
 //
 //   codol_bsp_tests --write-maps <dir>          only writes the test maps ( .map files )
-//   codol_bsp_tests [--out <dir>] [--game <install>]
+//   codol_bsp_tests [--out <dir>] [--game <install>] [--assets <project zone.ff>]...
+//
+// --assets: codol_assetc zones for the maps that use a modder's own assets - the materials bsp_test_wall / _fence /
+// _decal ( tests/make_modder_assets.py prints the command that builds the zone ) and the model codol_test_crate
+// ( codol_assets' test zone ). Without them those checks are skipped.
 //
 // Plain asserts in the style of the other test programs of this repository: every check prints when it fails, the
 // program returns 1 when one did. Needs the 1.1.1.13 install ( materials come from its zones ); without it only the
@@ -54,6 +58,9 @@ namespace
 		{ "two_rooms_leak", [](edit::document& doc) { bsp::test::make_two_rooms(doc, {}, true); } },
 		{ "content", [](edit::document& doc) { bsp::test::make_content(doc); } },
 		{ "big", [](edit::document& doc) { bsp::test::make_big(doc, 12); } },
+		{ "modder", [](edit::document& doc) { bsp::test::make_modder(doc); } },
+		{ "terrain", [](edit::document& doc) { bsp::test::make_terrain(doc); } },
+		{ "yard", [](edit::document& doc) { bsp::test::make_yard(doc); } },
 	};
 
 	bool write_maps(const fs::path& dir)
@@ -93,10 +100,18 @@ namespace
 		bool ok = false;
 	};
 
-	compiled compile(const fs::path& out, const fs::path& game, const char* map, const bool light = true)
+	std::vector<fs::path> project_zones;
+
+	compiled compile(const fs::path& out, const fs::path& game, const char* map, const bool light = true, const bool extras = false)
 	{
 		compiled c;
 		bsp::options opts;
+		opts.donors = project_zones;
+		if (extras)
+		{
+			opts.minimap = out / "extras" / (std::string("compass_map_mp_") + map + ".tga");
+			opts.scripts_out = out / "extras" / "scripts";
+		}
 		opts.map = out / "maps" / (std::string(map) + ".map");
 		opts.exe = game / "C1.exe";
 		opts.install = game;
@@ -234,6 +249,10 @@ int main(const int argc, char** argv)
 		{
 			game = argv[++i];
 		}
+		else if (arg == "--assets" && i + 1 < argc)
+		{
+			project_zones.emplace_back(argv[++i]);
+		}
 	}
 	CHECK(write_maps(out / "maps"));
 	std::error_code ec;
@@ -306,6 +325,167 @@ int main(const int argc, char** argv)
 		check_zone(c, game, out / "maps" / "content.map");
 		CHECK(c.rep.sub_models >= 3);
 		CHECK(c.rep.cells == 2 && c.rep.portals == 2);		// the portal brush in the doorway
+		// the static model: a draw instance with the cull distance the shipped maps have ( last LOD x scale, 0 when that
+		// is more than 16 bits ), and a clip map entry whose matrix is the inverse of the scaled axis
+		CHECK(c.rep.static_models == 1);
+		zone::ClientKey key;
+		zone::Zone z;
+		if (c.ok && key.load_from_exe(game / "C1.exe") && z.open(c.file, key))
+		{
+			zone::GfxWorldView world;
+			zone::ClipMapView clip;
+			CHECK(zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world));
+			CHECK(zone::read_clip_map(z, zone::first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP), clip));
+			CHECK(world.staticModels.size() == 1 && clip.staticModels.size() == 1);
+			if (world.staticModels.size() == 1 && clip.staticModels.size() == 1)
+			{
+				const c1::GfxStaticModelDrawInst& d = world.staticModels[0].raw;
+				const c1::cStaticModel_s& s = clip.staticModels[0].raw;
+				bool inverse = true;
+				for (int a = 0; a < 3; a++)
+				{
+					for (int k = 0; k < 3; k++)
+					{
+						inverse = inverse && std::fabs(s.invScaledAxis[a][k] - d.axis[k][a] / d.scale) < 1e-5f;
+					}
+				}
+				CHECK(inverse);
+				CHECK(std::fabs(d.axis[0][0] - 0.8660254f) < 1e-4f && std::fabs(d.axis[0][1] - 0.5f) < 1e-4f);		// yaw 30
+				const c1::XModel model = z.get<c1::XModel>(d.model);
+				const float reach = model.numLods ? model.lodInfo[model.numLods - 1].dist * d.scale : 0.0f;
+				CHECK(d.cullDist == (reach > 0 && reach <= 65535.0f ? static_cast<std::uint16_t>(reach) : 0));
+			}
+		}
+	}
+
+	// ---- a static model that only exists nested in a shipped map's gfx_map is written again into the zone
+	{
+		edit::document doc;
+		bsp::test::make_box_room(doc);
+		const std::vector<std::pair<std::string, std::string>> keys = { { "model", "concrete_barrier_damaged_2" }, { "angles", "0 90 0" } };
+		doc.create_point_entity("misc_model", { 300, 300, 0 }, keys);
+		std::string error;
+		CHECK(doc.save_map_file(out / "maps" / "nested_model.map", error));
+		const compiled c = compile(out, game, "nested_model");
+		check_zone(c, game, out / "maps" / "nested_model.map");
+		bool left_out = false;
+		for (const std::string& warning : c.rep.warnings)
+		{
+			left_out = left_out || warning.find("is left out") != std::string::npos;
+		}
+		CHECK(!left_out);
+		zone::ClientKey key;
+		zone::Zone z;
+		if (c.ok && key.load_from_exe(game / "C1.exe") && z.open(c.file, key))
+		{
+			CHECK(z.find_asset(c1::ASSET_TYPE_XMODEL, "concrete_barrier_damaged_2") != 0);
+			zone::ClipMapView clip;
+			CHECK(zone::read_clip_map(z, zone::first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP), clip) && clip.staticModels.size() == 1);
+		}
+	}
+
+	// ---- terrain: patches are the clip map's triangles, not brushes; a ramp, a plateau, a ledge with its border
+	{
+		const compiled c = compile(out, game, "terrain", true, true);
+		check_zone(c, game, out / "maps" / "terrain.map");
+		CHECK(c.rep.patches == 2 && c.rep.clip_brushes == 12);		// the brushes of the room only
+		CHECK(has_note(c.rep, "144 triangles") && has_note(c.rep, "4 borders"));
+		zone::ClientKey key;
+		std::vector<std::uint8_t> bytes;
+		if (c.ok && key.load_from_exe(game / "C1.exe") && zone::read_fastfile(c.file, key, bytes))
+		{
+			std::string error;
+			mapc::server_collision_info info;
+			CHECK(mapc::check_server_collision(bytes, error, &info));
+			CHECK(info.terrain_triangles == 144 && info.terrain_borders == 4 && info.terrain_partitions >= 9 && info.terrain_tree_nodes >= info.terrain_partitions);
+			zone::Zone z;
+			CHECK(static_cast<bool>(z.load(bytes, "terrain")));
+			const c1::clipMap_t cm = z.get<c1::clipMap_t>(zone::first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP));
+			const std::vector<float> verts = z.get_array<float>(cm.verts, 3u * cm.vertCount);
+			const std::vector<std::uint16_t> tris = z.get_array<std::uint16_t>(cm.triIndices, 3u * static_cast<std::size_t>(cm.triCount));
+			// every triangle of the ramp lies on the surface the map describes and faces up: stored clockwise seen from
+			// above ( cross( v1 - v0, v2 - v0 ) points down, as in the shipped maps )
+			int on_surface = 0, facing = 0, ramp = 0;
+			for (std::size_t t = 0; t + 2 < tris.size(); t += 3)
+			{
+				const float* a = &verts[3u * tris[t]];
+				const float* b = &verts[3u * tris[t + 1]];
+				const float* d = &verts[3u * tris[t + 2]];
+				if (a[0] > 100 || b[0] > 100 || d[0] > 100)
+				{
+					continue;		// the ledge
+				}
+				ramp++;
+				on_surface += std::fabs(a[2] - bsp::test::terrain_height(a[0])) < 0.01 && std::fabs(b[2] - bsp::test::terrain_height(b[0])) < 0.01
+					&& std::fabs(d[2] - bsp::test::terrain_height(d[0])) < 0.01;
+				facing += (b[0] - a[0]) * (d[1] - a[1]) - (b[1] - a[1]) * (d[0] - a[0]) < 0;
+			}
+			CHECK(ramp == 128 && on_surface == ramp && facing == ramp);
+		}
+		// the extras: a minimap picture, its corners in the entities, the generated scripts
+		std::error_code extras_ec;
+		CHECK(fs::file_size(out / "extras" / "compass_map_mp_terrain.tga", extras_ec) == 18 + 512 * 512 * 4);
+		CHECK(fs::exists(out / "extras" / "scripts" / "maps" / "mp" / "mp_terrain.gsc", extras_ec));
+		CHECK(has_note(c.rep, "minimap: corners added"));
+		zone::Zone z;
+		if (c.ok && key.load_from_exe(game / "C1.exe") && z.open(c.file, key))
+		{
+			CHECK(z.find_asset(c1::ASSET_TYPE_RAWFILE, "maps/mp/mp_terrain_fx.gsc") != 0);
+			CHECK(z.find_asset(c1::ASSET_TYPE_RAWFILE, "maps/createfx/mp_terrain_fx.gsc") != 0);
+		}
+	}
+
+	// ---- the light bake: bounced light, pages
+	{
+		const compiled c = compile(out, game, "sky_room");
+		CHECK(has_note(c.rep, "lightmap page") && has_note(c.rep, "1 bounce") && has_note(c.rep, "light grid colour sets"));
+		zone::ClientKey key;
+		zone::Zone z;
+		if (c.ok && key.load_from_exe(game / "C1.exe") && z.open(c.file, key))
+		{
+			// the light grid is directional: some colour set differs between its directions
+			const zone::zaddr world = zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD);
+			zone::GfxWorldView view;
+			CHECK(zone::read_gfx_world(z, world, view));
+			CHECK(view.raw.draw.lightmapCount >= 1);
+		}
+	}
+
+	// ---- a modder's materials ( only with --assets <zone of tests/make_modder_assets.py> )
+	if (!project_zones.empty())
+	{
+		const compiled c = compile(out, game, "modder");
+		check_zone(c, game, out / "maps" / "modder.map");
+		bool missing = false;
+		for (const std::string& warning : c.rep.warnings)
+		{
+			missing = missing || warning.find("is not drawn") != std::string::npos;
+		}
+		CHECK(!missing && !c.rep.leaked);
+		CHECK(has_note(c.rep, "'bsp_test_wall' is on no brush of a shipped map; from its material: surface type 2, solid"));
+		CHECK(has_note(c.rep, "'bsp_test_decal'") && has_note(c.rep, "does not collide"));
+		zone::ClientKey key;
+		zone::Zone z;
+		if (c.ok && key.load_from_exe(game / "C1.exe") && z.open(c.file, key))
+		{
+			for (const char* material : { "wc/bsp_test_wall", "wc/bsp_test_fence", "wc/bsp_test_decal" })
+			{
+				CHECK(z.find_asset(c1::ASSET_TYPE_MATERIAL, material) != 0);
+			}
+			CHECK(z.find_asset(c1::ASSET_TYPE_IMAGE, "bsp_test_wall_col") != 0);
+			CHECK(z.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, "wc_l_sm_t0c0") != 0);
+		}
+		// the yard: everything in one map
+		const compiled yard = compile(out, game, "yard", true, true);
+		check_zone(yard, game, out / "maps" / "yard.map");
+		CHECK(!yard.rep.leaked && yard.rep.cells >= 3 && yard.rep.static_models == 9 && yard.rep.patches == 2);
+		CHECK(has_note(yard.rep, "scripts: 2 effects ( 2 kinds ), 1 sounds"));
+		std::printf("yard: %zu brushes, %zu surfaces, %zu cells, %zu portals, %zu lightmaps, %.1f s\n", yard.rep.clip_brushes, yard.rep.surfaces, yard.rep.cells,
+			yard.rep.portals, yard.rep.lightmaps, yard.rep.seconds);
+	}
+	else
+	{
+		std::printf("no --assets: the modder material map and the yard are not compiled\n");
 	}
 
 	// ---- a larger map

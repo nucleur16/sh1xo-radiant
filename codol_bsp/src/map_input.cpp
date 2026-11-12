@@ -127,7 +127,7 @@ namespace codol::bsp
 		}
 	}
 
-	void read_document(const edit::document& doc, const options&, world& w, report& rep)
+	void read_document(const edit::document& doc, const options& opts, world& w, report& rep)
 	{
 		w.lights.clear();
 		w.lights.resize(2);
@@ -155,6 +155,29 @@ namespace codol::bsp
 			if (!out.world && entity_index == 0)
 			{
 				throw compile_error("the first entity of the map is not the worldspawn");
+			}
+
+			if (out.classname == "script_fx" || out.classname == "script_sound")
+			{
+				// an effect ( "fx": the effect's name, "delay": seconds between repeats, none: once ) or a looping sound
+				// ( "soundalias" ): lines of the generated createfx script, no entity
+				map_fx fx;
+				fx.fx = std::string(out.value("fx"));
+				fx.alias = std::string(out.value("soundalias"));
+				fx.origin[0] = static_cast<float>(out.origin.x);
+				fx.origin[1] = static_cast<float>(out.origin.y);
+				fx.origin[2] = static_cast<float>(out.origin.z);
+				parse_floats(out.value("angles", "270 0 0"), fx.angles, 3);
+				parse_floats(out.value("delay", "-15"), &fx.delay, 1);
+				if (out.classname == "script_sound")
+				{
+					fx.fx.clear();
+				}
+				if (!fx.fx.empty() || !fx.alias.empty())
+				{
+					w.fx.push_back(std::move(fx));
+				}
+				continue;
 			}
 
 			if (out.classname == "light")
@@ -202,8 +225,8 @@ namespace codol::bsp
 				if (doc.kind(child) == edit::object_kind::patch)
 				{
 					rep.patches++;
-					// a patch ( terrain mesh or curve ): its tessellation is drawn, and every triangle gets a thin
-					// brush under it to collide with
+					// a patch ( terrain mesh or curve ): its tessellation is drawn, and its triangles are the clip map's
+					// terrain ( clip_build.cpp )
 					edit::mesh mesh;
 					const edit::patch* source_patch = doc.find_patch(child);
 					if (!out.world || !source_patch || !doc.build_mesh(child, mesh, 4) || mesh.indices.size() < 3)
@@ -222,54 +245,9 @@ namespace codol::bsp
 					}
 					patch.vertices = mesh.vertices;
 					patch.indices = mesh.indices;
-					const int patch_index = static_cast<int>(w.patches.size());
-					for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+					for (const edit::mesh_vertex& v : mesh.vertices)
 					{
-						vec3 corner[3];
-						for (int k = 0; k < 3; k++)
-						{
-							const edit::mesh_vertex& v = mesh.vertices[mesh.indices[t + static_cast<std::size_t>(k)]];
-							corner[k] = { v.position[0], v.position[1], v.position[2] };
-						}
-						vec3 normal = cross(corner[1] - corner[0], corner[2] - corner[0]);
-						const double area = length(normal);
-						if (area < 1.0)
-						{
-							continue;
-						}
-						normal = normal * (1.0 / area);
-						const vec3 points[6] = { corner[0], corner[1], corner[2], corner[0] - normal * 8.0, corner[1] - normal * 8.0, corner[2] - normal * 8.0 };
-						std::vector<edit::plane> planes;
-						std::vector<std::vector<int>> hull;
-						if (!edit::convex_hull(points, planes, hull))
-						{
-							continue;
-						}
-						map_brush b;
-						b.entity = entity_index;
-						b.patch = patch_index;
-						b.detail = true;
-						b.corners.assign(points, points + 6);
-						for (const vec3& p : points)
-						{
-							b.box.add(p);
-						}
-						for (std::size_t f = 0; f < planes.size(); f++)
-						{
-							map_face face;
-							face.plane = planes[f];
-							face.material = patch.material;
-							face.texture.material = patch.material;
-							face.corner = hull[f];
-							for (const int v : hull[f])
-							{
-								face.winding.push_back(points[v]);
-							}
-							face.visible = false;		// the patch is drawn, not the brush
-							b.faces.push_back(std::move(face));
-						}
-						out.brushes.push_back(static_cast<int>(w.brushes.size()));
-						w.brushes.push_back(std::move(b));
+						w.patch_bounds.add(vec3{ v.position[0], v.position[1], v.position[2] });
 					}
 					w.patches.push_back(std::move(patch));
 					continue;
@@ -421,6 +399,46 @@ namespace codol::bsp
 		if (!w.bounds.valid())
 		{
 			throw compile_error("the worldspawn has no brushes");
+		}
+		w.bounds.add(w.patch_bounds);
+
+		// the minimap: a square around the map; the two corner entities the game's compass script asks for
+		{
+			const float cx = (w.bounds.mins[0] + w.bounds.maxs[0]) * 0.5f, cy = (w.bounds.mins[1] + w.bounds.maxs[1]) * 0.5f;
+			float half = std::max(w.bounds.maxs[0] - w.bounds.mins[0], w.bounds.maxs[1] - w.bounds.mins[1]) * 0.5f;
+			bool corners = false;
+			box3 given;
+			for (const map_entity& e : w.entities)
+			{
+				if (e.value("targetname") == "minimap_corner")
+				{
+					corners = true;
+					given.add(e.origin);
+				}
+			}
+			w.minimap_mins[0] = corners ? given.mins[0] : cx - half;
+			w.minimap_mins[1] = corners ? given.mins[1] : cy - half;
+			w.minimap_maxs[0] = corners ? given.maxs[0] : cx + half;
+			w.minimap_maxs[1] = corners ? given.maxs[1] : cy + half;
+			if (!corners && !opts.minimap.empty())
+			{
+				for (int k = 0; k < 2; k++)
+				{
+					map_entity corner;
+					corner.classname = "script_origin";
+					corner.origin = vec3{ k == 0 ? w.minimap_mins[0] : w.minimap_maxs[0], k == 0 ? w.minimap_maxs[1] : w.minimap_mins[1], w.bounds.mins[2] };
+					corner.set("classname", "script_origin");
+					corner.set("targetname", "minimap_corner");
+					corner.set("origin", format("%g %g %g", corner.origin.x, corner.origin.y, corner.origin.z));
+					w.entities.push_back(std::move(corner));
+				}
+				if (w.entities[0].value("northyaw").empty())
+				{
+					w.entities[0].set("northyaw", "90");		// north is + y: the top of the picture
+				}
+				rep.notes.push_back(format("minimap: corners added at ( %g %g ) and ( %g %g ), northyaw 90", w.minimap_mins[0], w.minimap_maxs[1], w.minimap_maxs[0],
+					w.minimap_mins[1]));
+			}
 		}
 	}
 

@@ -401,6 +401,218 @@ namespace codol::bsp
 			return ref;
 		}
 
+		// An xmodel that is nested in another asset of its zone ( a static model inside a shipped map's gfx_map ),
+		// written again from the loaded image in the order Load_XModel reads it: name, bone names, hierarchy, materials,
+		// the surfaces of every LOD ( with the collision trees of the rigid lists ), collision surfaces, bone boxes.
+		// Materials go through material_from. Physics preset and collision map are dropped: a static model does not
+		// move.
+		zone_ref model_from(const Zone& donor, const zaddr header)
+		{
+			const c1::XModel in = donor.get<c1::XModel>(header);
+			const std::string name(donor.asset_name(c1::ASSET_TYPE_XMODEL, header));
+			const auto key_name = std::make_pair(static_cast<int>(c1::ASSET_TYPE_XMODEL), name);
+			if (const auto it = by_name.find(key_name); it != by_name.end())
+			{
+				return it->second;
+			}
+			const std::size_t bones = in.numBones, children = static_cast<std::size_t>(in.numBones - in.numRootBones);
+			const std::vector<zaddr> handles = donor.get_array<zaddr>(in.materialHandles, in.numsurfs);
+			std::vector<zone_ref> materials(handles.size());
+			for (std::size_t m = 0; m < handles.size(); m++)
+			{
+				if (handles[m] && !donor.reference(handles[m]))
+				{
+					materials[m] = material_from(donor, handles[m]);
+				}
+			}
+
+			asset_builder b;
+			c1::XModel raw = in;
+			raw.name = FOLLOWS;
+			raw.boneNames = bones ? FOLLOWS : 0;
+			raw.parentList = raw.quats = raw.trans = children ? FOLLOWS : 0;
+			raw.partClassification = bones && in.partClassification ? FOLLOWS : 0;
+			raw.baseMat = bones && in.baseMat ? FOLLOWS : 0;
+			raw.materialHandles = handles.empty() ? 0 : FOLLOWS;
+			raw.collSurfs = in.numCollSurfs > 0 && in.collSurfs ? FOLLOWS : 0;
+			raw.boneInfo = bones && in.boneInfo ? FOLLOWS : 0;
+			raw.physPreset = raw.physCollmap = 0;
+			for (c1::XModelLodInfo& lod : raw.lodInfo)
+			{
+				lod.surfs = 0;
+				lod.surfsName = 0;
+				lod.modelSurfs = lod.modelSurfs ? c1::ZPTR_INLINE_INSERT : 0;
+			}
+			const std::uint32_t head = b.add(raw);
+			b.add_string(name);
+			if (bones)
+			{
+				std::vector<std::uint16_t> names = donor.get_array<std::uint16_t>(in.boneNames, bones);
+				for (std::uint16_t& n : names)
+				{
+					n = out.script_string(donor.script_string(n));
+				}
+				const std::uint32_t chunk = b.add_array(names);
+				for (std::size_t k = 0; k < bones; k++)
+				{
+					b.chunks[chunk].scriptStrings.push_back(static_cast<std::uint32_t>(2 * k));
+				}
+			}
+			if (children)
+			{
+				b.add_array(donor.get_array<std::uint8_t>(in.parentList, children));
+				b.add_array(donor.get_array<std::int16_t>(in.quats, 4 * children));
+				b.add_array(donor.get_array<float>(in.trans, 3 * children));
+			}
+			if (raw.partClassification)
+			{
+				b.add_array(donor.get_array<std::uint8_t>(in.partClassification, bones));
+			}
+			if (raw.baseMat)
+			{
+				b.add_array(donor.get_array<float>(in.baseMat, 8 * bones));
+			}
+			if (!handles.empty())
+			{
+				const std::uint32_t chunk = b.add_zero(4 * handles.size());
+				for (std::size_t m = 0; m < handles.size(); m++)
+				{
+					if (materials[m].valid())
+					{
+						point_ref(b, chunk, 4 * m, materials[m]);
+					}
+					else if (handles[m])
+					{
+						b.follows(chunk, 4 * m);
+						reference_stub(b, sizeof(c1::Material), 0, donor.reference(handles[m])->name);
+					}
+				}
+			}
+			for (int l = 0; l < 4; l++)
+			{
+				const c1::XModelLodInfo& lod = in.lodInfo[l];
+				if (!lod.modelSurfs)
+				{
+					continue;
+				}
+				if (donor.reference(lod.modelSurfs))
+				{
+					throw compile_error("xmodel '" + name + "' of zone '" + donor.name() + "': the surfaces of LOD " + std::to_string(l) + " are in another zone");
+				}
+				c1::XModelSurfs surfs = donor.get<c1::XModelSurfs>(lod.modelSurfs);
+				const std::vector<c1::XSurface> list = donor.get_array<c1::XSurface>(surfs.surfs, surfs.numsurfs);
+				const std::string surfs_name(donor.asset_name(c1::ASSET_TYPE_XMODEL_SURFS, lod.modelSurfs));
+				surfs.name = FOLLOWS;
+				surfs.surfs = list.empty() ? 0 : FOLLOWS;
+				b.add(surfs);
+				const std::uint32_t name_chunk = b.add_string(surfs_name);
+				b.point(head, offsetof(c1::XModel, lodInfo) + static_cast<std::size_t>(l) * sizeof(c1::XModelLodInfo) + offsetof(c1::XModelLodInfo, surfsName), name_chunk);
+				if (list.empty())
+				{
+					continue;
+				}
+				std::vector<c1::XSurface> headers = list;
+				for (c1::XSurface& h : headers)
+				{
+					const int weighted = h.vertInfoCount[0] + 3 * h.vertInfoCount[1] + 5 * h.vertInfoCount[2] + 7 * h.vertInfoCount[3];
+					h.triIndices = h.triCount ? FOLLOWS : 0;
+					h.vertsBlend = h.vertsBlend && weighted ? FOLLOWS : 0;
+					h.verts0 = h.vertCount ? FOLLOWS : 0;
+					h.vertList = h.vertList && h.vertListCount ? FOLLOWS : 0;
+				}
+				b.add_array(headers);
+				for (std::size_t k = 0; k < list.size(); k++)
+				{
+					const c1::XSurface& from = list[k];
+					const c1::XSurface& h = headers[k];
+					if (h.vertsBlend)
+					{
+						const std::size_t count = static_cast<std::size_t>(from.vertInfoCount[0] + 3 * from.vertInfoCount[1] + 5 * from.vertInfoCount[2] + 7 * from.vertInfoCount[3]);
+						b.add_array(donor.get_array<std::uint16_t>(from.vertsBlend, count));
+					}
+					if (h.verts0)
+					{
+						b.add_array(donor.get_array<c1::GfxPackedVertex>(from.verts0, from.vertCount));
+					}
+					if (h.vertList)
+					{
+						// XSurfaceCollisionTree: translation, scale, node count, nodes ( 16 bytes ), leaf count, leafs ( u16 )
+						struct tree_header
+						{
+							float trans[3], scale[3];
+							std::uint32_t nodeCount, nodes, leafCount, leafs;
+						};
+						static_assert(sizeof(tree_header) == 40);
+						const std::vector<c1::XRigidVertList> lists = donor.get_array<c1::XRigidVertList>(from.vertList, from.vertListCount);
+						std::vector<c1::XRigidVertList> packed = lists;
+						for (c1::XRigidVertList& r : packed)
+						{
+							r.collisionTree = r.collisionTree ? FOLLOWS : 0;
+						}
+						b.add_array(packed);
+						for (const c1::XRigidVertList& r : lists)
+						{
+							if (!r.collisionTree)
+							{
+								continue;
+							}
+							tree_header tree = donor.get<tree_header>(r.collisionTree);
+							const zaddr nodes = tree.nodes, leafs = tree.leafs;
+							tree.nodes = tree.nodeCount && nodes ? FOLLOWS : 0;
+							tree.leafs = tree.leafCount && leafs ? FOLLOWS : 0;
+							b.add(tree);
+							if (tree.nodes)
+							{
+								b.add_array(donor.get_array<std::uint8_t>(nodes, 16u * tree.nodeCount));
+							}
+							if (tree.leafs)
+							{
+								b.add_array(donor.get_array<std::uint16_t>(leafs, tree.leafCount));
+							}
+						}
+					}
+					if (h.triIndices)
+					{
+						b.add_array(donor.get_array<std::uint16_t>(from.triIndices, 3u * from.triCount));
+					}
+				}
+			}
+			if (raw.collSurfs)
+			{
+				struct coll_surf
+				{
+					std::uint32_t tris;
+					std::int32_t count;
+					c1::Bounds bounds;
+					std::int32_t bone, contents, surfaceFlags;
+				};
+				static_assert(sizeof(coll_surf) == 44);
+				const std::vector<coll_surf> table = donor.get_array<coll_surf>(in.collSurfs, static_cast<std::size_t>(in.numCollSurfs));
+				std::vector<coll_surf> packed = table;
+				for (coll_surf& c : packed)
+				{
+					c.tris = c.count > 0 && c.tris ? FOLLOWS : 0;
+				}
+				b.add_array(packed);
+				for (std::size_t c = 0; c < table.size(); c++)
+				{
+					if (packed[c].tris)
+					{
+						b.add_array(donor.get_array<float>(table[c].tris, 12u * static_cast<std::size_t>(table[c].count)));
+					}
+				}
+			}
+			if (raw.boneInfo)
+			{
+				b.add_array(donor.get_array<float>(in.boneInfo, 7 * bones));
+			}
+			zone_ref ref;
+			ref.slot = true;
+			ref.asset = add(c1::ASSET_TYPE_XMODEL, name, b);
+			by_name[key_name] = ref;
+			return ref;
+		}
+
 		const Zone* open(const std::filesystem::path& file, std::string* why)
 		{
 			const std::string id = file.generic_string();
@@ -509,6 +721,15 @@ namespace codol::bsp
 			d.sort_key = view.raw.sortKey;
 			d.techset = std::string(view.techsetName);
 			d.sky = d.techset.find("sky") != std::string::npos;
+			d.surface_type_bits = view.raw.surfaceTypeBits;
+			{
+				// wc_l_sm_<r|b|t>0c0..: replace, blend, alpha test; wc_unlit_<replace|blend|add|multiply|screen>_lin
+				const std::size_t lit = d.techset.find("_sm_");
+				const char mode = lit != std::string::npos && lit + 4 < d.techset.size() ? d.techset[lit + 4] : 0;
+				d.alpha_test = mode == 't';
+				d.blend = mode == 'b' || (d.techset.find("unlit_") != std::string::npos && d.techset.find("unlit_replace") == std::string::npos);
+				d.see_through = d.alpha_test || (d.blend && d.sort_key >= 6 && d.sort_key <= 13);
+			}
 			bool sized = false;
 			for (const zone::MaterialTexture& t : view.textures)
 			{
@@ -544,11 +765,49 @@ namespace codol::bsp
 		return s->find(c1::ASSET_TYPE_IMAGE, name, s->cat.image_zone, why, [&](const Zone& z, const zaddr h) { return s->image_from(z, h); });
 	}
 
+	namespace
+	{
+		// what the compiler wants to know about a model: box, collision, draw distance, the triangles of LOD 0
+		void describe_model(const Zone& z, const zaddr header, model_desc& desc)
+		{
+			const c1::XModel raw = z.get<c1::XModel>(header);
+			desc.coll_surfs = raw.numCollSurfs;
+			// XModel + 316: radius, then the box as centre and half size ( codol_mapc XMODEL_RADIUS / XMODEL_BOUNDS )
+			desc.radius = z.get<float>(header + 316);
+			const c1::Bounds box = z.get<c1::Bounds>(header + 320);
+			std::memcpy(desc.mid, box.midPoint, sizeof(desc.mid));
+			std::memcpy(desc.half, box.halfSize, sizeof(desc.half));
+			desc.last_lod_dist = raw.numLods ? raw.lodInfo[raw.numLods - 1].dist : 0.0f;
+			zone::ModelView view;
+			if (zone::read_model(z, header, view, true) && !view.lods.empty())
+			{
+				for (const zone::SurfaceView& surface : view.lods[0].surfs.surfaces)
+				{
+					const std::vector<zone::SurfaceVertex> vertices = surface.vertices();
+					const std::vector<std::uint16_t> indices = surface.indices();
+					for (std::size_t k = 0; k + 2 < indices.size(); k += 3)
+					{
+						if (indices[k] == indices[k + 1] || indices[k + 1] == indices[k + 2] || indices[k] >= vertices.size() || indices[k + 1] >= vertices.size()
+							|| indices[k + 2] >= vertices.size())
+						{
+							continue;
+						}
+						for (int c = 0; c < 3; c++)
+						{
+							const zone::SurfaceVertex& v = vertices[indices[k + static_cast<std::size_t>(c)]];
+							desc.triangles.insert(desc.triangles.end(), { v.position[0], v.position[1], v.position[2] });
+						}
+					}
+				}
+			}
+		}
+	}
+
 	zone_ref asset_importer::model(const std::string_view name, std::string* why, model_desc* desc)
 	{
-		// An xmodel is copied as the donor zone has it ( ZoneEditor::add_asset_closure: the model and every asset it
-		// points into ), so it has to be a top level asset there: a model of the common zones, of a ported map, or
-		// one compiled by codol_assets. Models that only exist nested in a shipped map's gfx_map are not found.
+		// An xmodel that is a top level asset of its zone - a model of the common zones, of a ported map, one compiled by
+		// codol_assets - is copied as the donor zone has it ( ZoneEditor::add_asset_closure: the model and every asset it
+		// points into ). One that only exists nested in a shipped map's gfx_map is written again ( model_from ).
 		const auto key_name = std::make_pair(static_cast<int>(c1::ASSET_TYPE_XMODEL), std::string(name));
 		std::vector<std::filesystem::path> files = s->donors;
 		if (const auto it = s->cat.model_zone.find(name); it != s->cat.model_zone.end())
@@ -581,13 +840,7 @@ namespace codol::bsp
 			}
 			if (desc)
 			{
-				const c1::XModel raw = donor.zone().get<c1::XModel>(header);
-				desc->coll_surfs = raw.numCollSurfs;
-				// XModel + 316: radius, then the box as centre and half size ( codol_mapc XMODEL_RADIUS / XMODEL_BOUNDS )
-				desc->radius = donor.zone().get<float>(header + 316);
-				const c1::Bounds box = donor.zone().get<c1::Bounds>(header + 320);
-				std::memcpy(desc->mid, box.midPoint, sizeof(desc->mid));
-				std::memcpy(desc->half, box.halfSize, sizeof(desc->half));
+				describe_model(donor.zone(), header, *desc);
 			}
 			if (const auto known = s->by_name.find(key_name); known != s->by_name.end())
 			{
@@ -611,9 +864,30 @@ namespace codol::bsp
 			s->by_name[key_name] = ref;
 			return ref;
 		}
+		// nested in another asset ( a static model of a shipped map ): written again from the loaded zone
+		std::vector<std::filesystem::path> nested = s->donors;
+		if (const auto it = s->cat.nested_model_zone.find(name); it != s->cat.nested_model_zone.end())
+		{
+			nested.push_back(s->install / it->second);
+		}
+		for (const std::filesystem::path& file : nested)
+		{
+			const Zone* z = s->open(file, why);
+			const zaddr header = z ? z->find_asset(c1::ASSET_TYPE_XMODEL, name) : 0;
+			if (!header || z->reference(header))
+			{
+				continue;
+			}
+			if (desc)
+			{
+				describe_model(*z, header, *desc);
+				desc->nested = true;
+			}
+			return s->model_from(*z, header);
+		}
 		if (why && why->empty())
 		{
-			*why = "no zone has xmodel '" + std::string(name) + "' as a top level asset";
+			*why = "no zone has xmodel '" + std::string(name) + "'";
 		}
 		return {};
 	}
