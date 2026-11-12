@@ -252,7 +252,26 @@ namespace codol::bsp
 				return it->second;
 			}
 			bool known = false;
-			const clip_material_info info = material_info(ctx.cat, name, known);
+			clip_material_info info = material_info(ctx.cat, name, known);
+			if (!known && !is_tool_material(name))
+			{
+				// a material no shipped map has on a brush ( a modder's own ): what its definition says - the surface type
+				// as the shipped clip materials carry it ( type number << 20 ), solid unless it is blended ( a decal )
+				const material_desc& desc = ctx.importer.describe("wc/" + name);
+				if (desc.ref.valid())
+				{
+					int type = 0;
+					for (int bit = 0; bit < 32 && !type; bit++)
+					{
+						type = desc.surface_type_bits & (1u << bit) ? bit + 1 : 0;
+					}
+					info.surface_flags = type << 20;
+					info.contents = desc.see_through && desc.blend ? 0 : 1;
+					known = true;
+					ctx.rep.notes.push_back(format("collision: '%s' is on no brush of a shipped map; from its material: surface type %d, %s", name.c_str(), type,
+						info.contents ? "solid" : "does not collide ( a decal )"));
+				}
+			}
 			if (!known)
 			{
 				unknown.insert(name);
@@ -284,6 +303,16 @@ namespace codol::bsp
 			}
 			mb.contents = contents;
 			mb.opaque = mb.model == 0 && !mb.detail && (contents & 1) != 0;
+			// a brush that can be seen through ( an alpha tested or blended material on a face ) hides nothing and
+			// splits no cell, whatever its flags
+			for (std::size_t f = 0; f < mb.faces.size() && mb.opaque; f++)
+			{
+				if (!is_tool_material(mb.faces[f].material))
+				{
+					const material_desc& desc = ctx.importer.describe("wc/" + mb.faces[f].material);
+					mb.opaque = !(desc.ref.valid() && desc.see_through);
+				}
+			}
 			if (!mb.collides || contents == 0)
 			{
 				mb.collides = false;

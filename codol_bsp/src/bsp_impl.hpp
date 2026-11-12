@@ -198,6 +198,12 @@ namespace codol::bsp
 		int sort_key = 4;
 		std::string techset;
 		bool sky = false;
+		bool alpha_test = false, blend = false;	// by the technique set's name ( wc_l_sm_t0.. / _b0.., unlit_blend .. )
+		// A brush with such a face hides nothing: alpha tested, or blended with a decal sort key ( 6 .. 13 ). Blended
+		// materials with other keys are left to the mapper's flags: shipped maps have them on whole walls
+		// ( wc/me_cinderblock_wall2_sh of mp_killhouse_sh: wc_l_sm_b0c0q0n0s0p0, sort 14 ).
+		bool see_through = false;
+		std::uint32_t surface_type_bits = 0;
 		zone_ref sky_image;				// the cube map of a sky material, when its pixels or header are in a zone
 		std::string sky_image_name;
 	};

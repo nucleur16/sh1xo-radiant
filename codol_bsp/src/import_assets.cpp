@@ -721,6 +721,15 @@ namespace codol::bsp
 			d.sort_key = view.raw.sortKey;
 			d.techset = std::string(view.techsetName);
 			d.sky = d.techset.find("sky") != std::string::npos;
+			d.surface_type_bits = view.raw.surfaceTypeBits;
+			{
+				// wc_l_sm_<r|b|t>0c0..: replace, blend, alpha test; wc_unlit_<replace|blend|add|multiply|screen>_lin
+				const std::size_t lit = d.techset.find("_sm_");
+				const char mode = lit != std::string::npos && lit + 4 < d.techset.size() ? d.techset[lit + 4] : 0;
+				d.alpha_test = mode == 't';
+				d.blend = mode == 'b' || (d.techset.find("unlit_") != std::string::npos && d.techset.find("unlit_replace") == std::string::npos);
+				d.see_through = d.alpha_test || (d.blend && d.sort_key >= 6 && d.sort_key <= 13);
+			}
 			bool sized = false;
 			for (const zone::MaterialTexture& t : view.textures)
 			{

@@ -54,6 +54,7 @@ namespace
 		{ "two_rooms_leak", [](edit::document& doc) { bsp::test::make_two_rooms(doc, {}, true); } },
 		{ "content", [](edit::document& doc) { bsp::test::make_content(doc); } },
 		{ "big", [](edit::document& doc) { bsp::test::make_big(doc, 12); } },
+		{ "modder", [](edit::document& doc) { bsp::test::make_modder(doc); } },
 	};
 
 	bool write_maps(const fs::path& dir)

@@ -250,6 +250,20 @@ namespace codol::bsp::test
 		doc.create_point_entity("reflection_probe", { 272, 0, 96 });
 	}
 
+	// Modder materials: the sky room with walls, a fence and a decal whose materials exist in no zone of the install
+	// ( tests/make_modder_assets.py + codol_assetc make them from PNGs; the zone is given with --assets ). The fence
+	// is a structural brush on purpose: it must not hide the wall behind it. The decal is a flat patch on the floor.
+	inline void make_modder(edit::document& doc)
+	{
+		materials m;
+		m.wall = "bsp_test_wall";
+		make_box_room(doc, m, true);
+		doc.create_box({ -320, 192, 0 }, { 320, 200, 160 }, "bsp_test_fence");
+		doc.deselect_all();
+		doc.create_terrain_patch({ 200, -120, 1 }, { 456, 136, 1 }, 3, 3, 2, "bsp_test_decal");
+		doc.deselect_all();
+	}
+
 	// M6: n x n rooms of 512 x 512, every room joined to its neighbours by doorways, crates in each. All brushes are
 	// textured on all sides.
 	inline void make_big(edit::document& doc, const int n, const materials& m = {})
