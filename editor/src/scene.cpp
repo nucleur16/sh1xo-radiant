@@ -5,6 +5,7 @@
 #undef max
 
 #include "host.hpp"
+#include "assets.hpp"
 #include "scene.hpp"
 
 #include <charconv>
@@ -280,6 +281,9 @@ namespace editor
 			}
 		}
 
+		// the zone of the map's asset project is one of the zones the map is loaded with
+		assets::map_opening(map);
+
 		if (!renderer.load_map(map, &error))
 		{
 			error = "Could not load " + map + ": " + error;
@@ -338,6 +342,36 @@ namespace editor
 		open_serial++;
 		last_selection_box = {};
 		seen_change_ = seen_visibility_ = seen_selection_ = statics_change_ = ~0ull;
+	}
+
+	void scene::refresh_assets()
+	{
+		if (!renderer.loaded())
+		{
+			return;
+		}
+
+		for (auto& [id, link] : links_)
+		{
+			if (link.placed || !link.failed_model.empty())
+			{
+				drop_placed(link);
+				link.failed_model.clear();
+				link.pushed = false;
+			}
+		}
+
+		for (auto& [id, m] : meshes_)
+		{
+			destroy_mesh(m);
+			m.revision = ~0ull;
+		}
+
+		texture_sizes_.clear();
+		model_boxes_.clear();
+		no_model_box_.clear();
+		caches_dirty_ = true;
+		seen_change_ = ~0ull;
 	}
 
 	void scene::close()
@@ -868,7 +902,7 @@ namespace editor
 
 			if (unmatched)
 			{
-				game::printf_to_console("^1[CoDOL] %d static model(s) of the map could not be matched with the zone.\n", unmatched);
+				game::printf_to_console("[CoDOL] %d static model(s) of the map are not in the zone: new ones ( the map compile adds them ), or edited beyond recognition.\n", unmatched);
 			}
 		}
 
@@ -2133,6 +2167,13 @@ namespace editor
 		if (yaw != 0.0)
 		{
 			pairs.emplace_back("angles", edit::format_key_vec3({ 0.0, yaw, 0.0 }));
+		}
+
+		// a misc_model only exists as a static model of the compiled map: the key is what makes the map compile
+		// ( codol_mapc ) add it, with a model the map zone does not have taken from the project's zone
+		if (model_class == "misc_model")
+		{
+			pairs.emplace_back(codol::mapents::KEY_STATIC, "1");
 		}
 
 		return doc.create_point_entity(model_class, origin, pairs);

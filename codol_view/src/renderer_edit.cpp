@@ -706,6 +706,113 @@ namespace codol::view
 		model_names_built = material_names_built = true;
 	}
 
+	// ---------------------------------------------------------------------------------------------------
+	// zones at run time
+
+	// Takes a zone out of the lookup. Nothing that was made from it is destroyed: meshes and instances point at
+	// material_draw / model_draw objects, and the caches are keyed by addresses inside the frozen zone.
+	void map_renderer::impl::retire_zone(const std::string& name)
+	{
+		for (std::size_t i = 1; i < scope.zones.size(); i++)
+		{
+			if (!equals_ignore_case(scope.zones[i]->name, name))
+			{
+				continue;
+			}
+			const std::shared_ptr<const library_zone> old = scope.zones[i];
+			scope.zones.erase(scope.zones.begin() + static_cast<std::ptrdiff_t>(i));
+			for (const auto& [material_name, material] : old->materials)
+			{
+				thumbnails.erase(material_name);
+				for (const auto& texture : material->asset.textures)
+				{
+					image_sizes.erase(texture.image_name);
+					if (!texture.embedded)
+					{
+						continue;
+					}
+					// inline pixels are cached by name and size: a rebuilt image has both
+					const std::string key = texture.image_name + "#" + std::to_string(texture.embedded->data_size);
+					if (const auto it = textures.find(key); it != textures.end())
+					{
+						retired_textures.push_back(std::move(it->second));
+						textures.erase(it);
+					}
+				}
+			}
+			for (const auto& model : old->models)
+			{
+				resolved_models.erase(model.first);
+				if (const auto it = models.find(model.first); it != models.end())
+				{
+					retired_models.push_back(std::move(it->second));
+					models.erase(it);
+				}
+			}
+			retired_zones.push_back(old);
+			break;
+		}
+		if (held_zone && equals_ignore_case(held_zone->name(), name))
+		{
+			held_zone.reset();
+		}
+		// what was not found before may exist now
+		std::erase_if(resolved_models, [](const auto& entry) { return entry.second == nullptr; });
+		std::erase_if(thumbnails, [](const auto& entry) { return !entry.second; });
+		texture_failed.clear();
+		model_names_built = material_names_built = false;
+	}
+
+	bool map_renderer::impl::register_zone(const std::filesystem::path& file, std::string* error)
+	{
+		const std::string name = file.stem().string();
+		if (name.empty())
+		{
+			render::set_error(error, "register_zone: no file name");
+			return false;
+		}
+		if (map_loaded && equals_ignore_case(name, map_name))
+		{
+			render::set_error(error, "register_zone: " + name + " is the map that is loaded");
+			return false;
+		}
+		library.set_zone_file(name, file);
+		if (std::none_of(opts.extra_zones.begin(), opts.extra_zones.end(), [&](const std::string& known) { return equals_ignore_case(known, name); }))
+		{
+			opts.extra_zones.push_back(name);
+		}
+		if (!map_loaded)
+		{
+			return true;		// load_map reads it
+		}
+		std::string zone_error;
+		const std::shared_ptr<const library_zone> fresh = library.frozen(name, &zone_error);
+		if (!fresh)
+		{
+			render::set_error(error, "zone " + name + ": " + (zone_error.empty() ? std::string("not found") : zone_error));
+			return false;
+		}
+		retire_zone(name);
+		scope.zones.push_back(fresh);
+		return true;
+	}
+
+	bool map_renderer::impl::unregister_zone(const std::string& name)
+	{
+		const auto known = std::find_if(opts.extra_zones.begin(), opts.extra_zones.end(), [&](const std::string& zone) { return equals_ignore_case(zone, name); });
+		if (known == opts.extra_zones.end())
+		{
+			return false;
+		}
+		opts.extra_zones.erase(known);
+		library.set_zone_file(name, {});
+		if (map_loaded)
+		{
+			retire_zone(name);
+		}
+		return true;
+	}
+
 	bool map_renderer::impl::material_details(const std::string& name, material_info& out)
 	{
 		const std::shared_ptr<const library_material> found = map_loaded ? scope.find_material(name) : nullptr;
@@ -1061,6 +1168,22 @@ namespace codol::view
 	}
 
 	void map_renderer::release_zone_cache() { impl_->held_zone.reset(); }
+
+	bool map_renderer::register_zone(const std::filesystem::path& fastfile, std::string* error)
+	{
+		try
+		{
+			return impl_->register_zone(fastfile, error);
+		}
+		catch (const std::exception& e)
+		{
+			impl_->last_error = std::string("register_zone: ") + e.what();
+			render::set_error(error, impl_->last_error);
+			return false;
+		}
+	}
+
+	bool map_renderer::unregister_zone(const std::string& name) { return impl_->unregister_zone(name); }
 
 	bool map_renderer::material_details(const std::string& name, material_info& out)
 	{

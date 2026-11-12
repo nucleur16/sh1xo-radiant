@@ -43,6 +43,7 @@ needed. What it is made of:
 |---|---|---|
 | Radiant | `CoDOLRadiant.exe` | open a map of the install, edit entities / models / brushes in 3D and 2D views with undo, save as `.map` |
 | `cod4map` | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the map's fastfile: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. Incremental: it patches the shipped zone, it does not build a map from nothing. No light bake. |
+| Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials and models: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export` -> native assets in `mod\<map>\<map>_assets.ff`, shown by the editor at once. See [Your own assets](#your-own-assets). |
 | `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
 | script editing | Script Workbench, rcon reload | unchanged |
 
@@ -52,6 +53,59 @@ server reads both. See `codol_mapc/README.md` for what has to be checked in the 
 output has been loaded in the game yet.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
 where the work goes.
+
+### Your own assets
+
+Every map has a project folder next to the editor ( the project is named after the map; `asset_project <name>`
+picks another one ):
+
+```
+mod\<project>\images\*.png | *.tga | *.dds        source images; the image asset is named after the file
+mod\<project>\materials\*.mtl                    material definitions ( codol_assets/README.md, ".mtl" )
+mod\<project>\models\<name>.model                a model: LOD files with distances, collision LOD, material names
+mod\<project>\models\*.xmodel_export             LOD files; one that no .model names is a model of one LOD
+                                                 ( <name>_lod0 .. _lod3.xmodel_export belong together )
+mod\<project>\<project>_assets.ff                 the zone built from all of it
+mod\<project>\build_state.txt                     what the last build made of each source
+mod\codol_matlib.txt                             the material library: one scan of the install ( 20 s, once )
+```
+
+**View > Assets** lists every source with its status - new, changed, built, failed with the compiler's message,
+unused ( an image no material names ) - and has **Build**. A build compiles everything again on a worker thread
+( `codol_assets`: `compile_image`, `compile_material`, `compile_model`, `AssetLinker` ) into a new zone; the editor
+stays usable. The renderer then takes the zone without loading the map again ( `map_renderer::register_zone` ), and
+every mesh and placed model is made again from it.
+
+| what | where | command |
+|---|---|---|
+| material from images | Materials > **New material ..**, Assets window, or drop image files on the editor window ( `_n` / `_nml` / `_normal` and `_s` / `_spc` / `_spec` at the end of a name fill the normal and specular map ) | `asset_new_material <name> <kind> <colour map> [normal=<file>] [specular=<file>] [surface=<type>] [overwrite]` |
+| model | Models > **Import model ..**, or drop `.xmodel_export` files | `asset_import_model <name> <lod0>[@dist] [<lod1>[@dist] ..] [collision=<lod>] [mtl:<export material>=<material>] [overwrite]` |
+| materials of a CoD4 `.gdt` | Materials > **GDT ..**, or drop a `.gdt` | `asset_gdt <file> [root=<folder the image paths start from>] [overwrite] [all \| <material> ..]` ( without a choice: the list ) |
+| build, list | Assets window | `asset_build`, `asset_list`, `asset_rescan`, `asset_status`, `asset_project [name]` |
+| check the zone | | `asset_verify` ( `codol_assetc --verify`: the game's loaders read the zone, it is written again and compared ) |
+| the windows, for unattended runs | | `asset_dialog material \| model \| gdt [file] \| close`, `asset_drop <file> ..` ( what dropping the files does ), `ed_windows a` |
+
+Material kinds ( the technique set follows from the kind and the maps given, as `codol_assets` `techset_for` has it ):
+`world`, `world_alpha` ( alpha tested ), `world_blend`, `decal`, `world_unlit` become `wc/<name>`; `model`,
+`model_alpha`, `model_blend`, `model_unlit` become `mc/<name>`; `2d`. The material is the material of new brushes
+right away and is applied like any other ( browser, `tex_set` ). A model is placed from the Models browser or with
+`ed_place`; `ed_model_class misc_model` makes new model entities static models of the compiled map.
+
+**In the compiled map** ( File > Compile map ). The project's zone is passed to `codol_mapc` as a `--donor`:
+
+* A model of the project that an entity uses - a `misc_model` ( static ) or any other class ( `script_model` .. ) -
+  is copied into the map zone with its materials and images ( "entity models / static models: xmodel .. taken from
+  zone .." in the report ).
+* **New world materials are not drawn in the game.** The incremental compiler draws new faces only with materials
+  that the world of the base map already uses; faces with any other material collide but are invisible. The Assets
+  window says so next to every such material, and the compile lists the faces - before it runs and with the
+  compiler's report - in the console, in a toast and in the Assets window ( "Last compile: not in the game" ).
+* Images are stored inline in the zone ( DXT ), which no shipped material texture does; see "Not done, taken on
+  trust" in `codol_assets/README.md`. Nothing of this has been loaded by the game client or a server from the editor.
+
+Not there: deleting or renaming an asset from the editor ( delete the files, Rescan ), editing a material's
+definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import windows, streamed images ( `.iwi` in an
+`.iwd` ), per image options ( format, `flipy` ).
 ## What works
 
 | Area | Status |
@@ -224,7 +278,8 @@ The rcon packet is `\xff\xff\xff\xffrcon "<password>" <command>` to `127.0.0.1:<
 Other dvars: `codol_reload_on_save`, `codol_rcon_log`, `codol_rcon_password` (not saved).
 
 For unattended testing: `CODOL_STARTUP_CMDS="cmd;wait 5;cmd"` runs console commands once the UI is
-up, `CODOL_AUTOSHOT=<file.png>` saves the rendered UI frame to that file every two seconds, and
+up, `CODOL_AUTOSHOT=<file.png>` saves the rendered UI frame to that file every two seconds ( the standalone
+editor also has `ed_shot <file.png>`: the next frame, at a moment the command list picks ), and
 `CODOL_NO_MONO_FONT=1` skips loading the monospace editor font.
 
 ## Code layout, build and tests

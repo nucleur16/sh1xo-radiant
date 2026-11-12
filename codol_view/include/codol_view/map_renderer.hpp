@@ -446,6 +446,19 @@ namespace codol::view
 		// so that the next call is fast; it is dropped after 120 frames without such a call, or here
 		void release_zone_cache();
 
+		// ---- zones at run time ------------------------------------------------------------------------------
+		// A fast file anywhere on disk ( a zone of new assets made by codol_assets ) becomes a zone of the library
+		// under its file name without ".ff", exactly like a name of options::extra_zones - also for every map that
+		// is loaded later. With a map loaded its materials and models can be used at once ( material_names,
+		// material_thumbnail, create_mesh, model_names, add_model ): nothing of the map is loaded again.
+		// Registering the name again reads the file again ( the zone was rebuilt ). Meshes and placed models that
+		// exist keep what they were made with - also when the asset changed or is gone - until the host makes them
+		// again ( update_mesh, remove_model + add_model ); what they use stays in memory until unload(). False
+		// when the file cannot be read as a zone ( with a map loaded the zone registered before stays in use ).
+		bool register_zone(const std::filesystem::path& fastfile, std::string* error = nullptr);
+		// the zone is no longer searched and not loaded with the next map; false when it was not registered
+		bool unregister_zone(const std::string& name);
+
 		// ---- dynamic meshes ---------------------------------------------------------------------------------
 		// Host supplied triangles drawn with a game material ( see mesh_shading and the README for the lighting ).
 		// The data is copied. Returns a handle > 0, 0 on failure ( no vertices, an index out of range ).

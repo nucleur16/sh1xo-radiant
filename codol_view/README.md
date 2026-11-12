@@ -133,6 +133,7 @@ const int brush = renderer.create_mesh(mesh_data);      // position, normal, col
 | objects | `objects`, `object`, `object_ref`, `set_hidden`, `is_hidden`, `show_all` | `object_ref { kind, id }` names any object; `scene_object::ref()` gives it |
 | transforms | `set_transform`, `get_transform`, `reset_transform`, `transform` | origin, angles ( pitch, yaw, roll in degrees ), uniform scale; static, entity and placed models, brush models |
 | new models | `add_model`, `remove_model`, `model_bounds`, `model_names`, `release_zone_cache` | any XModel of the map, level, shared or `options::extra_zones` zones |
+| zones at run time | `register_zone`, `unregister_zone` | a fast file anywhere on disk ( a zone of new assets ) becomes a zone like one of `options::extra_zones` while a map is loaded: its materials and models are in the catalogs and usable at once, nothing of the map is loaded again. Registering the name again reads the file again; existing meshes and placed models keep what they were made with until the host makes them again |
 | meshes | `create_mesh`, `update_mesh`, `destroy_mesh`, `set_mesh_visible`, `mesh_shading_of`, `mesh_vertex`, `mesh_data` | host triangles with a game material |
 | materials | `material_names`, `material_details`, `material_thumbnail`, `material_info` | colour map name and size, surface type bits, flags; thumbnails are `IDirect3DTexture9*` owned by the renderer |
 | selection | `object_box`, `object_triangles`, `oriented_box` | to outline an object in the overlay hook |

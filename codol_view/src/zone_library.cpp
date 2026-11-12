@@ -153,6 +153,10 @@ namespace codol::view
 	std::filesystem::path zone_library::find_zone_file(const std::string& name) const
 	{
 		std::error_code ec;
+		if (const auto it = files_.find(name); it != files_.end())
+		{
+			return std::filesystem::is_regular_file(it->second, ec) ? it->second : std::filesystem::path();
+		}
 		for (const auto& directory : directories_)
 		{
 			std::filesystem::path path = directory / (name + ".ff");
@@ -337,6 +341,19 @@ namespace codol::view
 		std::shared_ptr<const library_zone> result = freeze(*loaded);
 		frozen_.emplace(name, result);
 		return result;
+	}
+
+	void zone_library::set_zone_file(const std::string& name, const std::filesystem::path& file)
+	{
+		frozen_.erase(name);
+		if (file.empty())
+		{
+			files_.erase(name);
+		}
+		else
+		{
+			files_[name] = file;
+		}
 	}
 
 	void zone_library::clear()

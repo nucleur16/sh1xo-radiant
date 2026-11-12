@@ -115,6 +115,10 @@ namespace codol::view
 		// exist or cannot be loaded ( with a text in *error when it exists ).
 		std::shared_ptr<const library_zone> frozen(const std::string& name, std::string* error);
 
+		// A zone outside the zone directories: <name>.ff is `file` from now on ( an empty path takes that back ).
+		// What is cached of the zone is dropped, so the next frozen() reads the file as it is then.
+		void set_zone_file(const std::string& name, const std::filesystem::path& file);
+
 		// RenderAssetLibrary.AddLoadedZone + Freeze for a zone that is already in memory ( not cached )
 		static std::shared_ptr<library_zone> freeze(const zone::Zone& zone, std::vector<std::string>* warnings = nullptr);
 
@@ -124,6 +128,7 @@ namespace codol::view
 	private:
 		zone::ClientKey key_;
 		std::vector<std::filesystem::path> directories_;
+		name_map<std::filesystem::path> files_;			// set_zone_file
 		name_map<std::shared_ptr<const library_zone>> frozen_;
 	};
 }
