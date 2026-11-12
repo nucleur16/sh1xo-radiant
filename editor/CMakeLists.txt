@@ -57,6 +57,8 @@ add_executable(CoDOLRadiant WIN32
 	src/host.hpp
 	src/lights.cpp
 	src/maps_dialog.cpp
+	src/preview.cpp
+	src/preview.hpp
 	src/scene.cpp
 	src/scene.hpp
 	src/ui.hpp

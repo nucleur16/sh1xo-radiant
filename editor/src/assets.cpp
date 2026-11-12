@@ -2312,6 +2312,52 @@ namespace editor::assets
 
 	std::string default_anim_tree() { return g.project; }
 
+	bool model_files(const std::string& name, preview_files& out)
+	{
+		const auto known = g.sources.models.find(clean_name(name));
+		if (known == g.sources.models.end() || known->second.lods.empty())
+		{
+			return false;
+		}
+
+		const fs::path& lod = known->second.lods[0].file;
+		out.mesh = lod.is_absolute() ? lod : project_dir() / "models" / lod;
+		out.materials = known->second.materials;
+		return true;
+	}
+
+	bool anim_files(const std::string& name, preview_files& out)
+	{
+		const auto known = g.sources.anims.find(clean_name(name));
+		if (known == g.sources.anims.end())
+		{
+			return false;
+		}
+
+		const auto& def = known->second;
+		out = {};
+		out.xanim = def.file.is_absolute() ? def.file : project_dir() / "anims" / def.file;
+		out.loop = def.loop;
+
+		if (!def.model.empty())
+		{
+			preview_files model;
+
+			if (model_files(def.model, model))
+			{
+				out.model = clean_name(def.model);
+				out.mesh = model.mesh;
+				out.materials = model.materials;
+			}
+			else
+			{
+				out.mesh = skeleton_file(project_dir(), g.sources, def.model);
+			}
+		}
+
+		return true;
+	}
+
 	std::vector<std::string> project_models()
 	{
 		std::vector<std::string> out;

@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 #include "scene.hpp"
 
 #include <charconv>
@@ -524,6 +525,7 @@ namespace editor
 
 		spawn_index = 0;
 		renderer.spawn_camera(0, cam);
+		preview::renderer_changed();
 		return true;
 	}
 
@@ -595,6 +597,7 @@ namespace editor
 		no_model_box_.clear();
 		caches_dirty_ = true;
 		seen_change_ = ~0ull;
+		preview::assets_changed();
 	}
 
 	void scene::close()
@@ -602,6 +605,7 @@ namespace editor
 		clear_view_state();
 		doc.new_map();
 		renderer.unload();
+		preview::renderer_changed();
 		map_name.clear();
 		map_file.clear();
 		open = false;

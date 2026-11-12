@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 
 #include <commdlg.h>
 #include <atomic>
@@ -1984,6 +1985,7 @@ namespace editor::ui
 			st.show_materials = which.find('t') != std::string::npos;
 			st.show_surface = which.find('u') != std::string::npos;
 			st.show_assets = which.find('a') != std::string::npos;
+			st.show_preview = which.find('p') != std::string::npos;
 		});
 
 		// ed_focus_window <title>: bring a docked window to the front, eg. ed_focus_window Materials##window
@@ -2115,6 +2117,7 @@ namespace editor::ui
 
 		// ---- the project's assets: asset_new_material, asset_import_model, asset_gdt, asset_build, asset_list ..
 		assets::register_commands();
+		preview::register_commands();
 
 		command::register_command("help", [](args_t)
 		{

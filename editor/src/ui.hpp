@@ -35,6 +35,7 @@ namespace editor::ui
 		bool show_materials = false;
 		bool show_surface = false;
 		bool show_assets = false;
+		bool show_preview = false;
 
 		// which view the mouse was over in the last frame: decides what view relative shortcuts mean
 		int hovered_2d = -1;		// index of the 2D view, -1: none

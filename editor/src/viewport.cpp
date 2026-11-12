@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 #include "ui.hpp"
 
 #include <ImGuizmo.h>
@@ -245,6 +246,8 @@ namespace ggui
 
 	void codol_viewport_dialog::on_device_lost()
 	{
+		editor::preview::device_lost();
+
 		if (auto& s = editor::get_scene(); s.renderer.initialised())
 		{
 			s.renderer.on_device_lost();
@@ -1185,7 +1188,7 @@ namespace ggui
 		}
 
 		ImGui::SameLine();
-		ImGui::TextDisabled("%d models. Double click: new entity where the camera looks.", static_cast<int>(names.size()));
+		ImGui::TextDisabled("%d models. Click: preview. Double click: new entity where the camera looks.", static_cast<int>(names.size()));
 
 		// a model of the map's own project ( assets.hpp ); a row of its own: the window is often narrow
 		if (ImGui::Button("Import model .."))
@@ -1238,7 +1241,15 @@ namespace ggui
 				{
 					const auto& name = names[static_cast<std::size_t>(filtered[static_cast<std::size_t>(row)])];
 
-					if (ImGui::Selectable(name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					const bool clicked = ImGui::Selectable(name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+
+					if (clicked && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					{
+						// a look at it before it is placed
+						editor::preview::show_model(name);
+					}
+
+					if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					{
 						// on what the camera looks at, else a few steps ahead; facing the camera
 						const auto target = edit::snap_point(s.ray_target(s.cam.origin, s.cam.axes().forward), s.snap ? s.grid : 0.0);
@@ -1352,7 +1363,8 @@ namespace ggui
 
 		if (ImGui::IsItemHovered())
 		{
-			ImGui::SetTooltip("Click: the material of new brushes. Double click: also apply it to the selection.\nW: a world material ( its technique set reads lightmaps: made for brushes and terrain ).");
+			ImGui::SetTooltip("Click: the material of new brushes. Double click: also apply it to the selection.\nRight click: the Preview window ( its picture, a cube drawn with it ).\n"
+				"W: a world material ( its technique set reads lightmaps: made for brushes and terrain ).");
 		}
 
 		// materials of the map's own project ( assets.hpp ); a row of their own: the window is often narrow
@@ -1432,6 +1444,17 @@ namespace ggui
 						if (ImGui::IsItemClicked())
 						{
 							doc.set_default_material(name);
+
+							// the Preview window follows while it is open
+							if (st.show_preview)
+							{
+								editor::preview::show_material(name);
+							}
+						}
+
+						if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+						{
+							editor::preview::show_material(name);
 						}
 
 						if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))

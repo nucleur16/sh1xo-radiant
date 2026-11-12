@@ -126,8 +126,16 @@ namespace codol::view
 			if (usable)
 			{
 				// both techniques the frame can ask for ( with and without the sun shadow map ) must be drawable
-				// with world vertices
-				const int format = render::vertex_format::WORLD + material->set().world_vert_format;
+				// with world vertices - or, for the technique set of a model material ( "mc_.." ), with the packed
+				// vertices of a model: its vertex shaders expect the texture coordinates of that format ( with world
+				// vertices such a mesh came out in one flat colour )
+				std::string_view set_name = material->set().name;
+				if (!set_name.empty() && set_name[0] == ',')
+				{
+					set_name.remove_prefix(1);
+				}
+				const bool model_set = set_name.rfind("mc_", 0) == 0;
+				const int format = model_set ? render::vertex_format::PACKED : render::vertex_format::WORLD + material->set().world_vert_format;
 				for (const bool shadows : { false, true })
 				{
 					render::technique_choice choice;
@@ -278,7 +286,32 @@ namespace codol::view
 					bitangents[mesh.indices[t + static_cast<std::size_t>(k)]] = bitangents[mesh.indices[t + static_cast<std::size_t>(k)]] + bitangent;
 				}
 			}
-			std::vector<std::uint8_t> bytes(count * sizeof(c1::GfxWorldVertex));
+			const bool packed = mesh.format == render::vertex_format::PACKED;
+			// IEEE half float of a texture coordinate
+			const auto half = [](const float value) -> std::uint16_t
+			{
+				std::uint32_t bits = 0;
+				std::memcpy(&bits, &value, 4);
+				const std::uint32_t sign = (bits >> 16) & 0x8000u;
+				const int exponent = static_cast<int>((bits >> 23) & 0xFF) - 127 + 15;
+				const std::uint32_t mantissa = bits & 0x7FFFFFu;
+				if (exponent <= 0)
+				{
+					if (exponent < -10)
+					{
+						return static_cast<std::uint16_t>(sign);
+					}
+					const std::uint32_t m = (mantissa | 0x800000u) >> (1 - exponent);
+					return static_cast<std::uint16_t>(sign | ((m + 0x1000u) >> 13));
+				}
+				if (exponent >= 31)
+				{
+					return static_cast<std::uint16_t>(sign | 0x7BFFu);		// the largest finite value
+				}
+				return static_cast<std::uint16_t>((sign | (static_cast<std::uint32_t>(exponent) << 10) | (mantissa >> 13)) + ((mantissa & 0x1000u) ? 1 : 0));
+			};
+			const std::size_t stride = packed ? sizeof(c1::GfxPackedVertex) : sizeof(c1::GfxWorldVertex);
+			std::vector<std::uint8_t> bytes(count * stride);
 			for (std::size_t v = 0; v < count; v++)
 			{
 				const mesh_vertex& in = mesh.vertices[v];
@@ -290,6 +323,21 @@ namespace codol::view
 					tangent = cross(normal, std::fabs(normal.z) < 0.9f ? float3{ 0, 0, 1 } : float3{ 1, 0, 0 });
 				}
 				tangent = normalised(tangent);
+				if (packed)
+				{
+					c1::GfxPackedVertex out{};
+					out.xyz[0] = in.position.x;
+					out.xyz[1] = in.position.y;
+					out.xyz[2] = in.position.z;
+					out.binormalSign = dot(cross(normal, tangent), bitangents[v]) < 0 ? -1.0f : 1.0f;
+					out.color = in.color;
+					out.texCoordV = half(in.uv[1]);
+					out.texCoordU = half(in.uv[0]);
+					out.normal = pack_unit_vector(normal);
+					out.tangent = pack_unit_vector(tangent);
+					std::memcpy(bytes.data() + v * sizeof out, &out, sizeof out);
+					continue;
+				}
 				c1::GfxWorldVertex out{};
 				out.xyz[0] = in.position.x;
 				out.xyz[1] = in.position.y;
@@ -304,9 +352,9 @@ namespace codol::view
 				std::memcpy(bytes.data() + v * sizeof out, &out, sizeof out);
 			}
 			mesh.vertex_buffer = create_vertex_buffer(bytes);
-			mesh.vertex_stride = sizeof(c1::GfxWorldVertex);
+			mesh.vertex_stride = static_cast<int>(stride);
 			mesh.vertex_capacity = static_cast<int>(bytes.size());
-			if (const int layer_stride = render::stream1_stride(mesh.format); layer_stride > 0)
+			if (const int layer_stride = packed ? 0 : render::stream1_stride(mesh.format); layer_stride > 0)
 			{
 				// more texture layers than one: the mesh has none, their blend data is zero
 				const std::vector<std::uint8_t> layer(count * static_cast<std::size_t>(layer_stride), 0);

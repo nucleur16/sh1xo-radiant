@@ -158,6 +158,18 @@ namespace editor::assets
 	bool import_anim(const anim_request& request, std::string& error);
 	std::string default_anim_tree();					// the animtree of animations that name none: the project's name
 	std::vector<std::string> project_models();			// names, for the skeleton of an animation
+	// for the Preview window: the files of a model / an animation of the project
+	struct preview_files
+	{
+		std::filesystem::path xanim;						// animation: its .xanim_export
+		std::filesystem::path mesh;							// the .xmodel_export of LOD 0 ( an animation: of its model ); empty: none
+		std::string model;									// animation: its model when that is a model of the project
+		std::map<std::string, std::string> materials;		// export material -> material
+		bool loop = false;
+	};
+	bool model_files(const std::string& name, preview_files& out);
+	bool anim_files(const std::string& name, preview_files& out);
+
 	// copies a soundaliases .csv and what it names - sound files, curves, speaker maps - from the tree around it
 	// ( `root`: the folder that holds sound\ and soundaliases\; empty: above the csv's soundaliases\ ) and builds
 	bool import_sounds(const std::filesystem::path& csv, const std::filesystem::path& root, bool overwrite, std::string& error);

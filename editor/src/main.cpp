@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 #include "png_wic.hpp"
 
 // CoDOL Radiant: the standalone host. A plain Win32 window with a Direct3D 9 device and a docking ImGui on it.
@@ -363,6 +364,7 @@ namespace editor
 				ImGui::MenuItem("Models", nullptr, &st.show_models);
 				ImGui::MenuItem("Materials", nullptr, &st.show_materials);
 				ImGui::MenuItem("Assets", nullptr, &st.show_assets);
+				ImGui::MenuItem("Preview", nullptr, &st.show_preview);
 				ImGui::MenuItem("Surface inspector", "S", &st.show_surface);
 				ImGui::Separator();
 				item("Maps", GET_GUI(ggui::codol_map_ents_dialog));
@@ -585,6 +587,7 @@ namespace editor
 			}
 
 			assets::frame();
+			preview::frame();
 
 			ui::draw_grid_views();
 			ui::draw_entity_window();

@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "assets.hpp"
+#include "preview.hpp"
 
 #include <commdlg.h>
 
@@ -1025,8 +1026,23 @@ namespace editor::assets
 					ImGui::TextColored(dim, "%s", tag);
 					ImGui::SameLine(124.0f);
 
-					if (ImGui::Selectable(entry.name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick) && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
-						&& entry.state == status::built)
+					const bool clicked = ImGui::Selectable(entry.name.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick);
+
+					if (clicked && !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+					{
+						// a look ( or a listen ) before it is used: the Preview window
+						switch (entry.type)
+						{
+						case kind::image: preview::show_image(entry.file); break;
+						case kind::material: if (entry.state == status::built) { preview::show_material(entry.name); } break;
+						case kind::model: if (entry.state == status::built) { preview::show_model(entry.name); } break;
+						case kind::anim: preview::show_anim(entry.name); break;
+						case kind::sound: preview::show_sounds(entry.file); break;
+						default: break;
+						}
+					}
+
+					if (clicked && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && entry.state == status::built)
 					{
 						// use it: the material of new brushes ( and of the selection ), or a new entity with the model
 						if (entry.type == kind::material)
@@ -1048,11 +1064,12 @@ namespace editor::assets
 					if (ImGui::IsItemHovered())
 					{
 						// how it is used: in the editor, or by the level script of the built map
-						const std::string use = entry.type == kind::material ? "Double click: the material of new brushes and of the selection."
-							: entry.type == kind::model ? "Double click: a new entity with the model where the camera looks."
-							: entry.type == kind::anim ? "File > Build map puts it into the map. Script: #using_animtree( \"<its animtree>\" ); in front of main(), then\n"
+						const std::string use = entry.type == kind::material ? "Click: preview. Double click: the material of new brushes and of the selection."
+							: entry.type == kind::model ? "Click: preview. Double click: a new entity with the model where the camera looks."
+							: entry.type == kind::image ? "Click: the picture."
+							: entry.type == kind::anim ? "Click: plays it on its model ( Preview window ). File > Build map puts it into the map. Script: #using_animtree( \"<its animtree>\" ); in front of main(), then\n"
 								"ent setAnim( %" + entry.name + ", 1, 0, 1 ); on a script_model that has its model"
-							: entry.type == kind::sound ? "File > Build map puts the aliases into the map. Script: ent playSound( \"<alias>\" ); ent playLoopSound( \"<alias>\" );\n"
+							: entry.type == kind::sound ? "Click: its aliases, to listen to. File > Build map puts the aliases into the map. Script: ent playSound( \"<alias>\" ); ent playLoopSound( \"<alias>\" );\n"
 								"ambientPlay( \"<alias>\" ); in the map: a script_sound entity"
 							: entry.type == kind::fx ? "File > Build map puts it into the map. Script: level._effect[ \"x\" ] = loadfx( \"" + entry.name + "\" ); playfx( level._effect[ \"x\" ], origin );\n"
 								"in the map: a script_fx entity with the key fx " + entry.name
