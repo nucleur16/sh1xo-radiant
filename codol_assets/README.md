@@ -413,7 +413,10 @@ decoder ( `src/codol/assets` ), which validates every asset of a zone it mounts.
 
 Everything is in the library; the tool is a thin shell around it. Keep one `MaterialLibrary` ( `open` with a cache
 file ) and write new assets into a zone of their own in a folder the renderer searches ( `options::zone_directories` /
-`extra_zones` of `codol_view` ).
+`extra_zones` of `codol_view` ), or hand the file to the renderer while a map is loaded ( `map_renderer::register_zone` ).
+
+CoDOL Radiant does exactly this ( `editor/src/assets.cpp`, `asset_windows.cpp`; `docs/CODOL.md`, "Your own assets" ):
+a project folder per map, a build on a worker thread, the Assets window, "New material ..", "Import model ..", GDT.
 
 **New material from image**
 
