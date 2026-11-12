@@ -544,7 +544,9 @@ namespace codol::bsp
 				{
 					for (int j = 0; j < 3; j++)
 					{
-						list[k].invScaledAxis[i][j] = model.axis[i][j] / model.scale;		// as the shipped entries: the axis over the scale
+						// the inverse of the scaled axis: transpose( axis ) / scale. Every clip entry of the shipped maps
+						// checked is that ( codol_bsp_probe smodels ), and the engine's point trace reads it so.
+						list[k].invScaledAxis[i][j] = model.axis[j][i] / model.scale;
 					}
 				}
 				list[k].absBounds = model.box.bounds();

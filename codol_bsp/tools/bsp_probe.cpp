@@ -9,6 +9,7 @@
 #include "codol_zone/assets.hpp"
 #include "codol_zone/zone_editor.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -91,6 +92,82 @@ int main(int argc, char** argv)
 						v.size() >= 3 ? plane[0] * v[0] + plane[1] * v[1] + plane[2] * v[2] - plane[3] : 0.0f, p.vertexCount,
 						facing > 0 ? "ccw seen from the normal's side" : "cw seen from the normal's side", axis[0], axis[1], axis[2], axis[3], axis[4], axis[5]);
 				}
+			}
+		}
+		return 0;
+	}
+	if (mode == "smodels")
+	{
+		// The static models of a map: per draw instance one line for a fit of the cull distance ( csv: model, model
+		// radius, scale, cullDist, flags, primary light, probe, lods and their distances ), and how the clip map's
+		// entry of the same place stores its matrix ( equal to the draw axis / scale, or to its transpose ).
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		zone::ClipMapView clip;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world) || !zone::read_clip_map(z, zone::first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP), clip))
+		{
+			return 1;
+		}
+		const bool csv = argc > 4 && std::string(argv[4]) == "csv";
+		int same = 0, transposed = 0, both = 0, neither = 0, unmatched = 0;
+		for (const zone::ClipStaticModel& c : clip.staticModels)
+		{
+			const zone::WorldStaticModel* draw = nullptr;
+			for (const zone::WorldStaticModel& d : world.staticModels)
+			{
+				if (std::fabs(d.raw.origin[0] - c.raw.origin[0]) < 0.01f && std::fabs(d.raw.origin[1] - c.raw.origin[1]) < 0.01f && std::fabs(d.raw.origin[2] - c.raw.origin[2]) < 0.01f)
+				{
+					draw = &d;
+					break;
+				}
+			}
+			if (!draw)
+			{
+				unmatched++;
+				continue;
+			}
+			bool eq = true, tr = true;
+			for (int a = 0; a < 3; a++)
+			{
+				for (int k = 0; k < 3; k++)
+				{
+					eq = eq && std::fabs(c.raw.invScaledAxis[a][k] - draw->raw.axis[a][k] / draw->raw.scale) < 2e-3f;
+					tr = tr && std::fabs(c.raw.invScaledAxis[a][k] - draw->raw.axis[k][a] / draw->raw.scale) < 2e-3f;
+				}
+			}
+			(eq && tr ? both : eq ? same : tr ? transposed : neither)++;
+		}
+		std::printf("%zu draw instances, %zu clip entries: matrix == axis / scale %d, == transpose( axis ) / scale %d, symmetric ( both ) %d, neither %d, no draw instance at the place %d\n",
+			world.staticModels.size(), clip.staticModels.size(), same, transposed, both, neither, unmatched);
+		if (csv)
+		{
+			const std::vector<c1::GfxStaticModelInst> insts = z.get_array<c1::GfxStaticModelInst>(world.raw.dpvs.smodelInsts, world.raw.dpvs.smodelCount);
+			std::printf("model,radius,half_x,half_y,half_z,scale,cull,flags,light,probe,lods,lod0,lod1,lod2,lod3,inst_radius,lighting_dx,lighting_dy,lighting_dz,ground\n");
+			for (std::size_t m = 0; m < world.staticModels.size(); m++)
+			{
+				const zone::WorldStaticModel& d = world.staticModels[m];
+				float radius = 0;
+				c1::Bounds box{};
+				c1::XModel raw{};
+				if (d.raw.model && !z.reference(d.raw.model))
+				{
+					raw = z.get<c1::XModel>(d.raw.model);
+					radius = z.get<float>(d.raw.model + 316);
+					box = z.get<c1::Bounds>(d.raw.model + 320);
+				}
+				const c1::Bounds& ib = insts[m].bounds;
+				std::uint32_t ground;
+				std::memcpy(&ground, d.raw.groundLighting, 4);
+				std::printf("%.*s,%.2f,%.2f,%.2f,%.2f,%.3f,%u,%u,%u,%u,%u,%.0f,%.0f,%.0f,%.0f,%.2f,%.1f,%.1f,%.1f,%08x\n", static_cast<int>(d.modelName.size()), d.modelName.data(), radius,
+					box.halfSize[0], box.halfSize[1], box.halfSize[2], d.raw.scale, d.raw.cullDist, d.raw.flags, d.raw.primaryLightIndex, d.raw.reflectionProbeIndex, raw.numLods,
+					raw.lodInfo[0].dist, raw.lodInfo[1].dist, raw.lodInfo[2].dist, raw.lodInfo[3].dist,
+					std::sqrt(ib.halfSize[0] * ib.halfSize[0] + ib.halfSize[1] * ib.halfSize[1] + ib.halfSize[2] * ib.halfSize[2]),
+					insts[m].lightingOrigin[0] - d.raw.origin[0], insts[m].lightingOrigin[1] - d.raw.origin[1], insts[m].lightingOrigin[2] - d.raw.origin[2], ground);
 			}
 		}
 		return 0;
