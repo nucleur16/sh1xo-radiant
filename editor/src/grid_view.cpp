@@ -696,6 +696,23 @@ namespace editor::ui
 				}
 			}
 
+			// where a selected light reaches ( radius, cone ), seen along the view axis
+			if (is_selection)
+			{
+				const auto& lights = selected_light_lines();
+
+				for (std::size_t i = 0; i + 1 < lights.size(); i += 2)
+				{
+					const float* pf = &lights[i].x;
+					const float* qf = &lights[i + 1].x;
+
+					if (std::fabs(pf[ah] - qf[ah]) + std::fabs(pf[av] - qf[av]) >= 1e-3f)
+					{
+						dl->AddLine(to_screen(pf[ah], pf[av]), to_screen(qf[ah], qf[av]), to_d3d_color(lights[i].color));
+					}
+				}
+			}
+
 			auto* font = ImGui::GetIO().Fonts->Fonts.Size > 2 ? ImGui::GetIO().Fonts->Fonts[2] : ImGui::GetFont();
 
 			for (const auto& e : cache.entities)

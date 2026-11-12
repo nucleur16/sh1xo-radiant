@@ -242,6 +242,8 @@ namespace editor::ui
 	void draw_entity_window()
 	{
 		auto& st = get();
+		finish_live_edits();
+
 		if (!st.show_entity)
 		{
 			return;
@@ -373,6 +375,12 @@ namespace editor::ui
 		}
 
 		ImGui::Spacing();
+
+		// ---- light: typed fields for what the light bake reads
+		if (world || (same_class && is_light_class(classname)))
+		{
+			draw_light_panel(entities, world);
+		}
 
 		// ---- keys: the union over the selected entities, in the order of the first
 		std::vector<std::string> keys;

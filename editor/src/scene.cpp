@@ -251,7 +251,222 @@ namespace editor
 
 	// ---- files ------------------------------------------------------------------------------------------
 
-	bool scene::load_renderer(const std::string& map, std::string& error)
+	namespace
+	{
+		constexpr const char* STAGE_LIGHT_KEYS[] = { "sundirection", "suncolor", "sunlight", "ambient", "_color", "skylight", "skycolor" };
+
+		std::filesystem::path stage_dir()
+		{
+			return std::filesystem::u8path(utils::fs::get_basepath()) / "compiled" / "cache" / "stage";
+		}
+
+		// the light keys of a worldspawn as one text: what a stage is built from and named after
+		std::string stage_light_keys(const edit::document& doc)
+		{
+			std::string text;
+
+			if (const auto* world = doc.find_entity(doc.worldspawn()))
+			{
+				for (const char* key : STAGE_LIGHT_KEYS)
+				{
+					if (const auto* value = world->find(key))
+					{
+						text += std::string(key) + "=" + *value + ";";
+					}
+				}
+			}
+
+			return text;
+		}
+
+		std::string stage_name(const std::string& keys)
+		{
+			// FNV-1a: a stage per set of light keys stays in the cache
+			std::uint32_t hash = 2166136261u;
+			for (const char c : keys)
+			{
+				hash = (hash ^ static_cast<std::uint8_t>(c)) * 16777619u;
+			}
+
+			char name[40];
+			std::snprintf(name, sizeof(name), "codol_stage_%08x", hash);
+			return name;
+		}
+	}
+
+	// The stage: a zone the renderer can load for a map that has none. A closed box of 128 units far below the
+	// origin with the light keys of the map's worldspawn, compiled by codol_bsp ( a second or two, once per set of
+	// light keys ): it brings the sun, the sky light and the ambient light the map will have, and nothing to look at.
+	bool scene::load_stage(std::string& error)
+	{
+		const auto base = std::filesystem::u8path(utils::fs::get_basepath());
+		const auto install = std::filesystem::u8path(components::codol_game::install_path());
+		const auto dir = stage_dir();
+		const std::string keys = stage_light_keys(doc);
+		const std::string name = stage_name(keys);
+		const auto zone = dir / (name + ".ff");
+		std::error_code ec;
+		std::filesystem::create_directories(dir, ec);
+
+		if (!std::filesystem::is_regular_file(zone, ec))
+		{
+			const auto tool = base / "codol_bsp.exe";
+			const auto exe = install / "C1.exe";
+
+			if (!std::filesystem::is_regular_file(tool, ec) || !std::filesystem::is_regular_file(exe, ec))
+			{
+				error = "the 3D view of a map of your own needs codol_bsp.exe next to the editor and C1.exe in the install ( File > Settings )";
+				return false;
+			}
+
+			edit::document stage_doc;
+			constexpr double z = -30000.0, r = 64.0, t = 16.0;
+			const char* material = "wc/me_metal_rust_03";
+			stage_doc.create_box({ -r, -r, z - r - t }, { r, r, z - r }, material);
+			stage_doc.create_box({ -r, -r, z + r }, { r, r, z + r + t }, material);
+			stage_doc.create_box({ -r - t, -r, z - r }, { -r, r, z + r }, material);
+			stage_doc.create_box({ r, -r, z - r }, { r + t, r, z + r }, material);
+			stage_doc.create_box({ -r, -r - t, z - r }, { r, -r, z + r }, material);
+			stage_doc.create_box({ -r, r, z - r }, { r, r + t, z + r }, material);
+			stage_doc.create_point_entity("mp_global_intermission", { 0.0, 0.0, z });
+			stage_doc.create_point_entity("mp_dm_spawn", { 0.0, 0.0, z - r + 8.0 });
+
+			if (const auto* world = doc.find_entity(doc.worldspawn()))
+			{
+				for (const char* key : STAGE_LIGHT_KEYS)
+				{
+					if (const auto* value = world->find(key))
+					{
+						stage_doc.set_key(stage_doc.worldspawn(), key, *value);
+					}
+				}
+			}
+
+			const auto map = dir / (name + ".map");
+			std::string text;
+
+			if (!stage_doc.save_map_file(map, text))
+			{
+				error = "could not write " + to_utf8(map) + ": " + text;
+				return false;
+			}
+
+			std::filesystem::create_directories(base / "compiled" / "cache", ec);
+			const std::string command = "\"" + to_utf8(tool) + "\" --map \"" + to_utf8(map) + "\" --exe \"" + to_utf8(exe) + "\" --install \"" + to_utf8(install)
+				+ "\" --out \"" + to_utf8(zone) + "\" --name " + name + " --cache \"" + to_utf8(base / "compiled" / "cache") + "\" --fast";
+
+			game::printf_to_console("[CoDOL] 3D view: building the stage of this map's light ( %s ) ..\n", name.c_str());
+			std::string output;
+			const int code = components::codol_game::run_command(command, to_utf8(base), output);
+
+			if (code != 0 || !std::filesystem::is_regular_file(zone, ec))
+			{
+				game::printf_to_console("%s\n", output.c_str());
+				error = "the stage of the 3D view could not be built ( codol_bsp, exit code " + std::to_string(code) + " )";
+				return false;
+			}
+		}
+
+		if (!load_renderer(name, error, to_utf8(map_file.stem())))
+		{
+			return false;
+		}
+
+		stage = true;
+		stage_keys_ = keys;
+
+		// look at the map, not at the stage's box
+		edit::bounds box;
+		for (const object_id id : doc.entities())
+		{
+			if (const auto* e = doc.find_entity(id))
+			{
+				for (const object_id child : e->children)
+				{
+					if (const auto* geo = doc.geometry(child))
+					{
+						for (const auto& p : geo->vertices)
+						{
+							box.add(p);
+						}
+					}
+				}
+			}
+		}
+
+		if (box.valid())
+		{
+			const double reach = std::max({ box.maxs.x - box.mins.x, box.maxs.y - box.mins.y, box.maxs.z - box.mins.z, 256.0 });
+			cam.origin = { static_cast<float>((box.mins.x + box.maxs.x) * 0.5 - reach * 0.7), static_cast<float>((box.mins.y + box.maxs.y) * 0.5 - reach * 0.7),
+				static_cast<float>(box.maxs.z + reach * 0.5) };
+			cam.pitch = 35.0f;
+			cam.yaw = 45.0f;
+		}
+		else
+		{
+			cam.origin = { -384.0f, -384.0f, 320.0f };
+			cam.pitch = 30.0f;
+			cam.yaw = 45.0f;
+		}
+
+		cam.roll = 0.0f;
+		return true;
+	}
+
+	bool scene::stage_outdated() const
+	{
+		return open && stage && stage_keys_ != stage_light_keys(doc);
+	}
+
+	bool scene::restage(std::string& error)
+	{
+		if (!open || (!stage && renderer.loaded()))
+		{
+			error = "the map is shown in its zone of the game: the light there is the light of the compiled map";
+			return false;
+		}
+
+		const auto keep = cam;
+		const bool had = stage;
+
+		// everything the renderer drew for the document is made again in the new stage
+		if (renderer.loaded())
+		{
+			for (auto& [id, link] : links_)
+			{
+				drop_placed(link);
+				link.failed_model.clear();
+				link.pushed = false;
+			}
+
+			for (auto& [id, m] : meshes_)
+			{
+				destroy_mesh(m);
+				m.revision = ~0ull;
+			}
+		}
+
+		ref_owner_.clear();
+		texture_sizes_.clear();
+		model_boxes_.clear();
+		no_model_box_.clear();
+		caches_dirty_ = true;
+		seen_change_ = ~0ull;
+
+		if (!load_stage(error))
+		{
+			return false;
+		}
+
+		if (had)
+		{
+			cam = keep;
+		}
+
+		return true;
+	}
+
+	bool scene::load_renderer(const std::string& map, std::string& error, const std::string& project_map)
 	{
 		const auto install = components::codol_game::install_path();
 		if (install.empty())
@@ -274,6 +489,13 @@ namespace editor
 			options.keep_pick_geometry = true;
 			options.keep_light_grid = true;
 
+			// the zones of the game, and the stages of maps of your own ( load_stage )
+			{
+				std::error_code ec;
+				std::filesystem::create_directories(stage_dir(), ec);
+				options.zone_directories = { options.game_root / "client_shipRetail" / "chinese", options.game_root / "client_shipRetail" / "patch", stage_dir() };
+			}
+
 			if (!renderer.init(game::glob::d3d9_device, options, &error))
 			{
 				error = "Could not start the CoDOL renderer: " + error;
@@ -282,7 +504,8 @@ namespace editor
 		}
 
 		// the zone of the map's asset project is one of the zones the map is loaded with
-		assets::map_opening(map);
+		assets::map_opening(project_map.empty() ? map : project_map);
+		stage = false;
 
 		if (!renderer.load_map(map, &error))
 		{
@@ -382,6 +605,8 @@ namespace editor
 		map_name.clear();
 		map_file.clear();
 		open = false;
+		stage = false;
+		stage_keys_.clear();
 	}
 
 	bool scene::open_zone(const std::string& map, std::string& error)
@@ -483,7 +708,12 @@ namespace editor
 
 		if (zone.empty())
 		{
-			game::printf_to_console("[CoDOL] %s has no \"codol_map\" key: it is not tied to a zone, there is nothing to show in the 3D view.\n", to_utf8(file.filename()).c_str());
+			// a map of your own: the 3D view shows it in the stage
+			std::string stage_error;
+			if (!load_stage(stage_error))
+			{
+				game::printf_to_console("^3[CoDOL] %s: %s. Use a 2D view.\n", to_utf8(file.filename()).c_str(), stage_error.c_str());
+			}
 		}
 		else
 		{

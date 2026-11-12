@@ -117,6 +117,40 @@ namespace editor::ui
 	void draw_layers_window();
 	void draw_surface_window();
 
+	// ---- light ( lights.cpp ) ----------------------------------------------------------------------------------
+	// a `light` entity as the map compiler reads it ( codol_bsp map_input.cpp )
+	struct light_info
+	{
+		float3 origin{};
+		float radius = 600.0f;
+		float color[3] = { 1.0f, 1.0f, 1.0f };
+		float intensity = 1.0f;
+		int flags = 0;					// spawnflags
+		bool scriptable = false;		// spawnflags 4: a primary light a script can change; it stays an entity
+		bool primary_omni = false;
+		bool primary_spot = false;
+		bool spot = false;				// has a cone: a primary spot, or a baked light with fov_outer or a target
+		float outer = 0.0f;				// whole angles of the cone, degrees
+		float inner = 0.0f;
+		int exponent = 0;
+		float3 forward{ 0.0f, 0.0f, -1.0f };
+		bool has_target = false;		// the key is there ..
+		bool target_found = false;		// .. and names an entity
+		float3 target{};
+		bool can_shadow = true;
+	};
+
+	bool is_light_class(std::string_view classname);		// light, light_spot, light_omni
+	light_info read_light(const edit::document& doc, const edit::entity& e);
+	// lines ( two vertices each ) that show where a light reaches: its radius, the cone of a spot
+	void light_shape(const light_info& light, std::vector<line_vertex>& out);
+	// the shapes of the selected light entities, world space, colours as Direct3D has them
+	const std::vector<line_vertex>& selected_light_lines();
+	// the typed fields of the Entity window for `light` entities / the light keys of the worldspawn
+	void draw_light_panel(const std::vector<object_id>& entities, bool world);
+	// once per frame: closes the undo step of a field that was dragged
+	void finish_live_edits();
+
 	// one row of filter + list of the classes of the catalog; returns the picked class
 	const edit::class_info* class_picker(std::string& filter, float height, bool brush_classes_enabled);
 

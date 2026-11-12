@@ -98,6 +98,9 @@ namespace editor
 		std::string map_name;				// zone the renderer shows; name of the export
 		std::filesystem::path map_file;		// the .map the document was loaded from / saved to, empty for a fresh import
 		bool open = false;					// a document is open
+		// The renderer shows the stage instead of a zone of the game: the map is one of your own ( no "codol_map"
+		// key ). The stage is an empty, lit world; everything of the document is drawn into it as meshes and models.
+		bool stage = false;
 		std::uint64_t open_serial = 0;		// counts maps opened / closed ( views frame the new map )
 		double load_seconds = 0.0;
 
@@ -135,6 +138,12 @@ namespace editor
 		bool export_entities(std::filesystem::path& written, std::string& summary);
 
 		[[nodiscard]] std::string title() const;
+
+		// A map of your own: builds the stage again with the light keys the worldspawn has now ( sun, sky, ambient )
+		// and shows the map in it. False with a text when the map is tied to a zone or the stage cannot be built.
+		bool restage(std::string& error);
+		// the light keys of the worldspawn differ from those the stage was built with
+		[[nodiscard]] bool stage_outdated() const;
 
 		// ---- sync ------------------------------------------------------------------------------------------
 		// once per frame, before anything is drawn
@@ -241,7 +250,8 @@ namespace editor
 			std::uint64_t stamp = 0;
 		};
 
-		bool load_renderer(const std::string& map, std::string& error);
+		bool load_renderer(const std::string& map, std::string& error, const std::string& project_map = {});
+		bool load_stage(std::string& error);
 		void clear_view_state();
 		void place_brush_models(const edit::document* baseline);
 		void build_links(const edit::document& baseline, bool fresh_import);
@@ -279,6 +289,8 @@ namespace editor
 		bool caches_dirty_ = true;
 		bool partial_sync_ = false;		// the renderer was only brought up to date for the selection ( during a drag )
 		std::vector<std::pair<object_id, object_id>> connected_;	// entity -> the entity it targets
+
+		std::string stage_keys_;			// the worldspawn's light keys the stage was built with
 
 		bool drag_active_ = false;
 		std::string drag_name_;

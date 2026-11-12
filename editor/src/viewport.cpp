@@ -543,6 +543,12 @@ namespace ggui
 			outline_refs();
 		}
 
+		// where a selected light reaches: its radius, the cone of a spot
+		{
+			const auto& lights = ui::selected_light_lines();
+			selection_lines.insert(selection_lines.end(), lights.begin(), lights.end());
+		}
+
 		// the brush model the zone draws for a selected brush entity
 		for (const object_id id : doc.selected_entities())
 		{
