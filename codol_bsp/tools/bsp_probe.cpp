@@ -4,6 +4,9 @@
 //   codol_bsp_probe dump <zone.ff> <C1.exe> <asset type name> [first piece] [piece count] [max bytes per piece]
 //   codol_bsp_probe pieces <zone.ff> <C1.exe> <asset type name>          one line per piece: size, string, pointer count
 //   codol_bsp_probe check <zone.ff> <C1.exe>                             the offline validators of codol_bsp on any map zone
+//   codol_bsp_probe portals|cells|terrain|smodels <zone.ff> <C1.exe>     how a map's portals, cells, terrain, static models are stored
+//   codol_bsp_probe sun <zone.ff> <C1.exe>                               what the sun and its shadows hang on ( header fields, lights, ranges )
+//   codol_bsp_probe patchworld <zone.ff> <C1.exe> <out.ff> <size> <offset>=<hex> ..   a copy with GfxWorld header bytes changed ( experiments )
 
 #include "codol_bsp/bsp.hpp"
 #include "codol_zone/assets.hpp"
