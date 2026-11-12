@@ -172,6 +172,7 @@ namespace codol::bsp
 		std::map<std::string, std::string, std::less<>> nested_model_zone;	// xmodel nested in another asset ( a map's gfx_map ) -> fast file
 		std::map<std::string, clip_material_info, std::less<>> clip_materials;
 		std::map<std::string, std::string, std::less<>> image_zone;			// image with pixels in a zone -> fast file
+		std::map<std::string, std::string, std::less<>> lightdef_zone;		// light definition -> fast file
 
 		bool load(const std::filesystem::path& file, const std::filesystem::path& install);
 		bool save(const std::filesystem::path& file, const std::filesystem::path& install) const;

@@ -6,6 +6,7 @@
 #include "gfx_layout.hpp"
 
 #include <fstream>
+#include <sstream>
 
 namespace codol::bsp
 {
@@ -102,8 +103,8 @@ namespace codol::bsp
 			out.cosHalfFovOuter = in.cos_half_fov_outer;
 			out.cosHalfFovInner = in.cos_half_fov_inner;
 			out.cosHalfFovExpanded = in.cos_half_fov_outer;
-			out.rotationLimit = 1.0f;
-			out.translationLimit = 0.0f;
+			out.rotationLimit = in.rotation_limit;
+			out.translationLimit = in.translation_limit;
 		}
 		const std::uint32_t array = b.add_array(lights);
 		std::map<std::string, std::uint32_t> def_chunk;
@@ -140,47 +141,56 @@ namespace codol::bsp
 
 	namespace
 	{
-		// The falloff picture of light_point_linear, images/falloff_linear.iwi in the install's image archives: one row
-		// of brightness from the light's origin to its radius. The game's map compiler lays it into row 0 of the
+		// The falloff picture of a light definition ( images/falloff_linear.iwi .. in the install's image archives ): one
+		// row of brightness from the light's origin to its radius. The game's map compiler lays it into row 0 of the
 		// secondary lightmaps, where the shaders of the primary lights read it; so does this one, and the bake uses
 		// the same curve for the lights it bakes. Kept in a small file next to the catalog ( the archives take a
-		// moment to open ).
-		void load_falloff(compile_context& ctx)
+		// moment to open ). false: not read, `why` says more.
+		bool load_falloff(compile_context& ctx, const std::string& image_name, std::array<std::array<float, 3>, 32>& curve, std::string& source, std::string& why)
 		{
-			world& w = ctx.w;
 			std::filesystem::path folder = ctx.opts.cache;
 			if (folder.empty())
 			{
 				folder = ctx.opts.out.empty() ? std::filesystem::current_path() : std::filesystem::absolute(ctx.opts.out).parent_path();
 			}
 			const std::filesystem::path cache = folder / "codol_bsp_falloff.txt";
-			const std::string tag = "falloff_linear " + ctx.opts.install.generic_string();
+			const std::string tag = "falloff pictures 2 " + ctx.opts.install.generic_string();
+			std::map<std::string, std::array<std::array<float, 3>, 32>> known;
 			{
 				std::ifstream in(cache);
 				std::string line;
 				if (in && std::getline(in, line) && line == tag)
 				{
-					std::array<float, 32> values{};
-					std::size_t n = 0;
-					while (n < values.size() && in >> values[n])
+					while (std::getline(in, line))
 					{
-						n++;
-					}
-					if (n == values.size())
-					{
-						w.light_falloff = values;
-						w.light_falloff_source = "images/falloff_linear.iwi ( " + cache.filename().string() + " )";
-						return;
+						std::istringstream text(line);
+						std::string name;
+						std::array<std::array<float, 3>, 32> values{};
+						bool ok = static_cast<bool>(text >> name);
+						for (std::size_t k = 0; ok && k < 96; k++)
+						{
+							ok = static_cast<bool>(text >> values[k / 3][k % 3]);
+						}
+						if (ok)
+						{
+							known[name] = values;
+						}
 					}
 				}
+			}
+			if (const auto it = known.find(image_name); it != known.end())
+			{
+				curve = it->second;
+				source = "images/" + image_name + ".iwi ( " + cache.filename().string() + " )";
+				return true;
 			}
 			render::iwd_key key{};
 			std::string error;
 			std::vector<std::uint8_t> file;
 			if (!render::derive_iwd_key(ctx.opts.exe, key, &error))
 			{
-				ctx.rep.warnings.push_back("light: the falloff picture was not read ( " + error + " ): lights fall off along a straight line");
-				return;
+				why = error;
+				return false;
 			}
 			std::vector<std::filesystem::path> directories{ ctx.opts.install / "main" };
 			std::error_code ec;
@@ -190,86 +200,209 @@ namespace codol::bsp
 			}
 			const std::unique_ptr<render::iwd_archive_set> set = render::iwd_archive_set::open(directories, &key, "images/falloff_");
 			render::iwi_file image;
-			if (!set || !set->read("images/falloff_linear.iwi", file, &error) || !render::parse_iwi(file, image, &error))
+			if (!set || !set->read("images/" + image_name + ".iwi", file, &error) || !render::parse_iwi(file, image, &error))
 			{
-				ctx.rep.warnings.push_back("light: the falloff picture images/falloff_linear.iwi was not read ( " + error + " ): lights fall off along a straight line");
-				return;
+				why = error;
+				return false;
 			}
 			const render::iwi_surface* surface = image.surface(0, 0);
 			const int width = image.header.width;
-			const std::size_t bytes = image.header.format == render::iwi_format::luminance8 || image.header.format == render::iwi_format::alpha8 ? 1
-				: image.header.format == render::iwi_format::rgba32 ? 4 : image.header.format == render::iwi_format::rgb24 ? 3 : 0;
+			// bytes per texel, and where red, green and blue are ( the 24 and 32 bit formats store b g r ( a ) )
+			std::size_t bytes = 0;
+			int channel[3] = { 0, 0, 0 };
+			if (image.header.format == render::iwi_format::luminance8 || image.header.format == render::iwi_format::alpha8)
+			{
+				bytes = 1;
+			}
+			else if (image.header.format == render::iwi_format::rgba32 || image.header.format == render::iwi_format::rgb24)
+			{
+				bytes = image.header.format == render::iwi_format::rgba32 ? 4 : 3;
+				channel[0] = 2;
+				channel[1] = 1;
+				channel[2] = 0;
+			}
 			if (!surface || !bytes || width < 1 || surface->size < bytes * static_cast<std::size_t>(width))
 			{
-				ctx.rep.warnings.push_back(std::string("light: the falloff picture has a format this compiler does not read ( ") + render::iwi_format_name(image.header.format)
-					+ " ): lights fall off along a straight line");
-				return;
+				why = std::string("its format ( ") + render::iwi_format_name(image.header.format) + " ) is not one this compiler reads";
+				return false;
 			}
 			// the first row, brought to 32 texels ( the mean of what a texel covers )
 			for (int k = 0; k < 32; k++)
 			{
 				const int first = k * width / 32, last = std::max(first + 1, (k + 1) * width / 32);
-				double sum = 0;
-				for (int x = first; x < last; x++)
+				for (int c = 0; c < 3; c++)
 				{
-					sum += file[surface->offset + static_cast<std::size_t>(std::min(x, width - 1)) * bytes];
+					double sum = 0;
+					for (int x = first; x < last; x++)
+					{
+						sum += file[surface->offset + static_cast<std::size_t>(std::min(x, width - 1)) * bytes + static_cast<std::size_t>(channel[c])];
+					}
+					curve[static_cast<std::size_t>(k)][static_cast<std::size_t>(c)] = static_cast<float>(sum / (last - first) / 255.0);
 				}
-				w.light_falloff[static_cast<std::size_t>(k)] = static_cast<float>(sum / (last - first) / 255.0);
 			}
-			w.light_falloff_source = format("images/falloff_linear.iwi ( %d x %d, %s )", width, image.header.height, render::iwi_format_name(image.header.format));
+			source = format("images/%s.iwi ( %d x %d, %s )", image_name.c_str(), width, image.header.height, render::iwi_format_name(image.header.format));
+			known[image_name] = curve;
 			std::ofstream out(cache, std::ios::trunc);
 			out << tag << "\n";
-			for (const float v : w.light_falloff)
+			for (const auto& [name, values] : known)
 			{
-				out << v << "\n";
+				out << name;
+				for (const std::array<float, 3>& v : values)
+				{
+					out << " " << v[0] << " " << v[1] << " " << v[2];
+				}
+				out << "\n";
 			}
+			return true;
 		}
 	}
 
-	// The light definitions the primary lights name. A GfxLightDef is a name, an attenuation image and where its
-	// lookup starts in the light map's lookup strip; the image lives in the game's common zones and is named here
-	// ( ",falloff_linear" ). Only light_point_linear is known to this compiler: 0x62 / 1 are that definition's values
-	// in every shipped map.
+	// The light definitions the lights name. A GfxLightDef is a name, an attenuation image, a sampler state and where
+	// its lookup starts in row 0 of the secondary lightmaps. The shipped maps name eleven of them ( light_point_linear,
+	// light_point_quadratic, light_point_dark_edges, white_light .. ): the catalog knows which zone of the install has
+	// which, the definition is read from there ( the name of its picture, the sampler state ) and written again; a
+	// picture that is not an asset of the common zones comes along as an image asset ( its pixels are streamed ). The
+	// lookup strips are handed out in the order of first use: 1, 35, 69 .. ( 34 texels each, as in the shipped maps ).
 	void build_light_defs(compile_context& ctx)
 	{
-		std::set<std::string> defs, unknown;
+		world& w = ctx.w;
+		w.light_defs.clear();
+		struct found
+		{
+			const Zone* zone = nullptr;
+			zaddr header = 0;
+		};
+		std::vector<found> where;
+		std::set<std::string> unknown;
+		const bool read_pictures = ctx.opts.light && w.lights.size() + w.bake_lights.size() > 2;
+		const auto def_index = [&](const std::string& name) -> int
+		{
+			for (std::size_t k = 0; k < w.light_defs.size(); k++)
+			{
+				if (w.light_defs[k].name == name)
+				{
+					return static_cast<int>(k);
+				}
+			}
+			light_def def;
+			def.name = name;
+			def.curve = straight_falloff();
+			def.source = "a straight line ( the game's picture was not read )";
+			found at;
+			if (const auto it = ctx.cat.lightdef_zone.find(name); it != ctx.cat.lightdef_zone.end())
+			{
+				std::string why;
+				at.zone = ctx.importer.open_zone(it->second, &why);
+				at.header = at.zone ? at.zone->find_asset(c1::ASSET_TYPE_LIGHT_DEF, name) : 0;
+				if (at.header)
+				{
+					def.zone = it->second;
+					const zaddr image = at.zone->get<zaddr>(at.header + 4);
+					if (const auto* reference = at.zone->reference(image))
+					{
+						def.image = std::string(reference->name);
+					}
+					else if (image)
+					{
+						def.image = std::string(at.zone->asset_name(c1::ASSET_TYPE_IMAGE, image));
+					}
+					if (!def.image.empty() && def.image[0] == ',')
+					{
+						def.image.erase(0, 1);
+					}
+				}
+			}
+			if (!at.header && name != "light_point_linear")
+			{
+				return -1;
+			}
+			if (read_pictures)
+			{
+				std::string why;
+				if (!load_falloff(ctx, def.image, def.curve, def.source, why))
+				{
+					ctx.rep.warnings.push_back("light: the falloff picture images/" + def.image + ".iwi of '" + name + "' was not read ( " + why
+						+ " ): its lights fall off along a straight line");
+				}
+			}
+			w.light_defs.push_back(std::move(def));
+			where.push_back(at);
+			return static_cast<int>(w.light_defs.size() - 1);
+		};
+		def_index("light_point_linear");
+		std::vector<int> used;		// by primary lights, in the order of first use
 		for (int pass = 0; pass < 2; pass++)
 		{
-			for (map_light& light : pass == 0 ? ctx.w.lights : ctx.w.bake_lights)
+			for (map_light& light : pass == 0 ? w.lights : w.bake_lights)
 			{
 				if (light.type < 2)
 				{
 					continue;
 				}
-				if (light.def != "light_point_linear")
+				int index = def_index(light.def);
+				if (index >= 0 && pass == 0 && std::find(used.begin(), used.end(), index) == used.end() && used.size() >= 15)
+				{
+					ctx.rep.warnings.push_back("light: more than 15 light definitions in one map; '" + light.def + "' is replaced by light_point_linear");
+					unknown.insert(light.def);
+					index = -1;
+				}
+				if (index < 0)
 				{
 					if (unknown.insert(light.def).second)
 					{
-						ctx.rep.warnings.push_back("light: definition '" + light.def + "' is not known, light_point_linear is used");
+						ctx.rep.warnings.push_back("light: definition '" + light.def + "' is in no zone of the install, light_point_linear is used");
 					}
 					light.def = "light_point_linear";
+					index = 0;
 				}
-				if (pass == 0)
+				light.def_index = index;
+				if (pass == 0 && std::find(used.begin(), used.end(), index) == used.end())
 				{
-					defs.insert(light.def);
+					used.push_back(index);
 				}
 			}
 		}
-		if (ctx.opts.light && ctx.w.lights.size() + ctx.w.bake_lights.size() > 2)
+		if (read_pictures)
 		{
-			load_falloff(ctx);
-			ctx.rep.notes.push_back("light: falloff of the light entities: " + ctx.w.light_falloff_source);
+			std::string text;
+			for (const light_def& def : w.light_defs)
+			{
+				text += (text.empty() ? "" : "; ") + def.name + ": " + def.source;
+			}
+			ctx.rep.notes.push_back("light: falloff of the light entities: " + text);
 		}
-		for (const std::string& def : defs)
+		for (std::size_t k = 0; k < used.size(); k++)
 		{
+			light_def& def = w.light_defs[static_cast<std::size_t>(used[k])];
+			const found& at = where[static_cast<std::size_t>(used[k])];
+			def.lookup_start = 1 + 34 * static_cast<int>(k);
+			// the picture: an asset of a zone that is loaded ( named ",<picture>" ), or an image of the definition's zone
+			zone_ref image_ref;
+			std::uint32_t sampler = 0x62;
+			if (at.header)
+			{
+				sampler = at.zone->get<std::uint8_t>(at.header + 8);
+				const zaddr image = at.zone->get<zaddr>(at.header + 4);
+				if (image && !at.zone->reference(image))
+				{
+					image_ref = ctx.importer.image_from(*at.zone, image);
+				}
+			}
 			asset_builder b;
-			const std::uint32_t header[4] = { FOLLOWS, FOLLOWS, 0x62, 1 };
-			b.add(header, sizeof(header));
-			b.add_string(def);
-			const std::uint32_t image = b.add_zero(sizeof(c1::GfxImage));
-			b.follows(image, offsetof(c1::GfxImage, name));
-			b.add_string(",falloff_linear");
-			check(ctx.editor.add_built_asset(c1::ASSET_TYPE_LIGHT_DEF, def, b.chunks), "adding light definition " + def);
+			const std::uint32_t header[4] = { FOLLOWS, image_ref.valid() ? 0u : FOLLOWS, sampler, static_cast<std::uint32_t>(def.lookup_start) };
+			const std::uint32_t head = b.add(header, sizeof(header));
+			b.add_string(def.name);
+			if (image_ref.valid())
+			{
+				point_ref(b, head, 4, image_ref);
+			}
+			else
+			{
+				const std::uint32_t image = b.add_zero(sizeof(c1::GfxImage));
+				b.follows(image, offsetof(c1::GfxImage, name));
+				b.add_string("," + def.image);
+			}
+			check(ctx.editor.add_built_asset(c1::ASSET_TYPE_LIGHT_DEF, def.name, b.chunks), "adding light definition " + def.name);
 		}
 	}
 

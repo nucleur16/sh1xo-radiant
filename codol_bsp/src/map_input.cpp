@@ -205,10 +205,11 @@ namespace codol::bsp
 				continue;
 			}
 
-			if (out.classname == "light")
+			if (out.classname == "light" || out.classname == "light_spot" || out.classname == "light_omni")
 			{
 				// The keys of radiant's light entity ( README, "Light keys" ). "_color" gives the hue - its largest part
-				// counts as 1 -, "intensity" the brightness.
+				// counts as 1 -, "intensity" the brightness. "light_spot" / "light_omni" are the classes the shipped maps'
+				// primary lights have: a primary spot / omni light whatever the spawnflags say.
 				map_light light;
 				light.type = 3;
 				light.primary = false;
@@ -274,8 +275,12 @@ namespace codol::bsp
 				const bool has_fov = parse_floats(out.value("fov_outer", ""), &outer, 1) && outer > 0;
 				parse_floats(out.value("fov_inner", ""), &inner, 1);
 				parse_floats(out.value("exponent", ""), &exponent, 1);
-				const bool primary_omni = (spawnflags & 1) != 0, primary_spot = (spawnflags & 2) != 0 && !primary_omni;
-				const bool spot = primary_spot || (!primary_omni && (has_fov || (aimed && outer > 0)));
+				// PRIMARY_SCRIPTABLE ( 4 ) makes a light a primary light by itself: a spot when it has a cone or points somewhere
+				const bool scriptable = (spawnflags & 4) != 0;
+				const bool cone_given = has_fov || (aimed && outer > 0);
+				const bool primary_omni = out.classname == "light_omni" || (out.classname == "light" && ((spawnflags & 1) != 0 || (scriptable && !(spawnflags & 2) && !cone_given)));
+				const bool primary_spot = !primary_omni && (out.classname == "light_spot" || (spawnflags & 2) != 0 || scriptable);
+				const bool spot = primary_spot || (!primary_omni && cone_given);
 				if (spot || primary_omni)
 				{
 					if (outer <= 0)
@@ -310,6 +315,34 @@ namespace codol::bsp
 				{
 					rep.warnings.push_back("light: more than 253 primary lights; the light at " + std::string(out.value("origin")) + " is baked only");
 					light.primary = false;
+				}
+				if (light.primary && scriptable)
+				{
+					// A light a script can switch, dim, colour, turn and move ( setLightIntensity, setLightColor .. ) stays an
+					// entity, as in the shipped maps ( mp_highrise, mp_cargoship_sh: classname light_spot, spawnflags 4 ):
+					// its first key "pl#" is the index of its primary light, which is how the server ties the two together.
+					// "maxturn" ( degrees ) and "maxmove" ( units ) are how far a script may take it from where it was
+					// compiled; the light's baked visibility only holds within them.
+					float turn = 0, move = 0;
+					parse_floats(out.value("maxturn", ""), &turn, 1);
+					parse_floats(out.value("maxmove", ""), &move, 1);
+					light.scriptable = true;
+					light.rotation_limit = std::cos(std::clamp(turn, 0.0f, 180.0f) * 3.14159265f / 180.0f);
+					light.translation_limit = std::max(move, 0.0f);
+					map_entity kept;
+					kept.classname = light.type == 2 ? "light_spot" : "light_omni";
+					kept.origin = out.origin;
+					kept.pairs.emplace_back("pl#", format("%zu", w.lights.size()));
+					for (const auto& [k, v] : out.pairs)
+					{
+						if (k != "pl#")
+						{
+							kept.pairs.emplace_back(k, k == "classname" ? kept.classname : v);
+						}
+					}
+					w.lights.push_back(light);
+					w.entities.push_back(std::move(kept));
+					continue;
 				}
 				(light.primary ? w.lights : w.bake_lights).push_back(light);
 				continue;		// not part of the entity string

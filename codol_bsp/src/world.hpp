@@ -169,7 +169,23 @@ namespace codol::bsp
 		bool cone = false;				// lights only inside its outer cone ( a spot; a primary omni light has a cone for its shadow map only )
 		bool can_shadow = true;			// may have a shadow map
 		std::string def = "light_point_linear";
+		int def_index = 0;				// world::light_defs ( build_light_defs )
 		bool primary = true;			// a primary light of the ComWorld; false: baked into lightmaps and light grid only
+		bool scriptable = false;		// PRIMARY_SCRIPTABLE: the map's entities keep it ( "pl#" ), a script can change it
+		float rotation_limit = 1.0f;	// cosine of "maxturn"
+		float translation_limit = 0.0f;	// "maxmove"
+	};
+
+	// A light definition: a name and a falloff picture. `curve`: the picture as 32 texels from the light's origin to
+	// its radius - the square roots the lightmap's lookup row holds, r g b ( some of the game's pictures are coloured ).
+	struct light_def
+	{
+		std::string name = "light_point_linear";
+		std::string image = "falloff_linear";
+		std::array<std::array<float, 3>, 32> curve{};
+		int lookup_start = 1;			// where its copy starts in row 0 of the secondary lightmaps, in 512ths of the width
+		std::string source;
+		std::string zone;				// the fast file of the install that has the definition; empty: none
 	};
 
 	// an effect or a looping sound placed in the map ( script_fx / script_sound ): a line of the createfx script
@@ -204,12 +220,12 @@ namespace codol::bsp
 		std::uint32_t add(const double normal[3], double dist);
 	};
 
-	inline std::array<float, 32> straight_falloff()
+	inline std::array<std::array<float, 3>, 32> straight_falloff()
 	{
-		std::array<float, 32> out{};
+		std::array<std::array<float, 3>, 32> out{};
 		for (std::size_t k = 0; k < out.size(); k++)
 		{
-			out[k] = 1.0f - static_cast<float>(k) / 31.0f;
+			out[k].fill(1.0f - static_cast<float>(k) / 31.0f);
 		}
 		return out;
 	}
@@ -233,10 +249,9 @@ namespace codol::bsp
 		std::vector<map_fx> fx;
 		float minimap_mins[2] = {}, minimap_maxs[2] = {};	// the square the minimap picture shows ( north = + y up )
 		int model_count = 1;
-		// The falloff of the light definition ( light_point_linear ): 32 values from the light's origin to its radius, as
-		// the square roots the lightmap holds. Read from the game's falloff picture; without it a straight line.
-		std::array<float, 32> light_falloff = straight_falloff();
-		std::string light_falloff_source = "a straight line ( the game's picture was not read )";
+		// The light definitions the map's lights name ( build_light_defs ); [0] is light_point_linear. Their falloff
+		// pictures are read from the game's image archives; without them a straight line.
+		std::vector<light_def> light_defs;
 		sun_flare flare;
 		float sun_dir[3] = { 0.35f, 0.25f, 0.9f };		// towards the sun
 		float sun_color[3] = { 1.4f, 1.3f, 1.1f };

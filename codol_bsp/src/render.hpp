@@ -25,6 +25,7 @@ namespace codol::bsp
 		int lightmap = 0;				// 31: none
 		int reflection_probe = 1;
 		int primary_light = 1;
+		int light_hint = -1;			// the light stage's cut: the primary light entity the surface's faces were cut out for, 0: none of them, -1: not decided
 		bool casts_sun_shadow = true;
 		bool sky = false;
 		std::vector<c1::GfxWorldVertex> vertices;
@@ -90,7 +91,12 @@ namespace codol::bsp
 	// x + z, x - z, y + z, y - z ), relative to the light's origin
 	struct render_light_hull
 	{
+		struct axis
+		{
+			float dir[3] = {}, mid = 0, half = 0;
+		};
 		float mid[9] = {}, half[9] = {};
+		std::vector<axis> axes;			// further planes: the ranges along other directions ( at most 8 )
 	};
 
 	struct render_model
@@ -122,4 +128,6 @@ namespace codol::bsp
 	void build_render_surfaces(compile_context& ctx, render_world& rw);
 	// lightmaps, lightmap coordinates, light grid, reflection probes
 	void bake_lighting(compile_context& ctx, render_world& rw);
+	// vertices of the world that lie on an edge of a face become vertices of that face ( tjunction.cpp )
+	void repair_t_junctions(compile_context& ctx, render_world& rw);
 }

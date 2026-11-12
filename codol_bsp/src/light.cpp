@@ -503,16 +503,26 @@ namespace codol::bsp
 		// from the light's origin to its radius, read with a bilinear filter and squared.
 		struct falloff_curve
 		{
-			std::array<float, 32> texel{};
+			std::array<std::array<float, 3>, 32> texel{};
 
-			double at(const double t) const
+			// at t ( 0: the light, 1: its radius ): the mean of the three colours; `rgb`: each of them
+			double at(const double t, double rgb[3] = nullptr) const
 			{
 				const double x = std::clamp(t, 0.0, 1.0) * 32.0 - 0.5;
 				const int i = static_cast<int>(std::floor(x));
 				const double f = x - i;
-				const double a = texel[static_cast<std::size_t>(std::clamp(i, 0, 31))], b = texel[static_cast<std::size_t>(std::clamp(i + 1, 0, 31))];
-				const double v = a + (b - a) * f;
-				return v * v;
+				double sum = 0;
+				for (std::size_t c = 0; c < 3; c++)
+				{
+					const double a = texel[static_cast<std::size_t>(std::clamp(i, 0, 31))][c], b = texel[static_cast<std::size_t>(std::clamp(i + 1, 0, 31))][c];
+					const double v = a + (b - a) * f;
+					if (rgb)
+					{
+						rgb[c] = v * v;
+					}
+					sum += v * v;
+				}
+				return sum / 3.0;
 			}
 		};
 
@@ -523,7 +533,7 @@ namespace codol::bsp
 			vec3 sun;
 			std::vector<vec3> sky_directions;	// over the sphere
 			float sky_color[3] = {}, ambient[3] = {};
-			falloff_curve falloff;
+			std::vector<falloff_curve> falloffs;	// per light definition ( world::light_defs )
 			// the light entities: the primary ones ( world::lights from index 2 ) first, then those that are only baked
 			std::vector<const map_light*> points;
 			std::vector<int> primary_of;		// per point: its primary light index, -1: baked only
@@ -531,8 +541,14 @@ namespace codol::bsp
 
 		// How much of a light entity arrives at a point, before the angle of a surface and shadows: its falloff and its
 		// cone, as the game's spot light shader has them. 0: out of reach. `towards`: the unit vector to the light.
-		double light_reach(const light_setup& s, const map_light& light, const vec3& p, vec3& towards, double& distance)
+		// `tint`: the colour of the falloff ( a coloured falloff picture ), 1 1 1 for a grey one - what the light's
+		// colour is to be multiplied with.
+		double light_reach(const light_setup& s, const map_light& light, const vec3& p, vec3& towards, double& distance, float* tint = nullptr)
 		{
+			if (tint)
+			{
+				tint[0] = tint[1] = tint[2] = 1.0f;
+			}
 			const vec3 to = vec3{ light.origin[0], light.origin[1], light.origin[2] } - p;
 			distance = length(to);
 			if (distance >= light.radius || distance < 1e-3)
@@ -540,7 +556,15 @@ namespace codol::bsp
 				return 0;
 			}
 			towards = to * (1.0 / distance);
-			double scale = s.falloff.at(distance / light.radius);
+			double rgb[3] = { 1, 1, 1 };
+			double scale = s.falloffs[static_cast<std::size_t>(std::clamp(light.def_index, 0, static_cast<int>(s.falloffs.size()) - 1))].at(distance / light.radius, rgb);
+			if (tint && scale > 1e-9)
+			{
+				for (int k = 0; k < 3; k++)
+				{
+					tint[k] = static_cast<float>(rgb[k] / scale);
+				}
+			}
 			if (light.cone)
 			{
 				// `dir` points back along the beam
@@ -615,13 +639,15 @@ namespace codol::bsp
 				const map_light& light = *s.points[i];
 				vec3 l;
 				double distance = 0;
-				double scale = light_reach(s, light, p, l, distance);
+				float tint[3];
+				double scale = light_reach(s, light, p, l, distance, tint);
 				scale = scale > 0 ? scale * (normal ? dot(l, *normal) : 0.5) : 0;
 				if (scale <= 0 ||s.rays.blocked(p, vec3{ light.origin[0], light.origin[1], light.origin[2] }, !normal))
 				{
 					continue;
 				}
-				out.add(light.color, scale, l);
+				const float color[3] = { light.color[0] * tint[0], light.color[1] * tint[1], light.color[2] * tint[2] };
+				out.add(color, scale, l);
 			}
 			if (skip != 1 && luminance(s.w.sun_color) > 0)
 			{
@@ -823,30 +849,183 @@ namespace codol::bsp
 		// the ranges of a set of points along the nine axes of a light region hull: x, y, z, x + y, x - y, x + z, x - z,
 		// y + z, y - z ( not normalised ), relative to the light's origin - what the hulls of the shipped maps hold
 		// ( codol_bsp_probe lights )
+		//
+		// Behind the nine come the ranges along further axes, the candidates for the extra planes a shipped hull has ( up
+		// to eight ). Measured on mp_vacant, mp_highrise and mp_nuked: those are the four diagonals of the cube
+		// ( 0.577 +-0.577 +-0.577 ) and, for a spot, planes that touch its cone - sin( half angle ) x beam + cos( half
+		// angle ) x a direction across the beam, eight of them 45 degrees apart; a point inside the cone is never below
+		// 0 along such an axis. ( The shipped hulls also have planes through the light and the edges of a doorway; those
+		// are not made. )
+		constexpr int KDOP_EXTRA = 12;
+		using kdop_axes = std::array<vec3, KDOP_EXTRA>;
+
+		kdop_axes extra_axes(const map_light& light)
+		{
+			kdop_axes out{};
+			const double d = 1.0 / std::sqrt(3.0);
+			out[0] = { d, d, d };
+			out[1] = { d, d, -d };
+			out[2] = { d, -d, d };
+			out[3] = { d, -d, -d };
+			const vec3 beam{ -light.dir[0], -light.dir[1], -light.dir[2] };
+			const bool spot = light.type == 2 && length(beam) > 0.5;
+			vec3 right = cross(beam, std::fabs(beam.z) < 0.99 ? vec3{ 0, 0, 1 } : vec3{ 0, 1, 0 });
+			right = right * (1.0 / std::max(length(right), 1e-9));
+			const vec3 up = cross(right, beam);
+			const double c = std::clamp(static_cast<double>(light.cos_half_fov_outer), 0.0, 1.0), s = std::sqrt(std::max(0.0, 1.0 - c * c));
+			for (int k = 0; k < 8; k++)
+			{
+				const double a = k * PI / 4.0;
+				// an omni light has no cone: its last eight candidates repeat the first diagonal and are never taken
+				out[static_cast<std::size_t>(4 + k)] = spot ? beam * s + (right * std::cos(a) + up * std::sin(a)) * c : out[0];
+			}
+			return out;
+		}
+
 		struct kdop
 		{
-			double lo[9], hi[9];
+			double lo[9 + KDOP_EXTRA], hi[9 + KDOP_EXTRA];
 			bool any = false;
 
 			kdop()
 			{
-				for (int a = 0; a < 9; a++)
+				for (int a = 0; a < 9 + KDOP_EXTRA; a++)
 				{
 					lo[a] = 1e30;
 					hi[a] = -1e30;
 				}
 			}
-			void add(const vec3& p)
+			void add(const vec3& p, const kdop_axes& extra)
 			{
-				const double v[9] = { p.x, p.y, p.z, p.x + p.y, p.x - p.y, p.x + p.z, p.x - p.z, p.y + p.z, p.y - p.z };
-				for (int a = 0; a < 9; a++)
+				double v[9 + KDOP_EXTRA] = { p.x, p.y, p.z, p.x + p.y, p.x - p.y, p.x + p.z, p.x - p.z, p.y + p.z, p.y - p.z };
+				for (int a = 0; a < KDOP_EXTRA; a++)
+				{
+					v[9 + a] = dot(p, extra[static_cast<std::size_t>(a)]);
+				}
+				for (int a = 0; a < 9 + KDOP_EXTRA; a++)
 				{
 					lo[a] = std::min(lo[a], v[a]);
 					hi[a] = std::max(hi[a], v[a]);
 				}
 				any = true;
 			}
+			void add(const kdop& other)
+			{
+				for (int a = 0; a < 9 + KDOP_EXTRA; a++)
+				{
+					lo[a] = std::min(lo[a], other.lo[a]);
+					hi[a] = std::max(hi[a], other.hi[a]);
+				}
+				any = any || other.any;
+			}
 		};
+
+		// The corners of the volume nine ranges enclose ( relative to the light ): every point where three of its 18
+		// planes meet and that lies inside all of them. What an extra axis would cut away is measured against these.
+		std::vector<vec3> kdop_corners(const double lo[9], const double hi[9])
+		{
+			static const vec3 axis[9] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 }, { 1, 1, 0 }, { 1, -1, 0 }, { 1, 0, 1 }, { 1, 0, -1 }, { 0, 1, 1 }, { 0, 1, -1 } };
+			struct plane
+			{
+				vec3 n;
+				double d;		// n . x <= d
+			};
+			std::vector<plane> planes;
+			for (int a = 0; a < 9; a++)
+			{
+				planes.push_back({ axis[a], hi[a] });
+				planes.push_back({ axis[a] * -1.0, -lo[a] });
+			}
+			std::vector<vec3> corners;
+			for (std::size_t i = 0; i < planes.size(); i++)
+			{
+				for (std::size_t j = i + 1; j < planes.size(); j++)
+				{
+					const vec3 nij = cross(planes[i].n, planes[j].n);
+					if (dot(nij, nij) < 1e-9)
+					{
+						continue;
+					}
+					for (std::size_t k = j + 1; k < planes.size(); k++)
+					{
+						const double det = dot(nij, planes[k].n);
+						if (std::fabs(det) < 1e-9)
+						{
+							continue;
+						}
+						const vec3 p = (cross(planes[j].n, planes[k].n) * planes[i].d + cross(planes[k].n, planes[i].n) * planes[j].d + nij * planes[k].d) * (1.0 / det);
+						bool inside = true;
+						for (std::size_t m = 0; m < planes.size() && inside; m++)
+						{
+							inside = dot(planes[m].n, p) <= planes[m].d + 1e-3;
+						}
+						if (inside)
+						{
+							corners.push_back(p);
+						}
+					}
+				}
+			}
+			return corners;
+		}
+
+		// a world vertex between two others ( a cut through an edge of a face )
+		c1::GfxWorldVertex mix_vertex(const c1::GfxWorldVertex& a, const c1::GfxWorldVertex& b, const double t)
+		{
+			c1::GfxWorldVertex out = t < 0.5 ? a : b;		// normal, tangent and binormal sign of the nearer end
+			const float f = static_cast<float>(t);
+			for (int k = 0; k < 3; k++)
+			{
+				out.xyz[k] = a.xyz[k] + (b.xyz[k] - a.xyz[k]) * f;
+			}
+			for (int k = 0; k < 2; k++)
+			{
+				out.texCoord[k] = a.texCoord[k] + (b.texCoord[k] - a.texCoord[k]) * f;
+				out.lmapCoord[k] = a.lmapCoord[k] + (b.lmapCoord[k] - a.lmapCoord[k]) * f;
+			}
+			std::uint32_t color = 0;
+			for (int shift = 0; shift < 32; shift += 8)
+			{
+				const double ca = (a.color >> shift) & 0xFF, cb = (b.color >> shift) & 0xFF;
+				color |= static_cast<std::uint32_t>(std::clamp(std::lround(ca + (cb - ca) * t), 0l, 255l)) << shift;
+			}
+			out.color = color;
+			return out;
+		}
+
+		// the part of a convex polygon on one side of a line of the plane: keep where sign * ( axis . p - at ) >= 0
+		std::vector<c1::GfxWorldVertex> clip_polygon(const std::vector<c1::GfxWorldVertex>& in, const vec3& axis, const double at, const double sign)
+		{
+			std::vector<c1::GfxWorldVertex> out;
+			const auto side = [&](const c1::GfxWorldVertex& v) { return sign * (axis.x * v.xyz[0] + axis.y * v.xyz[1] + axis.z * v.xyz[2] - at); };
+			for (std::size_t k = 0; k < in.size(); k++)
+			{
+				const c1::GfxWorldVertex& a = in[k];
+				const c1::GfxWorldVertex& b = in[(k + 1) % in.size()];
+				const double da = side(a), db = side(b);
+				if (da >= 0)
+				{
+					out.push_back(a);
+				}
+				if ((da > 0 && db < 0) || (da < 0 && db > 0))
+				{
+					out.push_back(mix_vertex(a, b, da / (da - db)));
+				}
+			}
+			return out;
+		}
+
+		double polygon_area(const std::vector<c1::GfxWorldVertex>& polygon)
+		{
+			vec3 sum{ 0, 0, 0 };
+			for (std::size_t k = 2; k < polygon.size(); k++)
+			{
+				const vec3 a{ polygon[0].xyz[0], polygon[0].xyz[1], polygon[0].xyz[2] }, b{ polygon[k - 1].xyz[0], polygon[k - 1].xyz[1], polygon[k - 1].xyz[2] },
+					c{ polygon[k].xyz[0], polygon[k].xyz[1], polygon[k].xyz[2] };
+				sum = sum + cross(b - a, c - a);
+			}
+			return length(sum) * 0.5;
+		}
 	}
 
 	void bake_lighting(compile_context& ctx, render_world& rw)
@@ -860,13 +1039,20 @@ namespace codol::bsp
 			setup.sky_color[k] = w.sky_light[k];
 			setup.ambient[k] = w.ambient_light[k];
 		}
-		setup.falloff.texel = w.light_falloff;
+		for (const light_def& def : w.light_defs)
+		{
+			setup.falloffs.push_back({ def.curve });
+		}
+		if (setup.falloffs.empty())
+		{
+			setup.falloffs.push_back({ straight_falloff() });
+		}
 		if (std::getenv("CODOL_BSP_LIGHT_DEBUG"))
 		{
 			for (const map_light& b : w.bake_lights)
 			{
 				std::printf("bake light at %g %g %g radius %g colour %g %g %g cone %d type %d; falloff 0.5 %g\n", b.origin[0], b.origin[1], b.origin[2], b.radius, b.color[0], b.color[1],
-					b.color[2], b.cone, b.type, setup.falloff.at(0.5));
+					b.color[2], b.cone, b.type, setup.falloffs[0].at(0.5));
 			}
 		}
 		const std::size_t light_count = w.lights.size();
@@ -898,6 +1084,7 @@ namespace codol::bsp
 		const auto primary_reach = [&](const int l, const vec3& p, const vec3& normal, float out[3])
 		{
 			double scale = 0;
+			float tint[3] = { 1, 1, 1 };
 			const map_light& light = w.lights[static_cast<std::size_t>(l)];
 			if (l == 1)
 			{
@@ -908,15 +1095,38 @@ namespace codol::bsp
 			{
 				vec3 towards;
 				double distance = 0;
-				scale = light_reach(setup, light, p, towards, distance);
+				scale = light_reach(setup, light, p, towards, distance, tint);
 				scale = scale > 0 ? scale * dot(towards, normal) : 0;
 			}
 			for (int k = 0; k < 3; k++)
 			{
-				out[k] = light.color[k] * static_cast<float>(std::max(scale, 0.0));
+				out[k] = light.color[k] * tint[k] * static_cast<float>(std::max(scale, 0.0));
 			}
 			return scale > 0;
 		};
+		// the cell a point is in, by the node stream the game walks
+		const auto cell_of = [&](const vec3& p)
+		{
+			std::size_t at = 0;
+			const int cells = static_cast<int>(rw.cells.size());
+			while (at < rw.cell_nodes.size())
+			{
+				const int value = rw.cell_nodes[at];
+				if (value <= cells)
+				{
+					return std::max(value - 1, 0);
+				}
+				const c1::cplane_s& plane = w.planes.planes[static_cast<std::size_t>(value - cells - 1)];
+				const double d = plane.normal[0] * p.x + plane.normal[1] * p.y + plane.normal[2] * p.z - plane.dist;
+				at = d > 0 ? at + 2 : at + rw.cell_nodes[at + 1];
+			}
+			return 0;
+		};
+		std::vector<kdop_axes> light_axes(light_count);
+		for (std::size_t l = 2; l < light_count; l++)
+		{
+			light_axes[l] = extra_axes(w.lights[l]);
+		}
 		const auto primary_visible = [&](const int l, const vec3& p, const bool one_sided)
 		{
 			return l == 1 ? rays.reaches_sky(p, setup.sun, one_sided) : !rays.blocked(p, light_origin(l), one_sided);
@@ -945,14 +1155,14 @@ namespace codol::bsp
 			}
 			return best;
 		};
-		std::vector<kdop> lit(light_count);				// per primary light: what it lights, relative to its origin
+		std::vector<std::map<int, kdop>> lit(light_count);	// per primary light and cell: what it lights, relative to its origin
 		std::vector<std::size_t> named_surfaces(light_count, 0);
 
 		// per luxel of every chart: the light that arrives, and what the luxel throws back ( the source of the next bounce,
 		// of the light grid and of the reflection probes )
 		std::vector<chart> charts;
 		std::vector<float> direct, indirect, primary_part, came_from, emit;	// 3 per luxel; `came_from`: the sum of luminance x direction
-		std::unordered_map<std::uint64_t, std::size_t> chart_of_face;		// ( brush, face ) -> a chart of it
+		std::unordered_map<std::uint64_t, std::vector<std::size_t>> chart_of_face;		// ( brush, face ) -> its charts ( a face cut by the lights' reach has several )
 		const auto face_key = [](const int brush, const int face) { return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(brush)) << 32) | static_cast<std::uint32_t>(face); };
 		double luxel = ctx.opts.quality <= 0 ? 32.0 : ctx.opts.quality == 1 ? 16.0 : 8.0;
 		// the luxel a point of a face lies in; npos: the face has no chart
@@ -963,7 +1173,19 @@ namespace codol::bsp
 			{
 				return npos;
 			}
-			const chart& c = charts[it->second];
+			// of the pieces of a face the one the point lies in
+			std::size_t pick = it->second[0];
+			for (const std::size_t ci : it->second)
+			{
+				const chart& o = charts[ci];
+				const double u = dot(p - o.origin, o.u_axis), v = dot(p - o.origin, o.v_axis);
+				if (u >= o.u_min - 0.01 && u <= o.u_max + 0.01 && v >= o.v_min - 0.01 && v <= o.v_max + 0.01)
+				{
+					pick = ci;
+					break;
+				}
+			}
+			const chart& c = charts[pick];
 			const int lx = std::clamp(static_cast<int>(std::floor(1.0 + (dot(p - c.origin, c.u_axis) - c.u_min) / luxel)), 0, c.w - 1);
 			const int ly = std::clamp(static_cast<int>(std::floor(1.0 + (dot(p - c.origin, c.v_axis) - c.v_min) / luxel)), 0, c.h - 1);
 			return c.first + static_cast<std::size_t>(ly) * static_cast<std::size_t>(c.w) + static_cast<std::size_t>(lx);
@@ -976,6 +1198,414 @@ namespace codol::bsp
 		}
 		else
 		{
+			// ---- surfaces are cut by the reach of the primary light entities. A surface names one primary light, so a
+			// floor that two spots light side by side, or one that reaches far beyond a lamp's circle, has to be several
+			// surfaces: the shipped maps have seams between surfaces of one material in one plane that name different
+			// lights all over ( mp_vacant: 2087 such edges at its five spots; codol_bsp_probe lightcuts ). Here: every
+			// face near a light entity is sampled on a grid of 32 units in its plane ( which light gives the point the
+			// most light, the sun included ); where the answer changes within a face, the face is cut along the lines
+			// of that grid around what each light entity wins, and every piece goes to the surface of its light. The
+			// cuts follow the grid, not the outline of the light: what a piece's light does not reach is dark in the
+			// primary lightmap, and what the other lights send there is baked as before.
+			if (light_count > 2 && !std::getenv("CODOL_BSP_NO_LIGHT_CUT"))
+			{
+				constexpr double STEP = 32.0;
+				struct piece
+				{
+					std::vector<c1::GfxWorldVertex> vertices;
+					int light = 0;
+				};
+				std::vector<std::vector<std::vector<piece>>> pieces(rw.surfaces.size());	// per surface and face; none: the face stays as it is, with the others
+				std::atomic<std::size_t> cut_faces{ 0 }, made{ 0 };
+				parallel_for(rw.surfaces.size(), [&](const std::size_t si)
+				{
+					const render_surface& surface = rw.surfaces[si];
+					if (surface.lightmap == 31)
+					{
+						return;
+					}
+					pieces[si].resize(surface.faces.size());
+					for (std::size_t fi = 0; fi < surface.faces.size(); fi++)
+					{
+						const render_face& rf = surface.faces[fi];
+						std::vector<c1::GfxWorldVertex> polygon(surface.vertices.begin() + rf.first_vertex, surface.vertices.begin() + rf.first_vertex + rf.vertex_count);
+						if (polygon.size() < 3)
+						{
+							continue;
+						}
+						const auto at = [&](const std::size_t k) { return vec3{ polygon[k].xyz[0], polygon[k].xyz[1], polygon[k].xyz[2] }; };
+						vec3 normal = cross(at(1) - at(0), at(2) - at(0));
+						if (length(normal) < 1e-6)
+						{
+							continue;
+						}
+						normal = normal * (1.0 / length(normal));
+						if (dot(normal, vec3{ rf.normal[0], rf.normal[1], rf.normal[2] }) < 0)
+						{
+							normal = normal * -1.0;
+						}
+						vec3 u_axis, v_axis;
+						edit::face_texture_axes(normal, 0.0, u_axis, v_axis);
+						u_axis = u_axis - normal * dot(u_axis, normal);
+						u_axis = u_axis * (1.0 / std::max(length(u_axis), 1e-9));
+						v_axis = cross(normal, u_axis);
+						const vec3 origin = normal * dot(normal, at(0));
+						double lo[2] = { 1e30, 1e30 }, hi[2] = { -1e30, -1e30 };
+						box3 box;
+						for (std::size_t k = 0; k < polygon.size(); k++)
+						{
+							const double uv[2] = { dot(at(k), u_axis), dot(at(k), v_axis) };
+							for (int a = 0; a < 2; a++)
+							{
+								lo[a] = std::min(lo[a], uv[a]);
+								hi[a] = std::max(hi[a], uv[a]);
+							}
+							box.add(at(k));
+						}
+						// the light entities that can reach the face at all
+						std::vector<int> near;
+						for (std::size_t l = 2; l < light_count; l++)
+						{
+							const vec3 o = light_origin(static_cast<int>(l));
+							double d2 = 0;
+							for (int a = 0; a < 3; a++)
+							{
+								const double d = std::max({ box.mins[a] - o[a], o[a] - box.maxs[a], 0.0 });
+								d2 += d * d;
+							}
+							if (d2 < static_cast<double>(w.lights[l].radius) * w.lights[l].radius && dot(normal, o) - dot(normal, at(0)) > 0)
+							{
+								near.push_back(static_cast<int>(l));
+							}
+						}
+						if (near.empty())
+						{
+							continue;
+						}
+						const int u0 = static_cast<int>(std::floor(lo[0] / STEP)), u1 = static_cast<int>(std::ceil(hi[0] / STEP)), v0 = static_cast<int>(std::floor(lo[1] / STEP)),
+							v1 = static_cast<int>(std::ceil(hi[1] / STEP));
+						const int cols = u1 - u0, rows = v1 - v0;
+						if (cols < 1 || rows < 1 || static_cast<std::int64_t>(cols) * rows > 1 << 20)
+						{
+							continue;
+						}
+						// the light of every grid square whose centre lies on the face: -1 none sampled
+						std::vector<int> best(static_cast<std::size_t>(cols) * rows, -1);
+						const auto inside = [&](const double u, const double v)
+						{
+							int sign = 0;
+							for (std::size_t k = 0; k < polygon.size(); k++)
+							{
+								const vec3 a = at(k), b = at((k + 1) % polygon.size());
+								const double ax = dot(a, u_axis), ay = dot(a, v_axis), bx = dot(b, u_axis), by = dot(b, v_axis);
+								const double side = (bx - ax) * (v - ay) - (by - ay) * (u - ax);
+								if (std::fabs(side) < 1e-6)
+								{
+									continue;
+								}
+								if (sign && (side > 0) != (sign > 0))
+								{
+									return false;
+								}
+								sign = side > 0 ? 1 : -1;
+							}
+							return true;
+						};
+						std::set<int> winners;
+						for (int r = 0; r < rows; r++)
+						{
+							for (int c = 0; c < cols; c++)
+							{
+								const double u = (u0 + c + 0.5) * STEP, v = (v0 + r + 0.5) * STEP;
+								if (!inside(u, v))
+								{
+									continue;
+								}
+								const vec3 p = origin + u_axis * u + v_axis * v + normal * 1.0;
+								int winner = 0;
+								double most = 0;
+								float e[3];
+								if (luminance(w.sun_color) > 0 && primary_reach(1, p, normal, e) && primary_visible(1, p, false))
+								{
+									most = luminance(e);
+								}
+								for (const int l : near)
+								{
+									if (primary_reach(l, p, normal, e) && luminance(e) > most && primary_visible(l, p, false))
+									{
+										most = luminance(e);
+										winner = l;
+									}
+								}
+								best[static_cast<std::size_t>(r) * cols + c] = winner;
+								winners.insert(winner);
+							}
+						}
+						if (winners.empty())
+						{
+							// a face smaller than the grid: its middle
+							vec3 middle{ 0, 0, 0 };
+							for (std::size_t k = 0; k < polygon.size(); k++)
+							{
+								middle = middle + at(k) * (1.0 / static_cast<double>(polygon.size()));
+							}
+							const vec3 p = middle + normal * 1.0;
+							int winner = 0;
+							double most = 0;
+							float e[3];
+							if (luminance(w.sun_color) > 0 && primary_reach(1, p, normal, e) && primary_visible(1, p, false))
+							{
+								most = luminance(e);
+							}
+							for (const int l : near)
+							{
+								if (primary_reach(l, p, normal, e) && luminance(e) > most && primary_visible(l, p, false))
+								{
+									most = luminance(e);
+									winner = l;
+								}
+							}
+							winners.insert(winner);
+						}
+						if (winners.size() == 1)
+						{
+							// the whole face goes to one light ( or to none of the entities )
+							pieces[si][fi].push_back({ polygon, *winners.begin() });
+							continue;
+						}
+						// the grid lines around what each light entity wins
+						std::set<int> u_cuts{ 0, cols }, v_cuts{ 0, rows };
+						for (const int l : winners)
+						{
+							if (l < 2)
+							{
+								continue;
+							}
+							int c0 = cols, c1 = -1, r0 = rows, r1 = -1;
+							for (int r = 0; r < rows; r++)
+							{
+								for (int c = 0; c < cols; c++)
+								{
+									if (best[static_cast<std::size_t>(r) * cols + c] == l)
+									{
+										c0 = std::min(c0, c);
+										c1 = std::max(c1, c);
+										r0 = std::min(r0, r);
+										r1 = std::max(r1, r);
+									}
+								}
+							}
+							u_cuts.insert(c0);
+							u_cuts.insert(c1 + 1);
+							v_cuts.insert(r0);
+							v_cuts.insert(r1 + 1);
+						}
+						const std::vector<int> us(u_cuts.begin(), u_cuts.end()), vs(v_cuts.begin(), v_cuts.end());
+						const int bands_u = static_cast<int>(us.size()) - 1, bands_v = static_cast<int>(vs.size()) - 1;
+						// the light of every block between the cut lines: the one most of its squares have
+						std::vector<int> block(static_cast<std::size_t>(bands_u) * bands_v, 0);
+						for (int bv = 0; bv < bands_v; bv++)
+						{
+							for (int bu = 0; bu < bands_u; bu++)
+							{
+								std::map<int, int> votes;
+								for (int r = vs[static_cast<std::size_t>(bv)]; r < vs[static_cast<std::size_t>(bv) + 1]; r++)
+								{
+									for (int c = us[static_cast<std::size_t>(bu)]; c < us[static_cast<std::size_t>(bu) + 1]; c++)
+									{
+										if (const int b = best[static_cast<std::size_t>(r) * cols + c]; b >= 0)
+										{
+											votes[b]++;
+										}
+									}
+								}
+								int most = 0;
+								for (const auto& [l, n] : votes)
+								{
+									if (n > most)
+									{
+										most = n;
+										block[static_cast<std::size_t>(bv) * bands_u + bu] = l;
+									}
+								}
+							}
+						}
+						// blocks of one light that lie side by side become one piece ( rows of blocks first, then rows on
+						// top of each other that are alike )
+						std::vector<std::uint8_t> used(block.size(), 0);
+						for (int bv = 0; bv < bands_v; bv++)
+						{
+							for (int bu = 0; bu < bands_u; bu++)
+							{
+								if (used[static_cast<std::size_t>(bv) * bands_u + bu])
+								{
+									continue;
+								}
+								const int l = block[static_cast<std::size_t>(bv) * bands_u + bu];
+								int right = bu + 1, below = bv + 1;
+								while (right < bands_u && !used[static_cast<std::size_t>(bv) * bands_u + right] && block[static_cast<std::size_t>(bv) * bands_u + right] == l)
+								{
+									right++;
+								}
+								for (; below < bands_v; below++)
+								{
+									bool same = true;
+									for (int k = bu; k < right && same; k++)
+									{
+										same = !used[static_cast<std::size_t>(below) * bands_u + k] && block[static_cast<std::size_t>(below) * bands_u + k] == l;
+									}
+									if (!same)
+									{
+										break;
+									}
+								}
+								for (int r = bv; r < below; r++)
+								{
+									for (int k = bu; k < right; k++)
+									{
+										used[static_cast<std::size_t>(r) * bands_u + k] = 1;
+									}
+								}
+								std::vector<c1::GfxWorldVertex> part = polygon;
+								// the outermost lines are the face's own edges: nothing to cut there
+								if (bu > 0)
+								{
+									part = clip_polygon(part, u_axis, (u0 + us[static_cast<std::size_t>(bu)]) * STEP, 1.0);
+								}
+								if (right < bands_u)
+								{
+									part = clip_polygon(part, u_axis, (u0 + us[static_cast<std::size_t>(right)]) * STEP, -1.0);
+								}
+								if (bv > 0)
+								{
+									part = clip_polygon(part, v_axis, (v0 + vs[static_cast<std::size_t>(bv)]) * STEP, 1.0);
+								}
+								if (below < bands_v)
+								{
+									part = clip_polygon(part, v_axis, (v0 + vs[static_cast<std::size_t>(below)]) * STEP, -1.0);
+								}
+								if (part.size() >= 3 && polygon_area(part) > 0.01)
+								{
+									pieces[si][fi].push_back({ std::move(part), l });
+								}
+							}
+						}
+						if (pieces[si][fi].size() > 1)
+						{
+							cut_faces++;
+							made += pieces[si][fi].size();
+						}
+					}
+				});
+				// the surfaces again: what a surface holds goes to one surface per light, in the surface's place
+				std::vector<render_surface> surfaces;
+				std::size_t before = rw.surfaces.size();
+				for (std::size_t si = 0; si < rw.surfaces.size(); si++)
+				{
+					render_surface& surface = rw.surfaces[si];
+					std::set<int> lights;
+					bool whole = true;
+					for (const std::vector<piece>& of_face : pieces[si])
+					{
+						// a face no light entity is near goes with the pieces of "none"
+						if (of_face.empty())
+						{
+							lights.insert(0);
+						}
+						for (const piece& p : of_face)
+						{
+							lights.insert(p.light);
+						}
+						whole = whole && of_face.size() <= 1;
+					}
+					whole = whole && lights.size() <= 1;
+					if (whole)
+					{
+						surface.light_hint = surface.lightmap == 31 || lights.empty() ? -1 : *lights.begin();
+						surfaces.push_back(std::move(surface));
+						continue;
+					}
+					for (const int l : lights)
+					{
+						render_surface out;
+						out.material = surface.material;
+						out.cell = surface.cell;
+						out.model = surface.model;
+						out.lightmap = surface.lightmap;
+						out.reflection_probe = surface.reflection_probe;
+						out.primary_light = surface.primary_light;
+						out.casts_sun_shadow = surface.casts_sun_shadow;
+						out.sky = surface.sky;
+						out.light_hint = l;
+						for (std::size_t fi = 0; fi < surface.faces.size(); fi++)
+						{
+							const render_face& rf = surface.faces[fi];
+							std::vector<piece> whole_face;
+							if (pieces[si][fi].empty())
+							{
+								whole_face.push_back({ std::vector<c1::GfxWorldVertex>(surface.vertices.begin() + rf.first_vertex, surface.vertices.begin() + rf.first_vertex + rf.vertex_count), 0 });
+							}
+							for (const piece& p : pieces[si][fi].empty() ? whole_face : pieces[si][fi])
+							{
+								if (p.light != l)
+								{
+									continue;
+								}
+								render_face part = rf;
+								part.first_vertex = static_cast<std::uint32_t>(out.vertices.size());
+								part.vertex_count = static_cast<std::uint32_t>(p.vertices.size());
+								for (const c1::GfxWorldVertex& v : p.vertices)
+								{
+									out.vertices.push_back(v);
+									out.box.add(v.xyz);
+								}
+								for (std::uint32_t k = 2; k < part.vertex_count; k++)
+								{
+									out.indices.push_back(static_cast<std::uint16_t>(part.first_vertex));
+									out.indices.push_back(static_cast<std::uint16_t>(part.first_vertex + k));
+									out.indices.push_back(static_cast<std::uint16_t>(part.first_vertex + k - 1));
+								}
+								out.faces.push_back(part);
+							}
+						}
+						if (!out.faces.empty() && out.vertices.size() <= 0xFFFF)
+						{
+							surfaces.push_back(std::move(out));
+						}
+					}
+				}
+				rw.surfaces = std::move(surfaces);
+				// what was counted in surfaces: the models' ranges, the ends of the draw classes, the sky's list
+				for (render_model& model : rw.models)
+				{
+					model.first_surface = 0;
+					model.surface_count = 0;
+				}
+				rw.sky_surfaces.clear();
+				rw.lit_opaque_end = rw.lit_trans_end = 0;
+				for (std::size_t si = 0; si < rw.surfaces.size(); si++)
+				{
+					const render_surface& surface = rw.surfaces[si];
+					render_model& model = rw.models[static_cast<std::size_t>(surface.model)];
+					if (model.surface_count == 0)
+					{
+						model.first_surface = static_cast<std::uint32_t>(si);
+					}
+					model.surface_count++;
+					if (surface.model == 0)
+					{
+						(rw.materials[static_cast<std::size_t>(surface.material)].draw_class == 0 ? rw.lit_opaque_end : rw.lit_trans_end) = static_cast<std::uint32_t>(si + 1);
+						if (surface.sky)
+						{
+							rw.sky_surfaces.push_back(static_cast<std::int32_t>(si));
+						}
+					}
+				}
+				rw.lit_trans_end = std::max(rw.lit_trans_end, rw.lit_opaque_end);
+				ctx.rep.notes.push_back(format("light: %zu faces cut by the reach of the primary lights into %zu pieces; %zu surfaces became %zu", cut_faces.load(), made.load(), before,
+					rw.surfaces.size()));
+			}
+
 			// one chart per face of a surface ( a face drawn by several cells has one per surface: the charts of a
 			// surface share a page )
 			std::vector<std::vector<std::size_t>> of_surface(rw.surfaces.size());
@@ -1026,7 +1656,7 @@ namespace codol::bsp
 						c.v_min = std::min(c.v_min, v);
 						c.v_max = std::max(c.v_max, v);
 					}
-					chart_of_face.emplace(face_key(rf.brush, rf.face), charts.size());
+					chart_of_face[face_key(rf.brush, rf.face)].push_back(charts.size());
 					of_surface[si].push_back(charts.size());
 					charts.push_back(c);
 				}
@@ -1125,8 +1755,14 @@ namespace codol::bsp
 				for (std::size_t si = 0; si < rw.surfaces.size(); si++)
 				{
 					double most = 0;
+					const int hint = rw.surfaces[si].light_hint;
 					for (std::size_t l = 1; l < light_count; l++)
 					{
+						// a surface that was cut out for a light entity names it; one cut out for none of them the sun or nothing
+						if ((hint >= 2 && static_cast<int>(l) != hint) || (hint == 0 && l != 1))
+						{
+							continue;
+						}
 						double sum = 0;
 						for (const std::size_t ci : of_surface[si])
 						{
@@ -1193,7 +1829,7 @@ namespace codol::bsp
 							}
 							if (light >= 2)
 							{
-								chart_lit[index].add(p - origin);
+								chart_lit[index].add(p - origin, light_axes[static_cast<std::size_t>(light)]);
 							}
 						}
 					}
@@ -1204,12 +1840,7 @@ namespace codol::bsp
 				const int light = surface_light[static_cast<std::size_t>(charts[ci].surface)];
 				if (chart_lit[ci].any)
 				{
-					for (int a = 0; a < 9; a++)
-					{
-						lit[static_cast<std::size_t>(light)].lo[a] = std::min(lit[static_cast<std::size_t>(light)].lo[a], chart_lit[ci].lo[a]);
-						lit[static_cast<std::size_t>(light)].hi[a] = std::max(lit[static_cast<std::size_t>(light)].hi[a], chart_lit[ci].hi[a]);
-					}
-					lit[static_cast<std::size_t>(light)].any = true;
+					lit[static_cast<std::size_t>(light)][rw.surfaces[static_cast<std::size_t>(charts[ci].surface)].cell].add(chart_lit[ci]);
 				}
 			}
 			// bounced light: every luxel looks around ( cosine weighted directions over its side ) and takes what the
@@ -1408,7 +2039,7 @@ namespace codol::bsp
 				for (const render_face& rf : surface.faces)
 				{
 					// the charts of a surface are in the order of its faces ( a face without area has none )
-					if (next >= of_surface[si].size() || charts[of_surface[si][next]].brush != rf.brush || charts[of_surface[si][next]].face != rf.face)
+					if (next >= of_surface[si].size() || charts[of_surface[si][next]].first_vertex != rf.first_vertex)
 					{
 						continue;
 					}
@@ -1428,14 +2059,36 @@ namespace codol::bsp
 		}
 		// ---- the falloff curve of the light definition: row 0 of the upper layer of every page, 32 texels from texel
 		// 1 ( GfxLightDef::lmapLookupStart ), with a copy of the end texel on either side for the bilinear filter
-		for (render_lightmap& lightmap : rw.lightmaps)
+		// Every definition a primary light names has its strip, where GfxLightDef::lmapLookupStart says.
 		{
-			for (int x = 0; x < 34; x++)
+			std::set<int> strips;
+			for (std::size_t l = 2; l < light_count; l++)
 			{
-				const std::uint8_t v = to_byte(w.light_falloff[static_cast<std::size_t>(std::clamp(x - 1, 0, 31))]);
-				std::uint8_t* texel = lightmap.secondary.data() + static_cast<std::size_t>(x) * 4;
-				texel[0] = texel[1] = texel[2] = v;
-				texel[3] = 255;
+				strips.insert(w.lights[l].def_index);
+			}
+			if (strips.empty())
+			{
+				strips.insert(0);
+			}
+			for (render_lightmap& lightmap : rw.lightmaps)
+			{
+				for (const int d : strips)
+				{
+					if (d < 0 || static_cast<std::size_t>(d) >= w.light_defs.size())
+					{
+						continue;
+					}
+					const light_def& def = w.light_defs[static_cast<std::size_t>(d)];
+					for (int x = 0; x < 34 && def.lookup_start - 1 + x < LM_W; x++)
+					{
+						const std::array<float, 3>& v = def.curve[static_cast<std::size_t>(std::clamp(x - 1, 0, 31))];
+						std::uint8_t* texel = lightmap.secondary.data() + static_cast<std::size_t>(def.lookup_start - 1 + x) * 4;
+						texel[0] = to_byte(v[2]);
+						texel[1] = to_byte(v[1]);
+						texel[2] = to_byte(v[0]);
+						texel[3] = 255;
+					}
+				}
 			}
 		}
 
@@ -1591,10 +2244,12 @@ namespace codol::bsp
 						const map_light& light = *setup.points[i];
 						vec3 l;
 						double distance = 0;
-						const double scale = light_reach(setup, light, p, l, distance);
+						float tint[3];
+						const double scale = light_reach(setup, light, p, l, distance, tint);
 						if (scale > 0 && !rays.blocked(p, vec3{ light.origin[0], light.origin[1], light.origin[2] }, true))
 						{
-							add(light.color, scale, l);
+							const float color[3] = { light.color[0] * tint[0], light.color[1] * tint[1], light.color[2] * tint[2] };
+							add(color, scale, l);
 						}
 					}
 					if (s.light != 1 && luminance(w.sun_color) > 0 && rays.reaches_sky(p, setup.sun, true))
@@ -1611,8 +2266,9 @@ namespace codol::bsp
 					const sample& s = samples[rc * static_cast<std::size_t>(layers) + static_cast<std::size_t>(z)];
 					if (!s.solid && s.light >= 2)
 					{
-						lit[s.light].add(vec3{ grid_position(mins[0] + static_cast<int>(rc / static_cast<std::size_t>(cols)), 0),
-							grid_position(mins[1] + static_cast<int>(rc % static_cast<std::size_t>(cols)), 1), grid_position(mins[2] + z, 2) } - light_origin(s.light));
+						const vec3 p{ grid_position(mins[0] + static_cast<int>(rc / static_cast<std::size_t>(cols)), 0),
+							grid_position(mins[1] + static_cast<int>(rc % static_cast<std::size_t>(cols)), 1), grid_position(mins[2] + z, 2) };
+						lit[s.light][cell_of(p)].add(p - light_origin(s.light), light_axes[s.light]);
 					}
 				}
 			}
@@ -1908,36 +2564,95 @@ namespace codol::bsp
 				const box3& box = w.models[static_cast<std::size_t>(s.model)].box;
 				for (int corner = 0; corner < 8; corner++)
 				{
-					lit[static_cast<std::size_t>(s.primary_light)].add(vec3{ corner & 1 ? box.maxs[0] : box.mins[0], corner & 2 ? box.maxs[1] : box.mins[1],
-						corner & 4 ? box.maxs[2] : box.mins[2] } - light_origin(s.primary_light));
+					lit[static_cast<std::size_t>(s.primary_light)][s.cell].add(vec3{ corner & 1 ? box.maxs[0] : box.mins[0], corner & 2 ? box.maxs[1] : box.mins[1],
+						corner & 4 ? box.maxs[2] : box.mins[2] } - light_origin(s.primary_light), light_axes[static_cast<std::size_t>(s.primary_light)]);
 				}
 			}
 		}
+		// The region of a light: one hull per cell it lights something in ( the shipped maps have several hulls where a
+		// light shines through a doorway ), the hull of the light's own cell first and with the light itself in it.
+		// Besides its nine ranges a hull gets up to eight of the light's further axes: those that cut the most off
+		// the volume the nine ranges enclose - the planes of a spot's cone, the diagonals.
 		for (std::size_t l = 2; l < light_count; l++)
 		{
-			kdop& hull = lit[l];
-			if (!hull.any)
+			std::map<int, kdop>& by_cell = lit[l];
+			const int own_cell = cell_of(light_origin(static_cast<int>(l)));
+			if (by_cell.empty())
 			{
 				// nothing names the light: a box around what it can reach
 				const double r = w.lights[l].radius;
 				for (int corner = 0; corner < 8; corner++)
 				{
-					hull.add(vec3{ corner & 1 ? r : -r, corner & 2 ? r : -r, corner & 4 ? r : -r });
+					by_cell[own_cell].add(vec3{ corner & 1 ? r : -r, corner & 2 ? r : -r, corner & 4 ? r : -r }, light_axes[l]);
 				}
 			}
-			hull.add(vec3{ 0, 0, 0 });
-			render_light_hull out;
-			for (int a = 0; a < 9; a++)
+			if (const auto own = by_cell.find(own_cell); own != by_cell.end())
 			{
-				const double pad = a < 3 ? 16.0 : 32.0;
-				out.mid[a] = static_cast<float>((hull.lo[a] + hull.hi[a]) * 0.5);
-				out.half[a] = static_cast<float>((hull.hi[a] - hull.lo[a]) * 0.5 + pad);
+				own->second.add(vec3{ 0, 0, 0 }, light_axes[l]);
 			}
-			rw.light_regions[l].push_back(out);
-			ctx.rep.notes.push_back(format("light: primary light %zu ( %s at %.0f %.0f %.0f, radius %.0f ): %zu surfaces and %zu static models name it; region %.0f x %.0f x %.0f", l,
-				w.lights[l].type == 2 ? "spot" : "omni", w.lights[l].origin[0], w.lights[l].origin[1], w.lights[l].origin[2], w.lights[l].radius, named_surfaces[l],
+			std::vector<int> order;
+			for (const auto& [cell, hull] : by_cell)
+			{
+				order.push_back(cell);
+			}
+			std::stable_partition(order.begin(), order.end(), [&](const int cell) { return cell == own_cell; });
+			std::size_t axes_written = 0;
+			double size[3] = {};
+			for (const int cell : order)
+			{
+				const kdop& hull = by_cell[cell];
+				render_light_hull out;
+				double lo[9], hi[9];
+				for (int a = 0; a < 9; a++)
+				{
+					const double pad = a < 3 ? 16.0 : 32.0;
+					lo[a] = hull.lo[a] - pad;
+					hi[a] = hull.hi[a] + pad;
+					out.mid[a] = static_cast<float>((lo[a] + hi[a]) * 0.5);
+					out.half[a] = static_cast<float>((hi[a] - lo[a]) * 0.5);
+				}
+				for (int a = 0; a < 3; a++)
+				{
+					size[a] = std::max(size[a], hi[a] - lo[a]);
+				}
+				// what each candidate would cut off the nine ranges' volume
+				const std::vector<vec3> corners = kdop_corners(lo, hi);
+				std::vector<std::pair<double, int>> gains;
+				for (int a = 0; a < (w.lights[l].type == 2 ? KDOP_EXTRA : 4) && !corners.empty(); a++)
+				{
+					double least = 1e30, most = -1e30;
+					for (const vec3& corner : corners)
+					{
+						const double d = dot(corner, light_axes[l][static_cast<std::size_t>(a)]);
+						least = std::min(least, d);
+						most = std::max(most, d);
+					}
+					const double gain = std::max(0.0, most - (hull.hi[9 + a] + 16.0)) + std::max(0.0, (hull.lo[9 + a] - 16.0) - least);
+					if (gain > 8.0)
+					{
+						gains.emplace_back(gain, a);
+					}
+				}
+				std::sort(gains.begin(), gains.end(), [](const std::pair<double, int>& a, const std::pair<double, int>& b) { return a.first > b.first; });
+				for (std::size_t k = 0; k < gains.size() && k < 8; k++)
+				{
+					const int a = gains[k].second;
+					render_light_hull::axis axis;
+					axis.dir[0] = static_cast<float>(light_axes[l][static_cast<std::size_t>(a)].x);
+					axis.dir[1] = static_cast<float>(light_axes[l][static_cast<std::size_t>(a)].y);
+					axis.dir[2] = static_cast<float>(light_axes[l][static_cast<std::size_t>(a)].z);
+					axis.mid = static_cast<float>((hull.lo[9 + a] + hull.hi[9 + a]) * 0.5);
+					axis.half = static_cast<float>((hull.hi[9 + a] - hull.lo[9 + a]) * 0.5 + 16.0);
+					out.axes.push_back(axis);
+				}
+				axes_written += out.axes.size();
+				rw.light_regions[l].push_back(std::move(out));
+			}
+			ctx.rep.notes.push_back(format("light: primary light %zu ( %s%s at %.0f %.0f %.0f, radius %.0f, %s ): %zu surfaces and %zu static models name it; region of %zu hull( s ) with %zu further axes, %.0f x %.0f x %.0f",
+				l, w.lights[l].scriptable ? "scriptable " : "", w.lights[l].type == 2 ? "spot" : "omni", w.lights[l].origin[0], w.lights[l].origin[1],
+				w.lights[l].origin[2], w.lights[l].radius, w.lights[l].def.c_str(), named_surfaces[l],
 				static_cast<std::size_t>(std::count_if(rw.smodels.begin(), rw.smodels.end(), [&](const render_smodel& m) { return m.primary_light == static_cast<int>(l); })),
-				out.half[0] * 2, out.half[1] * 2, out.half[2] * 2));
+				rw.light_regions[l].size(), axes_written, size[0], size[1], size[2]));
 		}
 
 		// ---- the minimap picture: the map from above as the lightmaps light it, north ( + y ) up; where a ray from
