@@ -44,7 +44,7 @@ needed. What it is made of:
 | Radiant | `CoDOLRadiant.exe` | open a map of the install, edit entities / models / brushes in 3D and 2D views with undo, save as `.map` |
 | `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce, light grid, reflection probes ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
 | editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. It patches the shipped zone; no light bake. |
-| Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials and models: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export` -> native assets in `mod\<map>\<map>_assets.ff`, shown by the editor at once. See [Your own assets](#your-own-assets). |
+| Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials and models: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export` -> native assets in `mod\<map>\<map>_assets.ff`, shown by the editor at once. See [Your own assets](#your-own-assets). `codol_assetc` alone also compiles animations ( `xanim_export` ), sounds ( soundalias `.csv`, `.wav` ) and effects ( `.efx` ). |
 | `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
 | script editing | Script Workbench, rcon reload | unchanged |
 
@@ -127,6 +127,9 @@ right away and is applied like any other ( browser, `tex_set` ). A model is plac
 * Images are stored inline in the zone ( DXT ), which no shipped material texture does; see "Not done, taken on
   trust" in `codol_assets/README.md`. Nothing of this has been loaded by the game client or a server from the editor.
 
+Animations, sounds and effects are not part of the project folder yet: compile them with `codol_assetc --xanim` /
+`--soundalias` / `--fx` ( `codol_assets/README.md` ) into the map zone after File > Build map.
+
 Not there: deleting or renaming an asset from the editor ( delete the files, Rescan ), editing a material's
 definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import windows, streamed images ( `.iwi` in an
 `.iwd` ), per image options ( format, `flipy` ).
@@ -154,8 +157,12 @@ Be aware of these before planning work around this branch:
   `codol_bsp/README.md`.
 - **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
   players do not: put clip brushes around models.
-- **No animations, sounds or effects of your own.** `codol_assetc` builds images, materials and models. A map can
-  place the game's effects and sounds ( `script_fx`, `script_sound` ), it cannot bring new ones.
+- **Animations, sounds and effects of your own are command line only, and nobody has seen or heard one in the
+  game.** `codol_assetc` compiles `xanim_export` ( `--xanim` ), soundalias `.csv` + `.wav` ( `--soundalias` ) and
+  `.efx` ( `--fx` ) into a zone - into the built map zone with `--base compiled\<map>\zone\<map>.ff` - and the
+  dedicated server runs a level script that uses them ( `codol_assets/README.md`: "Animations", "Sounds",
+  "Effects", "On a dedicated server" ). The Assets window does not list or build them yet, and an animation also
+  needs two rawfiles in the map zone ( `animtrees/<tree>.atr`, `animlists/<map>.animlist` ).
 - **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
   of deleted brushes and does not re-bake light. For that, build the map from scratch.
 - **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;
