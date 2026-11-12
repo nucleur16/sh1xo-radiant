@@ -379,6 +379,7 @@ reader, not through the game.
 codol_zonetool info <ff> [--exe <client exe>] [--json]     header, blocks, asset counts per type
 codol_zonetool assets <ff> [--all] [--json]                type + name per asset ( --all: nested ones too )
 codol_zonetool check <folder> [--all] [--json]             load every .ff, report failures
+codol_zonetool dump-stringtable <ff> [<name>] [--out <f>]  a string table as csv ( what codol_linker --set-stringtable takes; no name: the list )
 codol_zonetool decrypt <ff> --out <file>                   the inflated zone
 codol_zonetool dump-ents <ff> [--out <file>]
 codol_zonetool dump-rawfile <ff> [<name>] [--out <file>]   dump-rawfiles <ff> --out <folder>
