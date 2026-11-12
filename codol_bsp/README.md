@@ -485,6 +485,5 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
 * No vision file, no `MapTriggers` ( trigger entities are brush models `*N` ), no glass, no dynEnts, no path data
   ( GameWorldMp has none in this game ), no sound aliases.
 * Unsigned container only ( `codol_zone` ).
-* `codol_mapc` ( the importing compiler, not this one ) writes the clip entry of an *added* static model as
-  `axis / scale` where the shipped entries have the transpose ( `stage_models.cpp` `entry_bounds` ); found while
-  fixing the same here, not changed there.
+* `codol_mapc` ( the importing compiler ) had the same clip entry mistake for *added* / moved static models
+  ( `axis / scale` instead of the transpose ); fixed there too ( `stage_models.cpp` ).

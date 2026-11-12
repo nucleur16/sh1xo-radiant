@@ -1306,8 +1306,8 @@ namespace codol::mapc
 				{
 					for (int k = 0; k < 3; k++)
 					{
-						axis[a][k] = like.invScaledAxis[a][k] * scale;
-						turned = turned || std::fabs(like.invScaledAxis[a][k] - s.draw.axis[a][k] / s.draw.scale) > 1e-4f;
+						axis[a][k] = like.invScaledAxis[k][a] * scale;		// stored as transpose( axis ) / scale
+						turned = turned || std::fabs(like.invScaledAxis[k][a] - s.draw.axis[a][k] / s.draw.scale) > 1e-4f;
 					}
 				}
 				box bounds(like.absBounds);
@@ -1330,7 +1330,7 @@ namespace codol::mapc
 					entry.origin[k] = s.draw.origin[k];
 					for (int a = 0; a < 3; a++)
 					{
-						entry.invScaledAxis[a][k] = s.draw.axis[a][k] / s.draw.scale;
+						entry.invScaledAxis[k][a] = s.draw.axis[a][k] / s.draw.scale;		// the inverse: transpose( axis ) / scale, as the shipped maps
 					}
 				}
 				entry.absBounds = bounds.bounds();
