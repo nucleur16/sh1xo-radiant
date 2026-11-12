@@ -441,6 +441,11 @@ namespace codol::view
 		name_map<std::pair<int, int>> image_sizes;
 		name_map<com_ptr<IDirect3DTexture9>> thumbnails;		// null: failed
 		edit_snapshot pending_edits;							// between on_device_lost and on_device_reset
+		// what a zone that was registered again ( register_zone ) left behind: existing meshes and instances may
+		// still point at it, and the caches are keyed by these addresses
+		std::vector<std::shared_ptr<const library_zone>> retired_zones;
+		std::vector<std::unique_ptr<gpu_texture>> retired_textures;
+		std::vector<std::unique_ptr<model_draw>> retired_models;
 
 		// ---- per map: device state that depends on the default pool ------------------------------------
 		com_ptr<IDirect3DTexture9> target_texture;
@@ -553,6 +558,9 @@ namespace codol::view
 		void fill_object(const dynamic_mesh& m, scene_object& o) const;
 		bool object(const object_ref& ref, scene_object& out) const;
 		void build_name_lists();
+		bool register_zone(const std::filesystem::path& file, std::string* error);
+		bool unregister_zone(const std::string& name);
+		void retire_zone(const std::string& name);
 		bool material_details(const std::string& name, material_info& out);
 		IDirect3DTexture9* material_thumbnail(const std::string& name, int max_size);
 		edit_snapshot capture_edits() const;

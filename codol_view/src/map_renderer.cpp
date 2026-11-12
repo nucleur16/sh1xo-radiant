@@ -149,6 +149,7 @@ namespace codol::view
 		static_models.clear();
 		brush_models.clear();
 		models.clear();
+		retired_models.clear();
 		surfaces.clear();
 		ranges.clear();
 		vertex_buffer.reset();
@@ -168,6 +169,7 @@ namespace codol::view
 		vertex_shaders.clear();
 		pixel_shaders.clear();
 		textures.clear();
+		retired_textures.clear();
 		texture_failed.clear();
 		texture_failures.clear();
 		white = {};
@@ -179,6 +181,7 @@ namespace codol::view
 		unbound_constants.clear();
 		constants.reset();
 		scope.zones.clear();
+		retired_zones.clear();
 		entities.clear();
 		entity_string.clear();
 		warnings.clear();
