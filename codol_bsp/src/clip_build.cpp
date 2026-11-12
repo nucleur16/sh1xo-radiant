@@ -437,7 +437,7 @@ namespace codol::bsp
 		//   * a triangle's corners are stored so that cross( v1 - v0, v2 - v0 ) points away from the side one stands on;
 		//   * a partition is a group of triangles of one material that lie together ( here: up to 16 );
 		//   * a border is an edge two triangles share whose surface does not go on beyond it seen from above ( a
-		//     silhouette edge: the brink of a ledge, the fold of an overhang ) - open edges have none ( 3 of 12930 ) -
+		//     silhouette edge: the brink of a ledge, the fold of an overhang ) - open edges have none ( 177 of 20572 in mp_rust ) -
 		//     as a line in the xy plane: normal pointing away from the surface, the edge's start along it, its
 		//     length, the height at the start and the slope;
 		//   * triEdgeIsWalkable: three bits per triangle, set for the triangles one can stand on ( normal z >= 0.7 ).

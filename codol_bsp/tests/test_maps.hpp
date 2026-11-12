@@ -114,6 +114,34 @@ namespace codol::bsp::test
 		doc.create_point_entity("script_model", { at.x, at.y, at.z }, crate);
 	}
 
+	// What the helicopter script asks a map for ( maps/mp/killstreaks/_helicopter.gsc init ): script_origins named
+	// heli_start ( targets the way in ), heli_loop_start ( targets a closed loop ), heli_leave and heli_crash_start.
+	// Without heli_start / heli_loop_start the script sets nothing up, and a harrier - which uses its effects - runs
+	// into script errors ( seen with bots on a map without them ). All nodes lie inside the map: `reach` around
+	// `centre` at height `z`.
+	inline void heli_prefab(edit::document& doc, const vec3& centre, const double reach, const double z)
+	{
+		const auto node = [&](const vec3& at, const char* name, const char* target)
+		{
+			std::vector<std::pair<std::string, std::string>> keys = { { "targetname", name } };
+			if (target)
+			{
+				keys.emplace_back("target", target);
+			}
+			doc.create_point_entity("script_origin", at, keys);
+		};
+		node({ centre.x - reach, centre.y - reach, z }, "heli_start", "heli_dest_1");
+		node({ centre.x, centre.y, z }, "heli_dest_1", nullptr);
+		node({ centre.x + reach, centre.y - reach, z }, "heli_loop_start", "heli_loop_1");
+		node({ centre.x + reach * 0.6, centre.y - reach * 0.6, z }, "heli_loop_1", "heli_loop_2");
+		node({ centre.x + reach * 0.6, centre.y + reach * 0.6, z }, "heli_loop_2", "heli_loop_3");
+		node({ centre.x - reach * 0.6, centre.y + reach * 0.6, z }, "heli_loop_3", "heli_loop_4");
+		node({ centre.x - reach * 0.6, centre.y - reach * 0.6, z }, "heli_loop_4", "heli_loop_1");
+		node({ centre.x - reach, centre.y + reach, z }, "heli_leave", nullptr);
+		node({ centre.x + reach, centre.y + reach, z }, "heli_crash_start", "heli_crash_1");
+		node({ centre.x + reach * 0.5, centre.y + reach * 0.3, z * 0.25 }, "heli_crash_1", nullptr);
+	}
+
 	// M1: a hollow room, floor 1024 x 1024, 320 high, a few crates, spawn points, a light
 	// skylight: the half of the ceiling over x > 0 is sky, so the sun shines in
 	inline void make_box_room(edit::document& doc, const materials& m = {}, const bool skylight = false)
@@ -315,6 +343,220 @@ namespace codol::bsp::test
 			}
 		}
 		doc.deselect_all();
+	}
+
+	// The yard: a small multiplayer layout with everything the compiler handles. An open yard of 2048 x 1536 under
+	// sky and sun, walled in; two buildings ( west and east ) with doorways and windows, lit by a light each; a mound
+	// of terrain in the middle; crates as brushes, static models ( from the common zones, from inside mp_rust's
+	// gfx_map, from a codol_assets project ) with clip brushes, a fence and a decal of a modder's material; spawn
+	// points for dm and tdm, path nodes, an effect, a sound, reflection probes.
+	// Needs the zones of tests/make_modder_assets.py ( bsp_test_* materials ) and of codol_assets' test sources
+	// ( codol_test_crate ) as --assets; without them those faces and models are reported and left out.
+	inline double yard_mound(const double x, const double y)
+	{
+		const double r2 = x * x + y * y;
+		return std::fabs(x) >= 255 || std::fabs(y) >= 255 ? 0.0 : 72.0 * std::exp(-r2 / (150.0 * 150.0));
+	}
+
+	inline void make_yard(edit::document& doc)
+	{
+		doc.new_map();
+		world_keys(doc);
+		const std::string ground = "kh_concrete_02", outer = "me_cargocontainer_usmc_ext_wall", brick = "bsp_test_wall", roof = "me_concrete_riverwall",
+			wood = "ch_woodplank01", sky = "sky_killhouse_sh";
+		struct solid_box
+		{
+			vec3 mins, maxs;
+		};
+		std::vector<solid_box> solids;
+		const auto box = [&](const vec3& mins, const vec3& maxs, const std::string& material)
+		{
+			solids.push_back({ mins, maxs });
+			return doc.create_box(mins, maxs, material);
+		};
+		const double X = 1024, Y = 768, T = 16, WALL = 256, SKY = 512;
+		// ground, the wall around the yard, sky above the wall and as the lid
+		wall(doc, { -X - T, -Y - T, -T }, { X + T, Y + T, 0 }, { 0, 0, 1 }, ground);
+		wall(doc, { -X - T, -Y - T, 0 }, { -X, Y + T, WALL }, { 1, 0, 0 }, outer);
+		wall(doc, { X, -Y - T, 0 }, { X + T, Y + T, WALL }, { -1, 0, 0 }, outer);
+		wall(doc, { -X, -Y - T, 0 }, { X, -Y, WALL }, { 0, 1, 0 }, outer);
+		wall(doc, { -X, Y, 0 }, { X, Y + T, WALL }, { 0, -1, 0 }, outer);
+		wall(doc, { -X - T, -Y - T, WALL }, { -X, Y + T, SKY }, { 1, 0, 0 }, sky);
+		wall(doc, { X, -Y - T, WALL }, { X + T, Y + T, SKY }, { -1, 0, 0 }, sky);
+		wall(doc, { -X, -Y - T, WALL }, { X, -Y, SKY }, { 0, 1, 0 }, sky);
+		wall(doc, { -X, Y, WALL }, { X, Y + T, SKY }, { 0, -1, 0 }, sky);
+		wall(doc, { -X - T, -Y - T, SKY }, { X + T, Y + T, SKY + T }, { 0, 0, -1 }, sky);
+
+		// a wall of a building along x ( y0 .. y1 is its thickness ) or along y, with openings ( from, to, bottom, top )
+		struct opening
+		{
+			double from, to, bottom, top;
+		};
+		const double H = 160;
+		const auto building_wall = [&](const bool along_x, const double a0, const double a1, const double b0, const double b1, const std::vector<opening>& openings)
+		{
+			const auto piece = [&](const double from, const double to, const double z0, const double z1)
+			{
+				if (to - from < 1 || z1 - z0 < 1)
+				{
+					return;
+				}
+				if (along_x)
+				{
+					box({ from, b0, z0 }, { to, b1, z1 }, brick);
+				}
+				else
+				{
+					box({ b0, from, z0 }, { b1, to, z1 }, brick);
+				}
+			};
+			double at = a0;
+			for (const opening& o : openings)
+			{
+				piece(at, o.from, 0, H);
+				piece(o.from, o.to, 0, o.bottom);
+				piece(o.from, o.to, o.top, H);
+				at = o.to;
+			}
+			piece(at, a1, 0, H);
+		};
+		// west building: x -896 .. -448, y -320 .. 320; a door in the east wall and one in the south wall, windows north and east
+		building_wall(false, -320, 320, -896, -880, {});
+		building_wall(false, -320, 320, -464, -448, { { -240, -144, 48, 104 }, { -48, 48, 0, 112 }, { 144, 240, 48, 104 } });
+		building_wall(true, -880, -464, -320, -304, { { -720, -624, 0, 112 } });
+		building_wall(true, -880, -464, 304, 320, { { -720, -624, 48, 104 } });
+		box({ -896, -320, H }, { -448, 320, H + T }, roof);
+		// east building, the mirror image with the second door to the north
+		building_wall(false, -320, 320, 880, 896, {});
+		building_wall(false, -320, 320, 448, 464, { { -240, -144, 48, 104 }, { -48, 48, 0, 112 }, { 144, 240, 48, 104 } });
+		building_wall(true, 464, 880, 304, 320, { { 624, 720, 0, 112 } });
+		building_wall(true, 464, 880, -320, -304, { { 624, 720, 48, 104 } });
+		box({ 448, -320, H }, { 896, 320, H + T }, roof);
+
+		// crates of brushes: cover in the yard and inside the buildings
+		std::vector<edit::object_id> detail;
+		const auto crate = [&](const double x, const double y, const double size, const double height)
+		{
+			detail.push_back(box({ x - size / 2, y - size / 2, 0 }, { x + size / 2, y + size / 2, height }, wood));
+		};
+		crate(-200, 420, 64, 64);
+		crate(-136, 420, 64, 64);
+		crate(-168, 420, 64, 128);
+		crate(260, -440, 96, 48);
+		crate(0, -560, 64, 64);
+		crate(-640, 120, 64, 64);
+		crate(700, -100, 64, 64);
+		crate(-360, -520, 128, 40);
+		crate(380, 500, 64, 96);
+		doc.deselect_all();
+		doc.select(detail);
+		doc.set_detail(true);
+		doc.deselect_all();
+
+		// the mound: a terrain mesh over the middle of the yard
+		{
+			const edit::object_id id = doc.create_terrain_patch({ -256, -256, 0 }, { 256, 256, 0 }, 9, 9, 2, ground);
+			doc.deselect_all();
+			if (const edit::patch* p = doc.find_patch(id))
+			{
+				const int count = p->width * p->height;
+				for (int v = 0; v < count; v++)
+				{
+					const vec3 at = doc.find_patch(id)->vertices[static_cast<std::size_t>(v)].xyz;
+					const double z = yard_mound(at.x, at.y);
+					if (z > 0)
+					{
+						const int index[1] = { v };
+						doc.move_patch_vertices(id, index, { 0, 0, z });
+					}
+				}
+			}
+			doc.deselect_all();
+		}
+
+		// static models, each with the clip brush a mapper puts around it ( players only collide with brushes and terrain )
+		const auto model = [&](const char* name, const vec3& at, const double yaw, const vec3& clip_half, const double clip_height, const char* scale = nullptr)
+		{
+			std::vector<std::pair<std::string, std::string>> keys = { { "model", name }, { "angles", "0 " + edit::format_key_number(yaw) + " 0" } };
+			if (scale)
+			{
+				keys.emplace_back("modelscale", scale);
+			}
+			doc.create_point_entity("misc_model", at, keys);
+			if (clip_height > 0)
+			{
+				box({ at.x - clip_half.x, at.y - clip_half.y, at.z }, { at.x + clip_half.x, at.y + clip_half.y, at.z + clip_height }, "clip");
+			}
+		};
+		model("com_plasticcase_green_big_us_dirt", { 300, 200, 0 }, 0, { 29, 15, 0 }, 30);
+		model("com_plasticcase_green_big_us_dirt", { -300, -200, 0 }, 90, { 15, 29, 0 }, 30);
+		model("codol_test_crate", { 120, 560, 0 }, 0, { 24, 24, 0 }, 48);
+		model("codol_test_crate", { -700, -520, 0 }, 0, { 48, 48, 0 }, 96, "2");
+		model("ch_gas_pump", { 600, 420, 0 }, 180, { 20, 14, 0 }, 56);
+		model("concrete_barrier_damaged_2", { -100, -400, 0 }, 0, { 40, 14, 0 }, 34);
+		model("concrete_barrier_damaged_2", { 60, 380, 0 }, 90, { 14, 40, 0 }, 34);
+		model("foliage_tree_palm_tall_2_static", { 620, -560, 0 }, 0, { 8, 8, 0 }, 200);
+		model("foliage_tree_palm_tall_2_static", { -560, 560, 0 }, 40, { 8, 8, 0 }, 200);
+
+		// a fence of the modder's alpha tested material and a decal of the blended one
+		{
+			const std::vector<edit::object_id> fence = { box({ 200, -200, 0 }, { 208, 120, 112 }, "bsp_test_fence") };
+			doc.deselect_all();
+			doc.select(fence);
+			doc.set_detail(true);
+			doc.deselect_all();
+			doc.create_terrain_patch({ -380, 200, 1 }, { -252, 328, 1 }, 3, 3, 2, "bsp_test_decal");
+			doc.deselect_all();
+		}
+
+		// the game's entities
+		const auto dm = [&](const double x, const double y, const double yaw) { spawn(doc, "mp_dm_spawn", { x, y, 8 }, yaw); };
+		const auto tdm = [&](const double x, const double y, const double yaw) { spawn(doc, "mp_tdm_spawn", { x, y, 8 }, yaw); };
+		dm(-940, -700, 45); dm(-940, 700, 315); dm(940, -700, 135); dm(940, 700, 225); dm(0, 680, 270); dm(0, -680, 90);
+		dm(-672, 0, 0); dm(672, 0, 180); dm(-320, 320, 315); dm(320, -320, 135); dm(-672, -480, 60); dm(672, 480, 240);
+		for (int k = 0; k < 4; k++)
+		{
+			spawn(doc, "mp_tdm_spawn_allies_start", { -760, -180 + 120.0 * k, 8 }, 0);
+			spawn(doc, "mp_tdm_spawn_axis_start", { 760, -180 + 120.0 * k, 8 }, 180);
+			tdm(-540 - 60.0 * k, 520, 300);
+			tdm(-540 - 60.0 * k, -620, 60);
+			tdm(540 + 60.0 * k, 620, 240);
+			tdm(540 + 60.0 * k, -520, 120);
+		}
+		spawn(doc, "mp_global_intermission", { -900, -700, 220 }, 40);
+		airdrop_prefab(doc, { 900, 0, 0 });
+		solids.push_back({ { 871, -15, 0 }, { 929, 15, 30 } });
+		heli_prefab(doc, { 0, 0, 0 }, 700, 440);
+		// path nodes: a grid over the yard and through the buildings, left out where something stands
+		for (double x = -960; x <= 960; x += 96)
+		{
+			for (double y = -704; y <= 704; y += 96)
+			{
+				bool blocked = false;
+				for (const solid_box& s : solids)
+				{
+					blocked = blocked || (x > s.mins.x - 24 && x < s.maxs.x + 24 && y > s.mins.y - 24 && y < s.maxs.y + 24 && s.mins.z < 60 && s.maxs.z > 1);
+				}
+				if (!blocked)
+				{
+					doc.create_point_entity("node_pathnode", { x, y, yard_mound(x, y) + 16 });
+				}
+			}
+		}
+		// lights in the buildings, reflection probes, an effect and a sound
+		const std::vector<std::pair<std::string, std::string>> warm = { { "_color", "1 0.85 0.6" }, { "radius", "420" }, { "intensity", "1.6" } };
+		doc.create_point_entity("light", { -672, 0, 130 }, warm);
+		const std::vector<std::pair<std::string, std::string>> cold = { { "_color", "0.7 0.85 1" }, { "radius", "420" }, { "intensity", "1.6" } };
+		doc.create_point_entity("light", { 672, 0, 130 }, cold);
+		doc.create_point_entity("reflection_probe", { 0, 0, 160 });
+		doc.create_point_entity("reflection_probe", { -672, 0, 80 });
+		doc.create_point_entity("reflection_probe", { 672, 0, 80 });
+		const std::vector<std::pair<std::string, std::string>> fire = { { "fx", "fire/firelp_small_pm" }, { "angles", "270 0 0" } };
+		doc.create_point_entity("script_fx", { 260, -440, 50 }, fire);
+		const std::vector<std::pair<std::string, std::string>> smoke = { { "fx", "smoke/thin_black_smoke_m" }, { "angles", "270 0 0" }, { "delay", "4" } };
+		doc.create_point_entity("script_fx", { 260, -440, 60 }, smoke);
+		const std::vector<std::pair<std::string, std::string>> rattle = { { "soundalias", "emt_metal_rattle_pole" } };
+		doc.create_point_entity("script_sound", { 204, -40, 60 }, rattle);
 	}
 
 	// M6: n x n rooms of 512 x 512, every room joined to its neighbours by doorways, crates in each. All brushes are
