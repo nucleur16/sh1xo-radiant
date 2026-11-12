@@ -5,6 +5,8 @@
 
 #include "codol_edit/document.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <utility>
 #include <vector>
@@ -261,6 +263,57 @@ namespace codol::bsp::test
 		doc.create_box({ -320, 192, 0 }, { 320, 200, 160 }, "bsp_test_fence");
 		doc.deselect_all();
 		doc.create_terrain_patch({ 200, -120, 1 }, { 456, 136, 1 }, 3, 3, 2, "bsp_test_decal");
+		doc.deselect_all();
+	}
+
+	// Terrain: the sky room with a terrain mesh that is a ramp ( x -448 .. -192: z = ( x + 448 ) / 2, a slope of 26.6
+	// degrees ) and a plateau at z 128 ( x -192 .. 64 ), y -256 .. 256. The plateau ends in the air at x 64.
+	inline double terrain_height(const double x)
+	{
+		return std::clamp((x + 448.0) * 0.5, 0.0, 128.0);
+	}
+
+	inline void make_terrain(edit::document& doc, const materials& m = {})
+	{
+		make_box_room(doc, m, true);
+		const edit::object_id id = doc.create_terrain_patch({ -448, -256, 0 }, { 64, 256, 0 }, 9, 9, 2, m.floor);
+		doc.deselect_all();
+		if (const edit::patch* p = doc.find_patch(id))
+		{
+			const int count = p->width * p->height;
+			for (int v = 0; v < count; v++)
+			{
+				const edit::patch* now = doc.find_patch(id);
+				const double z = terrain_height(now->vertices[static_cast<std::size_t>(v)].xyz.x);
+				if (z > 0)
+				{
+					const int index[1] = { v };
+					doc.move_patch_vertices(id, index, { 0, 0, z });
+				}
+			}
+		}
+		doc.deselect_all();
+		// a ledge: a mesh folded into a wall ( x 200, z 0 .. 96, facing -x ) and a top ( x 200 .. 328, z 96 ). The edge
+		// where they meet is a border of the clip map's terrain.
+		const edit::object_id ledge = doc.create_terrain_patch({ 200, -256, 0 }, { 328, 256, 0 }, 3, 5, 2, m.crate);
+		doc.deselect_all();
+		if (const edit::patch* p = doc.find_patch(ledge))
+		{
+			const int count = p->width * p->height;
+			for (int v = 0; v < count; v++)
+			{
+				const double x = doc.find_patch(ledge)->vertices[static_cast<std::size_t>(v)].xyz.x;
+				const int index[1] = { v };
+				if (x > 300)
+				{
+					doc.move_patch_vertices(ledge, index, { 0, 0, 96 });
+				}
+				else if (x > 230)
+				{
+					doc.move_patch_vertices(ledge, index, { 200 - x, 0, 96 });
+				}
+			}
+		}
 		doc.deselect_all();
 	}
 

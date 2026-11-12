@@ -189,7 +189,8 @@ namespace codol::bsp
 		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed
 		std::vector<map_light> bake_lights;	// the light entities: baked into lightmaps and light grid
 		plane_pool planes;
-		box3 bounds;					// of all brushes of the world model
+		box3 bounds;					// of all brushes and patches of the world model
+		box3 patch_bounds;
 		int model_count = 1;
 		float sun_dir[3] = { 0.35f, 0.25f, 0.9f };		// towards the sun
 		float sun_color[3] = { 1.4f, 1.3f, 1.1f };

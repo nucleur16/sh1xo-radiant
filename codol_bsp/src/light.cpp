@@ -199,6 +199,31 @@ namespace codol::bsp
 						triangles.push_back(t);
 					}
 				}
+				// patches: their tessellation, stored like a model's triangles ( clockwise seen from the visible side )
+				for (const map_patch& patch : w.patches)
+				{
+					if (is_tool_material(patch.material))
+					{
+						continue;
+					}
+					for (std::size_t k = 0; k + 2 < patch.indices.size(); k += 3)
+					{
+						vec3 p[3];
+						for (int c = 0; c < 3; c++)
+						{
+							const edit::mesh_vertex& v = patch.vertices[patch.indices[k + static_cast<std::size_t>(c)]];
+							p[c] = vec3{ v.position[0], v.position[1], v.position[2] };
+						}
+						triangle t;
+						t.a = p[0];
+						t.e1 = p[2] - p[0];
+						t.e2 = p[1] - p[0];
+						t.box.add(p[0]);
+						t.box.add(p[1]);
+						t.box.add(p[2]);
+						triangles.push_back(t);
+					}
+				}
 				if (!triangles.empty())
 				{
 					build_triangles(0, static_cast<int>(triangles.size()));

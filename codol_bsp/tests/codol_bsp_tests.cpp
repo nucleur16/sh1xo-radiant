@@ -55,6 +55,7 @@ namespace
 		{ "content", [](edit::document& doc) { bsp::test::make_content(doc); } },
 		{ "big", [](edit::document& doc) { bsp::test::make_big(doc, 12); } },
 		{ "modder", [](edit::document& doc) { bsp::test::make_modder(doc); } },
+		{ "terrain", [](edit::document& doc) { bsp::test::make_terrain(doc); } },
 	};
 
 	bool write_maps(const fs::path& dir)

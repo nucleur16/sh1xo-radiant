@@ -202,8 +202,8 @@ namespace codol::bsp
 				if (doc.kind(child) == edit::object_kind::patch)
 				{
 					rep.patches++;
-					// a patch ( terrain mesh or curve ): its tessellation is drawn, and every triangle gets a thin
-					// brush under it to collide with
+					// a patch ( terrain mesh or curve ): its tessellation is drawn, and its triangles are the clip map's
+					// terrain ( clip_build.cpp )
 					edit::mesh mesh;
 					const edit::patch* source_patch = doc.find_patch(child);
 					if (!out.world || !source_patch || !doc.build_mesh(child, mesh, 4) || mesh.indices.size() < 3)
@@ -222,54 +222,9 @@ namespace codol::bsp
 					}
 					patch.vertices = mesh.vertices;
 					patch.indices = mesh.indices;
-					const int patch_index = static_cast<int>(w.patches.size());
-					for (std::size_t t = 0; t + 2 < mesh.indices.size(); t += 3)
+					for (const edit::mesh_vertex& v : mesh.vertices)
 					{
-						vec3 corner[3];
-						for (int k = 0; k < 3; k++)
-						{
-							const edit::mesh_vertex& v = mesh.vertices[mesh.indices[t + static_cast<std::size_t>(k)]];
-							corner[k] = { v.position[0], v.position[1], v.position[2] };
-						}
-						vec3 normal = cross(corner[1] - corner[0], corner[2] - corner[0]);
-						const double area = length(normal);
-						if (area < 1.0)
-						{
-							continue;
-						}
-						normal = normal * (1.0 / area);
-						const vec3 points[6] = { corner[0], corner[1], corner[2], corner[0] - normal * 8.0, corner[1] - normal * 8.0, corner[2] - normal * 8.0 };
-						std::vector<edit::plane> planes;
-						std::vector<std::vector<int>> hull;
-						if (!edit::convex_hull(points, planes, hull))
-						{
-							continue;
-						}
-						map_brush b;
-						b.entity = entity_index;
-						b.patch = patch_index;
-						b.detail = true;
-						b.corners.assign(points, points + 6);
-						for (const vec3& p : points)
-						{
-							b.box.add(p);
-						}
-						for (std::size_t f = 0; f < planes.size(); f++)
-						{
-							map_face face;
-							face.plane = planes[f];
-							face.material = patch.material;
-							face.texture.material = patch.material;
-							face.corner = hull[f];
-							for (const int v : hull[f])
-							{
-								face.winding.push_back(points[v]);
-							}
-							face.visible = false;		// the patch is drawn, not the brush
-							b.faces.push_back(std::move(face));
-						}
-						out.brushes.push_back(static_cast<int>(w.brushes.size()));
-						w.brushes.push_back(std::move(b));
+						w.patch_bounds.add(vec3{ v.position[0], v.position[1], v.position[2] });
 					}
 					w.patches.push_back(std::move(patch));
 					continue;
@@ -422,6 +377,7 @@ namespace codol::bsp
 		{
 			throw compile_error("the worldspawn has no brushes");
 		}
+		w.bounds.add(w.patch_bounds);
 	}
 
 	std::string build_entity_string(const world& w)

@@ -20,6 +20,10 @@
 //   leafs, models  leafBrushNode inside the node array, boxes with half sizes >= 0, radius >= 0
 //   BSP            children lead forward ( child node > node ) or to a leaf
 //   static models  the model pointer is a zone pointer ( never "follows" ), finite placement, half sizes >= 0
+//   terrain        a partition's triangles lie in the triangle array and name vertices of its vertex block; its
+//                  borders are a run of the border array ( a pointer into it, in the order of the partitions, and
+//                  every border belongs to one ); an AABB tree node has a material of the map, children behind it or
+//                  a partition; finite numbers
 //
 // check_server_collision reads the inflated zone ( XFileHeader + data ) the same way: straight from the stream, without
 // codol_zone's loaders - so it is also a second reading of what the compiler wrote.
@@ -63,6 +67,7 @@ namespace codol::mapc
 		std::uint32_t planes = 0, brushes = 0, brush_sides = 0, brush_edges = 0;
 		std::uint32_t leaf_brush_nodes = 0, leaf_brushes = 0, inline_leaf_brushes = 0;
 		std::uint32_t leafs = 0, sub_models = 0, static_models = 0, materials = 0;
+		std::uint32_t terrain_vertices = 0, terrain_triangles = 0, terrain_borders = 0, terrain_partitions = 0, terrain_tree_nodes = 0;
 		std::vector<server_leaf_brush_node> nodes;
 		std::vector<server_leaf> leaf_list, model_list;
 		std::vector<server_brush> brush_list;

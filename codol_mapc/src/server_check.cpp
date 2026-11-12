@@ -106,6 +106,7 @@ namespace codol::mapc
 		{
 			std::uint32_t name_reference = 0;
 			span planes, static_models, materials, sides, edges, nodes, leafs, leaf_brushes, leaf_brush_nodes, sub_models, brushes, brush_bounds, brush_contents, aabbs;
+			span verts, tris, walkable, borders, partitions;		// terrain
 		};
 
 		// array of { plane pointer, .. } records of 8 bytes; a plane may be stored behind the array
@@ -187,10 +188,15 @@ namespace codol::mapc
 				}
 			}
 			r.take(p, h[20], 4, "leafsurfaces");
+			l.verts = { p, h[22], h[23] };
 			r.take(p, h[22], 12, "verts");
+			l.tris = { p, h[24], h[25] };
 			r.take(p, h[24], 6, "triIndices");
+			l.walkable = { p, static_cast<std::uint32_t>((static_cast<std::uint64_t>(h[24]) * 3 + 31) / 32), h[26] };
 			r.take(p, (static_cast<std::uint64_t>(h[24]) * 3 + 31) / 32, 4, "triEdgeIsWalkable");
+			l.borders = { p, h[27], h[28] };
 			r.take(p, h[27], 28, "borders");
+			l.partitions = { p, h[29], h[30] };
 			{
 				const std::size_t start = p;
 				r.take(p, h[29], 12, "partitions");
@@ -542,6 +548,100 @@ namespace codol::mapc
 			if (edge != l.edges.count)
 			{
 				fail("clipMap.brushEdges has %u bytes, the brushes use %u: bytes no brush names are not allowed", l.edges.count, edge);
+			}
+
+			// ---- terrain ( codol_collision_terrain.c ): vertices, triangles, partitions with their borders, AABB trees
+			{
+				for (std::uint32_t i = 0; i < l.verts.count * 3; i++)
+				{
+					if (!std::isfinite(col.f32(l.verts.offset + 4 * static_cast<std::size_t>(i))))
+					{
+						fail("clipMap.verts[%u]: a number that is not finite", i / 3);
+					}
+				}
+				for (std::uint32_t i = 0; i < l.borders.count * 7; i++)
+				{
+					if (!std::isfinite(col.f32(l.borders.offset + 4 * static_cast<std::size_t>(i))))
+					{
+						fail("clipMap.borders[%u]: a number that is not finite", i / 7);
+					}
+				}
+				std::uint32_t border = 0, base = 0;
+				bool have_base = false;
+				for (std::uint32_t i = 0; i < l.partitions.count; i++)
+				{
+					const std::size_t at = l.partitions.offset + 12 * static_cast<std::size_t>(i);
+					const std::uint32_t tri_count = col.u16(at) & 0xFF, border_count = col.u16(at) >> 8, block = col.u16(at + 2) & 0xFF;
+					const std::uint32_t first = col.u32(at + 4), ref = col.u32(at + 8);
+					if (first > l.tris.count || tri_count > l.tris.count - first)
+					{
+						fail("clipMap.partitions[%u]: triangles %u + %u of %u", i, first, tri_count, l.tris.count);
+					}
+					if (border_count > l.borders.count - border)
+					{
+						fail("clipMap.partitions[%u]: %u borders, %u of %u are left", i, border_count, l.borders.count - border, l.borders.count);
+					}
+					// the engine reads a partition's triangles against vertex block `block` ( 1024 vertices each )
+					for (std::uint32_t t = 0; t < tri_count * 3; t++)
+					{
+						const std::uint32_t index = col.u16(l.tris.offset + 6 * static_cast<std::size_t>(first) + 2 * static_cast<std::size_t>(t));
+						if (block * 1024u + index >= l.verts.count)
+						{
+							fail("clipMap.partitions[%u]: triangle %u names vertex %u of block %u; there are %u vertices", i, first + t / 3, index, block, l.verts.count);
+						}
+					}
+					if (border_count)
+					{
+						// the borders of the partitions are runs of the border array, in order: a pointer into it, never data that follows
+						if (!ref || ref >= NONE - 1 || ref < static_cast<std::uint64_t>(border) * 28)
+						{
+							fail("clipMap.partitions[%u]: the border pointer %08X does not lead into the border array", i, ref);
+						}
+						if (!have_base)
+						{
+							base = ref - border * 28;
+							have_base = true;
+						}
+						if (static_cast<std::uint64_t>(base) + static_cast<std::uint64_t>(border) * 28 != ref)
+						{
+							fail("clipMap.partitions[%u]: its borders do not follow those of the partitions before it", i);
+						}
+						border += border_count;
+					}
+				}
+				if (border != l.borders.count)
+				{
+					fail("clipMap.borders has %u entries, the partitions use %u", l.borders.count, border);
+				}
+				for (std::uint32_t i = 0; i < l.aabbs.count; i++)
+				{
+					const std::size_t at = l.aabbs.offset + 32 * static_cast<std::size_t>(i);
+					for (std::size_t j = 0; j < 3; j++)
+					{
+						if (!std::isfinite(col.f32(at + 4 * j)) || !std::isfinite(col.f32(at + 16 + 4 * j)) || col.f32(at + 16 + 4 * j) < 0)
+						{
+							fail("clipMap.aabbTrees[%u]: box with a half size below zero or a number that is not finite", i);
+						}
+					}
+					const std::uint32_t material = col.u16(at + 12), children = col.u16(at + 14), index = col.u32(at + 28);
+					if (material >= l.materials.count)
+					{
+						fail("clipMap.aabbTrees[%u]: material %u of %u", i, material, l.materials.count);
+					}
+					if (children && (index <= i || index > l.aabbs.count || children > l.aabbs.count - index))
+					{
+						fail("clipMap.aabbTrees[%u]: children %u + %u do not lie behind the node ( %u nodes )", i, index, children, l.aabbs.count);
+					}
+					if (!children && index >= l.partitions.count)
+					{
+						fail("clipMap.aabbTrees[%u]: partition %u of %u", i, index, l.partitions.count);
+					}
+				}
+				info.terrain_vertices = l.verts.count;
+				info.terrain_triangles = l.tris.count;
+				info.terrain_borders = l.borders.count;
+				info.terrain_partitions = l.partitions.count;
+				info.terrain_tree_nodes = l.aabbs.count;
 			}
 
 			// ---- leafs and brush models ( codol_collision_leaves.c )
