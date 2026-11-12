@@ -1,6 +1,7 @@
 // codol_mapc_tests: acceptance tests of the map compiler against the 1.1.1.13 install.
 //
-//   codol_mapc_tests [--game <install>] [--out <folder>] [--maps a,b] [--only identity|entities|models|brushes|trees|donor|all]
+//   codol_mapc_tests [--game <install>] [--out <folder>] [--maps a,b] [--only identity|entities|models|brushes|trees|donor|assets|all]
+//                    [--assets <project zone.ff>]   ( a codol_assetc zone with animations, sounds, effects: the carry test )
 //
 // For every map ( mp_rust, mp_killhouse_sh ) and stage an edited map is made with codol_edit from the import of the
 // shipped fast file, compiled, and the result is checked by reading it back:
@@ -650,6 +651,117 @@ namespace
 		CHECK(c.report.diff.empty());
 		CHECK(c.zone_bytes == f.base_zone);
 		CHECK(c.changed.empty());
+	}
+
+	// ---- a project's assets and rawfiles go into an edited shipped map ( --assets, --rawfile, --append-rawfile ) ----
+
+	void test_assets(const fixture& f, const std::filesystem::path& project_zone)
+	{
+		std::printf("  assets of %s\n", project_zone.filename().string().c_str());
+		edit::document edited;
+		std::string error;
+		CHECK_MSG(edited.load_map_text(f.baseline_text, error), error);
+		std::error_code ec;
+		std::filesystem::create_directories(f.out / "assets", ec);
+		const std::string list_name = "animlists/" + f.map + ".animlist";
+		const std::string added_list = "=mapc_test_tree\ncodol_test_spin\n", added_file = "a file of the project\n";
+		std::ofstream(f.out / "assets" / "add.animlist", std::ios::binary) << added_list;
+		std::ofstream(f.out / "assets" / "note.txt", std::ios::binary) << added_file;
+		// what the base zone has under that name
+		std::vector<std::uint8_t> before;
+		{
+			zone::Zone base;
+			std::vector<std::uint8_t> copy = f.base_zone;
+			CHECK(base.load(std::move(copy), f.map));
+			zone::RawFileView view;
+			if (const zone::zaddr at = base.find_asset(c1::ASSET_TYPE_RAWFILE, list_name); at && zone::read_rawfile(base, at, view))
+			{
+				zone::rawfile_contents(view, before);
+			}
+			while (!before.empty() && before.back() == 0)
+			{
+				before.pop_back();
+			}
+		}
+		mapc::options opts;
+		opts.assets.push_back({ project_zone, {} });
+		opts.rawfiles_appended.emplace_back(list_name, f.out / "assets" / "add.animlist");
+		opts.rawfiles.emplace_back("mapc_test/note.txt", f.out / "assets" / "note.txt");
+		compiled c;
+		compile_case(f, "assets", edited, c, false, opts);
+		CHECK(c.ok && !c.report.identical && c.report.diff.empty());
+		CHECK(c.report.assets_carried > 0 && c.report.rawfiles_set == 2);
+		if (!c.ok)
+		{
+			return;
+		}
+		// every asset of the usual kinds the project zone has is a top level asset of the map zone now, the map's own
+		// assets are all still there, and the zone the loaders wrote loads again
+		zone::ZoneEditor donor, base;
+		CHECK(static_cast<bool>(donor.open(project_zone, f.key)));
+		{
+			std::vector<std::uint8_t> copy = f.base_zone;
+			CHECK(base.load(std::move(copy), f.map));
+		}
+		std::size_t wanted = 0, found = 0, kinds = 0;
+		std::set<std::int32_t> seen;
+		for (std::size_t k = 0; k < donor.asset_count(); k++)
+		{
+			const zone::EditorAsset a = donor.asset(k);
+			const std::string type = zone::asset_type_name(a.type);
+			if (type != "xanim" && type != "sndcurve" && type != "loaded_sound" && type != "sound" && type != "fx" && type != "xmodel" && type != "material")
+			{
+				continue;
+			}
+			wanted++;
+			found += c.editor.find_asset(a.type, a.name) != zone::ZoneEditor::npos;
+			kinds += seen.insert(a.type).second;
+		}
+		CHECK(wanted > 0 && found == wanted && kinds >= 3);
+		std::size_t kept = 0;
+		for (std::size_t k = 0; k < base.asset_count(); k++)
+		{
+			const zone::EditorAsset a = base.asset(k);
+			kept += c.editor.find_asset(a.type, a.name) != zone::ZoneEditor::npos;
+		}
+		CHECK(kept == base.asset_count() && c.editor.asset_count() > base.asset_count());
+		// the rawfiles: the list holds what it held and the project's lines behind it; the new file is there
+		const auto contents = [&](const std::string& name)
+		{
+			zone::RawFileView view;
+			std::vector<std::uint8_t> bytes;
+			if (const zone::zaddr at = c.editor.zone().find_asset(c1::ASSET_TYPE_RAWFILE, name); at && zone::read_rawfile(c.editor.zone(), at, view))
+			{
+				zone::rawfile_contents(view, bytes);
+			}
+			while (!bytes.empty() && bytes.back() == 0)
+			{
+				bytes.pop_back();
+			}
+			return std::string(bytes.begin(), bytes.end());
+		};
+		const std::string list = contents(list_name), old(before.begin(), before.end());
+		CHECK(list.size() >= old.size() + added_list.size() && list.compare(0, old.size(), old) == 0 && list.compare(list.size() - added_list.size(), added_list.size(), added_list) == 0);
+		CHECK(contents("mapc_test/note.txt") == added_file);
+		// collision and world are untouched: a dedicated server reads the same data
+		std::string why;
+		mapc::server_collision_info info;
+		CHECK(mapc::check_server_collision(c.zone_bytes, why, &info));
+		CHECK(info.brushes == f.server_base.brushes && info.leafs == f.server_base.leafs && info.static_models == f.server_base.static_models);
+		// a second run over the result carries nothing again
+		{
+			zone::ZoneEditor again;
+			std::vector<std::uint8_t> copy = c.zone_bytes;
+			CHECK(again.load(std::move(copy), f.map));
+			edit::document baseline;
+			CHECK_MSG(baseline.load_map_text(f.baseline_text, error), error);
+			mapc::options only_assets;
+			only_assets.assets.push_back({ project_zone, {} });
+			mapc::report second;
+			std::vector<std::uint8_t> bytes;
+			CHECK(mapc::compile_zone(again, baseline, edited, only_assets, f.key, bytes, second, error));
+			CHECK(second.assets_carried == 0 && bytes.size() == c.zone_bytes.size());
+		}
 	}
 
 	// ---- stage 1 ------------------------------------------------------------------------------------------------
@@ -1815,6 +1927,7 @@ int main(const int argc, char** argv)
 {
 	std::filesystem::path game = CODOL_MAPC_GAME_DIR, out = "mapc_test";
 	std::string maps = "mp_rust,mp_killhouse_sh", only = "all";
+	std::filesystem::path project_zone;		// --assets: a codol_assetc project zone ( codol_assets' test zone ) for the carry test
 	for (int i = 1; i + 1 < argc; i += 2)
 	{
 		const std::string arg = argv[i];
@@ -1822,6 +1935,7 @@ int main(const int argc, char** argv)
 		else if (arg == "--out") { out = argv[i + 1]; }
 		else if (arg == "--maps") { maps = argv[i + 1]; }
 		else if (arg == "--only") { only = argv[i + 1]; }
+		else if (arg == "--assets") { project_zone = argv[i + 1]; }
 	}
 	std::error_code ec;
 	if (!std::filesystem::exists(game / "C1.exe", ec))
@@ -1848,6 +1962,7 @@ int main(const int argc, char** argv)
 			continue;
 		}
 		if (only == "all" || only == "identity") { test_identity(f); }
+		if ((only == "all" || only == "assets") && !project_zone.empty()) { test_assets(f, project_zone); }
 		if (only == "all" || only == "entities") { test_entities(f); }
 		if (only == "all" || only == "models") { test_models(f); }
 		if (only == "all" || only == "brushes") { test_brushes(f); }

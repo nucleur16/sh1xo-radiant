@@ -45,7 +45,7 @@ namespace codol::bsp
 				}
 				count++;
 			}
-			return format("codol_bsp catalog 5 %zu %016llx", count, static_cast<unsigned long long>(hash));
+			return format("codol_bsp catalog 6 %zu %016llx", count, static_cast<unsigned long long>(hash));
 		}
 	}
 
@@ -108,6 +108,10 @@ namespace codol::bsp
 			{
 				image_zone[f[1]] = f[2];
 			}
+			else if (f.size() >= 3 && f[0] == "l")
+			{
+				lightdef_zone[f[1]] = f[2];
+			}
 			else if (f.size() >= 4 && f[0] == "c")
 			{
 				clip_materials[f[1]] = { static_cast<std::int32_t>(std::stoul(f[2], nullptr, 16)), static_cast<std::int32_t>(std::stoul(f[3], nullptr, 16)) };
@@ -141,6 +145,10 @@ namespace codol::bsp
 		for (const auto& [name, z] : image_zone)
 		{
 			out << "i\t" << name << "\t" << z << "\n";
+		}
+		for (const auto& [name, z] : lightdef_zone)
+		{
+			out << "l\t" << name << "\t" << z << "\n";
 		}
 		for (const auto& [name, info] : clip_materials)
 		{
@@ -210,6 +218,10 @@ namespace codol::bsp
 					{
 						image_zone.emplace(name, relative);
 					}
+				}
+				else if (r.type == c1::ASSET_TYPE_LIGHT_DEF)
+				{
+					lightdef_zone.emplace(name, relative);
 				}
 				else if (r.type == c1::ASSET_TYPE_CLIPMAP_MP || r.type == c1::ASSET_TYPE_CLIPMAP_SP)
 				{

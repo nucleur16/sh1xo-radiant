@@ -6,6 +6,10 @@
 //   codol_bsp_probe check <zone.ff> <C1.exe>                             the offline validators of codol_bsp on any map zone
 //   codol_bsp_probe portals|cells|terrain|smodels <zone.ff> <C1.exe>     how a map's portals, cells, terrain, static models are stored
 //   codol_bsp_probe sun <zone.ff> <C1.exe>                               what the sun and its shadows hang on ( header fields, lights, ranges )
+//   codol_bsp_probe lights <zone.ff> <C1.exe> [out dir]                  the primary lights with what hangs on each, the light definitions and their strips
+//   codol_bsp_probe lightcuts <zone.ff> <C1.exe> [edges]                 how surfaces are cut by the primary lights: seams between surfaces of one material and plane
+//   codol_bsp_probe lightat <zone.ff> <C1.exe> x y z                     what the lit shader reads at a point of the world
+//   codol_bsp_probe ents <zone.ff> <C1.exe> [text]                       the entities whose text holds text
 //   codol_bsp_probe patchworld <zone.ff> <C1.exe> <out.ff> <size> <offset>=<hex> ..   a copy with GfxWorld header bytes changed ( experiments )
 
 #include "codol_bsp/bsp.hpp"
@@ -685,6 +689,369 @@ int main(int argc, char** argv)
 				std::printf(" %d: %d,", k, n);
 			}
 			std::printf("\n");
+		}
+		return 0;
+	}
+	if (mode == "lightat" && argc >= 7)
+	{
+		// codol_bsp_probe lightat <zone.ff> <C1.exe> x y z: the triangles of the world the point lies on, with what the
+		// lit shader reads there - the surface's primary light, the two layers of the secondary lightmap ( and the light
+		// they give on a flat normal ), the primary lightmap's texel
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		const double p[3] = { std::atof(argv[4]), std::atof(argv[5]), std::atof(argv[6]) };
+		const std::vector<c1::GfxWorldVertex> verts = world.vertices();
+		const std::vector<std::uint16_t> all_indices = world.indices();
+		const auto pointers = z.get_array<zone::zaddr>(world.raw.draw.lightmaps, 2u * static_cast<std::size_t>(world.raw.draw.lightmapCount));
+		for (std::size_t si = 0; si < world.surfaces.size(); si++)
+		{
+			const c1::GfxSurface& surf = world.surfaces[si].raw;
+			for (std::uint32_t t = 0; t < surf.triCount; t++)
+			{
+				const c1::GfxWorldVertex* v[3];
+				for (std::uint32_t k = 0; k < 3; k++)
+				{
+					v[k] = &verts[surf.firstVertex + all_indices[surf.baseIndex + 3 * t + k]];
+				}
+				double e1[3], e2[3], d[3], n[3];
+				for (int k = 0; k < 3; k++)
+				{
+					e1[k] = v[1]->xyz[k] - v[0]->xyz[k];
+					e2[k] = v[2]->xyz[k] - v[0]->xyz[k];
+					d[k] = p[k] - v[0]->xyz[k];
+				}
+				n[0] = e1[1] * e2[2] - e1[2] * e2[1];
+				n[1] = e1[2] * e2[0] - e1[0] * e2[2];
+				n[2] = e1[0] * e2[1] - e1[1] * e2[0];
+				const double nn = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+				if (nn < 1e-9 || std::fabs(d[0] * n[0] + d[1] * n[1] + d[2] * n[2]) / std::sqrt(nn) > 0.5)
+				{
+					continue;
+				}
+				const double d11 = e1[0] * e1[0] + e1[1] * e1[1] + e1[2] * e1[2], d12 = e1[0] * e2[0] + e1[1] * e2[1] + e1[2] * e2[2],
+					d22 = e2[0] * e2[0] + e2[1] * e2[1] + e2[2] * e2[2], dp1 = d[0] * e1[0] + d[1] * e1[1] + d[2] * e1[2], dp2 = d[0] * e2[0] + d[1] * e2[1] + d[2] * e2[2];
+				const double det = d11 * d22 - d12 * d12;
+				const double b = (d22 * dp1 - d12 * dp2) / det, c = (d11 * dp2 - d12 * dp1) / det;
+				if (b < 0 || c < 0 || b + c > 1)
+				{
+					continue;
+				}
+				const double u = (1 - b - c) * v[0]->lmapCoord[0] + b * v[1]->lmapCoord[0] + c * v[2]->lmapCoord[0];
+				const double w = (1 - b - c) * v[0]->lmapCoord[1] + b * v[1]->lmapCoord[1] + c * v[2]->lmapCoord[1];
+				std::printf("surface %zu ( %s ) primary light %u lightmap %u at ( %.4f %.4f )", si, std::string(world.surfaces[si].materialName).c_str(), surf.primaryLightIndex, surf.lightmapIndex, u, w);
+				zone::ImageView primary, secondary;
+				if (surf.lightmapIndex * 2u + 1 < pointers.size() && zone::read_image(z, pointers[surf.lightmapIndex * 2u], primary)
+					&& zone::read_image(z, pointers[surf.lightmapIndex * 2u + 1], secondary) && !secondary.pixels.empty() && !primary.pixels.empty())
+				{
+					const int sw = secondary.raw.width, sh = secondary.raw.height / 2, pw = primary.raw.width, ph = primary.raw.height;
+					const int x = std::clamp(static_cast<int>(u * sw), 0, sw - 1), y = std::clamp(static_cast<int>(w * sh), 0, sh - 1);
+					const std::uint8_t* up = secondary.pixels.data() + (static_cast<std::size_t>(y) * sw + x) * 4;
+					const std::uint8_t* low = up + static_cast<std::size_t>(sw) * sh * 4;
+					const double dx = up[3] / 255.0 * 4.08 - 2.08, dy = low[3] / 255.0 * 4.06451607 - 2.06451607, scale = 1.0 / std::sqrt(dx * dx + dy * dy + 1.0);
+					std::printf(": upper r g b a %u %u %u %u, lower %u %u %u %u; light on a flat normal %.3f %.3f %.3f; primary %u", up[2], up[1], up[0], up[3], low[2], low[1], low[0], low[3],
+						std::pow(up[2] / 255.0 + low[2] / 255.0 * scale, 2.0), std::pow(up[1] / 255.0 + low[1] / 255.0 * scale, 2.0), std::pow(up[0] / 255.0 + low[0] / 255.0 * scale, 2.0),
+						primary.pixels[static_cast<std::size_t>(std::clamp(static_cast<int>(w * ph), 0, ph - 1)) * pw + std::clamp(static_cast<int>(u * pw), 0, pw - 1)]);
+				}
+				std::printf("\n");
+			}
+		}
+		return 0;
+	}
+	if (mode == "ents")
+	{
+		// codol_bsp_probe ents <zone.ff> <C1.exe> [text]: the entities of a map whose text holds `text` ( all without )
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::MapEntsView ents;
+		if (!zone::read_map_ents(z, zone::find_map_ents(z), ents))
+		{
+			std::printf("no map entities\n");
+			return 1;
+		}
+		const std::string text(ents.entityString);
+		const std::string want = argc > 4 ? argv[4] : "";
+		std::size_t total = 0, shown = 0;
+		for (std::size_t at = text.find('{'); at != std::string::npos; at = text.find('{', at))
+		{
+			const std::size_t end = text.find('}', at);
+			if (end == std::string::npos)
+			{
+				break;
+			}
+			const std::string entity = text.substr(at, end - at + 1);
+			total++;
+			if (want.empty() || entity.find(want) != std::string::npos)
+			{
+				shown++;
+				std::printf("%s\n", entity.c_str());
+			}
+			at = end + 1;
+		}
+		std::printf("%zu of %zu entities\n", shown, total);
+		return 0;
+	}
+	if (mode == "lightcuts")
+	{
+		// codol_bsp_probe lightcuts <zone.ff> <C1.exe> [edges to print]: how the surfaces of a map are cut by its primary
+		// light entities. Per light entity: how far the triangles of the surfaces that name it lie from the light ( in
+		// radii, and against the cone ) - and the seams: edges two coplanar triangles of one material share whose
+		// surfaces name different primary lights.
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		struct com_world
+		{
+			std::uint32_t name;
+			std::int32_t isInUse;
+			std::uint32_t count, lights;
+		};
+		struct com_light
+		{
+			std::uint8_t type, canUseShadowMap, exponent, unused;
+			float color[3], dir[3], origin[3], radius, cosHalfFovOuter, cosHalfFovInner, cosHalfFovExpanded, rotationLimit, translationLimit;
+			std::uint32_t defName;
+		};
+		std::vector<com_light> lights;
+		if (const zone::zaddr at = zone::first_asset(z, c1::ASSET_TYPE_COMWORLD))
+		{
+			const com_world com = z.get<com_world>(at);
+			lights = z.get_array<com_light>(com.lights, com.count);
+		}
+		const std::vector<c1::GfxWorldVertex> verts = world.vertices();
+		const std::vector<std::uint16_t> all_indices = world.indices();
+		struct v3
+		{
+			double x, y, z;
+		};
+		const auto sub = [](const v3& a, const v3& b) { return v3{ a.x - b.x, a.y - b.y, a.z - b.z }; };
+		const auto dot = [](const v3& a, const v3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; };
+		const auto cross = [](const v3& a, const v3& b) { return v3{ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; };
+		// the point of a triangle nearest to p ( Ericson )
+		const auto nearest = [&](const v3& p, const v3& a, const v3& b, const v3& c)
+		{
+			const v3 ab = sub(b, a), ac = sub(c, a), ap = sub(p, a);
+			const double d1 = dot(ab, ap), d2 = dot(ac, ap);
+			if (d1 <= 0 && d2 <= 0) return a;
+			const v3 bp = sub(p, b);
+			const double d3 = dot(ab, bp), d4 = dot(ac, bp);
+			if (d3 >= 0 && d4 <= d3) return b;
+			const double vc = d1 * d4 - d3 * d2;
+			if (vc <= 0 && d1 >= 0 && d3 <= 0)
+			{
+				const double t = d1 / (d1 - d3);
+				return v3{ a.x + ab.x * t, a.y + ab.y * t, a.z + ab.z * t };
+			}
+			const v3 cp = sub(p, c);
+			const double d5 = dot(ab, cp), d6 = dot(ac, cp);
+			if (d6 >= 0 && d5 <= d6) return c;
+			const double vb = d5 * d2 - d1 * d6;
+			if (vb <= 0 && d2 >= 0 && d6 <= 0)
+			{
+				const double t = d2 / (d2 - d6);
+				return v3{ a.x + ac.x * t, a.y + ac.y * t, a.z + ac.z * t };
+			}
+			const double va = d3 * d6 - d5 * d4;
+			if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0)
+			{
+				const double t = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+				return v3{ b.x + (c.x - b.x) * t, b.y + (c.y - b.y) * t, b.z + (c.z - b.z) * t };
+			}
+			const double den = 1.0 / (va + vb + vc), v = vb * den, w = vc * den;
+			return v3{ a.x + ab.x * v + ac.x * w, a.y + ab.y * v + ac.y * w, a.z + ab.z * v + ac.z * w };
+		};
+		struct tri
+		{
+			v3 p[3];
+			std::uint32_t surface;
+			int light;
+			v3 n;
+			double w, area;
+		};
+		std::vector<tri> tris;
+		for (std::size_t si = 0; si < world.surfaces.size(); si++)
+		{
+			const c1::GfxSurface& surf = world.surfaces[si].raw;
+			for (std::uint32_t t = 0; t < surf.triCount; t++)
+			{
+				tri out{};
+				bool ok = true;
+				for (int k = 0; k < 3; k++)
+				{
+					const std::size_t i = surf.baseIndex + 3u * t + static_cast<std::uint32_t>(k);
+					const std::uint32_t v = i < all_indices.size() ? surf.firstVertex + all_indices[i] : 0xFFFFFFFFu;
+					if (v >= verts.size())
+					{
+						ok = false;
+						break;
+					}
+					out.p[k] = v3{ verts[v].xyz[0], verts[v].xyz[1], verts[v].xyz[2] };
+				}
+				if (!ok)
+				{
+					continue;
+				}
+				out.surface = static_cast<std::uint32_t>(si);
+				out.light = surf.primaryLightIndex;
+				v3 n = cross(sub(out.p[1], out.p[0]), sub(out.p[2], out.p[0]));
+				const double len = std::sqrt(dot(n, n));
+				if (len < 1e-6)
+				{
+					continue;
+				}
+				out.area = len * 0.5;
+				out.n = v3{ n.x / len, n.y / len, n.z / len };
+				out.w = dot(out.n, out.p[0]);
+				tris.push_back(out);
+			}
+		}
+		std::printf("%zu surfaces, %zu triangles, %zu primary lights\n", world.surfaces.size(), tris.size(), lights.size());
+		// per light entity: where its triangles lie
+		for (std::size_t l = 2; l < lights.size(); l++)
+		{
+			const com_light& c = lights[l];
+			const v3 o{ c.origin[0], c.origin[1], c.origin[2] };
+			const v3 beam{ -c.dir[0], -c.dir[1], -c.dir[2] };
+			std::size_t n = 0, beyond = 0, off_cone = 0, facing_away = 0;
+			double worst = 0, area = 0, far_area = 0;
+			std::size_t histogram[6] = {};
+			for (const tri& t : tris)
+			{
+				if (t.light != static_cast<int>(l))
+				{
+					continue;
+				}
+				n++;
+				area += t.area;
+				const v3 q = nearest(o, t.p[0], t.p[1], t.p[2]);
+				const double d = std::sqrt(dot(sub(q, o), sub(q, o))) / std::max(1.0f, c.radius);
+				worst = std::max(worst, d);
+				histogram[d < 0.25 ? 0 : d < 0.5 ? 1 : d < 0.75 ? 2 : d < 1.0 ? 3 : d < 1.25 ? 4 : 5]++;
+				if (d > 1.0)
+				{
+					beyond++;
+					far_area += t.area;
+				}
+				// against the cone: the corner with the smallest angle to the beam
+				double best = -1;
+				for (int k = 0; k < 3; k++)
+				{
+					const v3 to = sub(t.p[k], o);
+					const double len = std::sqrt(dot(to, to));
+					best = std::max(best, len > 1e-3 ? dot(to, beam) / len : 1.0);
+				}
+				off_cone += c.type == 2 && best < c.cosHalfFovOuter - 0.02;
+				facing_away += dot(t.n, o) - t.w < -0.5 && dot(t.n, o) - t.w > -1e9 ? 0 : 0;
+			}
+			std::printf("light %zu ( type %u radius %.0f cos outer %.3f ): %zu triangles, area %.0f; nearest point in radii: <0.25 %zu, <0.5 %zu, <0.75 %zu, <1 %zu, <1.25 %zu, more %zu ( worst %.2f, area beyond the radius %.0f ); all corners outside the cone: %zu\n",
+				l, c.type, c.radius, c.cosHalfFovOuter, n, area, histogram[0], histogram[1], histogram[2], histogram[3], histogram[4], histogram[5], worst, far_area, off_cone);
+		}
+		// seams: an edge shared by two coplanar triangles of one material whose surfaces name different lights
+		struct edge_key
+		{
+			long long a[3], b[3];
+			bool operator<(const edge_key& o) const { return std::memcmp(this, &o, sizeof(*this)) < 0; }
+		};
+		const auto quant = [](const v3& p, long long out[3])
+		{
+			out[0] = std::llround(p.x * 8);
+			out[1] = std::llround(p.y * 8);
+			out[2] = std::llround(p.z * 8);
+		};
+		std::map<edge_key, std::vector<std::uint32_t>> edges;
+		for (std::size_t ti = 0; ti < tris.size(); ti++)
+		{
+			for (int k = 0; k < 3; k++)
+			{
+				edge_key e;
+				quant(tris[ti].p[k], e.a);
+				quant(tris[ti].p[(k + 1) % 3], e.b);
+				if (std::memcmp(e.a, e.b, sizeof(e.a)) > 0)
+				{
+					std::swap(e.a, e.b);
+				}
+				edges[e].push_back(static_cast<std::uint32_t>(ti));
+			}
+		}
+		std::map<std::pair<int, int>, int> seam_pairs;
+		std::map<std::pair<int, int>, int> same_surface_pairs;
+		int printed = 0;
+		const int to_print = argc > 4 ? std::atoi(argv[4]) : 30;
+		std::size_t shared = 0, coplanar_same_material = 0, different_surface = 0, different_light = 0;
+		for (const auto& [e, list] : edges)
+		{
+			for (std::size_t i = 0; i < list.size(); i++)
+			{
+				for (std::size_t j = i + 1; j < list.size(); j++)
+				{
+					const tri& a = tris[list[i]];
+					const tri& b = tris[list[j]];
+					shared++;
+					if (dot(a.n, b.n) < 0.999 || std::fabs(a.w - b.w) > 0.5 ||
+						world.surfaces[a.surface].materialName != world.surfaces[b.surface].materialName)
+					{
+						continue;
+					}
+					coplanar_same_material++;
+					if (a.surface == b.surface)
+					{
+						continue;
+					}
+					different_surface++;
+					if (a.light == b.light)
+					{
+						same_surface_pairs[{ a.light, a.light }]++;
+						continue;
+					}
+					different_light++;
+					seam_pairs[{ std::min(a.light, b.light), std::max(a.light, b.light) }]++;
+					if (printed < to_print && (a.light >= 2 || b.light >= 2))
+					{
+						printed++;
+						const v3 p{ static_cast<double>(e.a[0]) / 8, static_cast<double>(e.a[1]) / 8, static_cast<double>(e.a[2]) / 8 };
+						const v3 q{ static_cast<double>(e.b[0]) / 8, static_cast<double>(e.b[1]) / 8, static_cast<double>(e.b[2]) / 8 };
+						std::printf("  seam ( %.1f %.1f %.1f ) - ( %.1f %.1f %.1f ) normal ( %.2f %.2f %.2f ) %s: surfaces %u ( light %d ) / %u ( light %d )", p.x, p.y, p.z, q.x, q.y, q.z, a.n.x,
+							a.n.y, a.n.z, std::string(world.surfaces[a.surface].materialName).c_str(), a.surface, a.light, b.surface, b.light);
+						for (const int l : { a.light, b.light })
+						{
+							if (l >= 2 && static_cast<std::size_t>(l) < lights.size())
+							{
+								const com_light& c = lights[static_cast<std::size_t>(l)];
+								const v3 o{ c.origin[0], c.origin[1], c.origin[2] };
+								const v3 dp = sub(p, o), dq = sub(q, o);
+								std::printf("; light %d: ends at %.2f / %.2f radii", l, std::sqrt(dot(dp, dp)) / c.radius, std::sqrt(dot(dq, dq)) / c.radius);
+							}
+						}
+						std::printf("\n");
+					}
+				}
+			}
+		}
+		std::printf("%zu shared edges; %zu between coplanar triangles of one material; %zu of those between two surfaces; %zu of those between surfaces with different primary lights\n",
+			shared, coplanar_same_material, different_surface, different_light);
+		for (const auto& [pair, n] : seam_pairs)
+		{
+			std::printf("  lights %d / %d: %d seam edges\n", pair.first, pair.second, n);
 		}
 		return 0;
 	}

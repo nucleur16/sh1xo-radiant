@@ -2,6 +2,7 @@
 //
 //   codol_mapc --base <map.ff> --exe <C1.exe> --map <edited.map> [--baseline <map.codol_base.map>] --out <new.ff>
 //              [--report <file>] [--zone-out <file>] [--donor <zone.ff>]... [--level 0..9]
+//              [--assets <project zone.ff>[,<type> ..]]... [--rawfile <name>=<file>]... [--append-rawfile <name>=<file>]...
 //              [--no-entities] [--no-models] [--no-brushes] [--no-surfaces]
 //   codol_mapc --check <map.ff> --exe <C1.exe>
 //
@@ -35,6 +36,33 @@ int main(const int argc, char** argv)
 		else if (arg == "--report") { report_file = value(); }
 		else if (arg == "--check") { check_file = value(); }
 		else if (arg == "--donor") { opts.donors.emplace_back(value()); }
+		else if (arg == "--assets")
+		{
+			// <zone.ff>[,<type> ..]
+			const std::string text = value();
+			codol::mapc::options::asset_source source;
+			std::size_t at = text.find(',');
+			source.zone = text.substr(0, at);
+			while (at != std::string::npos)
+			{
+				const std::size_t next = text.find(',', at + 1);
+				source.types.push_back(text.substr(at + 1, next == std::string::npos ? std::string::npos : next - at - 1));
+				at = next;
+			}
+			opts.assets.push_back(std::move(source));
+		}
+		else if (arg == "--rawfile" || arg == "--append-rawfile")
+		{
+			// <name>=<file>
+			const std::string text = value();
+			const std::size_t at = text.find('=');
+			if (at == std::string::npos)
+			{
+				std::fprintf(stderr, "%s wants <name>=<file>\n", arg.c_str());
+				return 1;
+			}
+			(arg == "--rawfile" ? opts.rawfiles : opts.rawfiles_appended).emplace_back(text.substr(0, at), text.substr(at + 1));
+		}
 		else if (arg == "--level") { opts.level = std::atoi(value().c_str()); }
 		else if (arg == "--no-entities") { opts.entities = false; }
 		else if (arg == "--no-models") { opts.models = false; }
@@ -95,6 +123,7 @@ int main(const int argc, char** argv)
 		std::fprintf(stderr,
 			"codol_mapc --base <map.ff> --exe <C1.exe> --map <edited.map> [--baseline <map.codol_base.map>] --out <new.ff>\n"
 			"           [--report <file>] [--zone-out <file>] [--donor <zone.ff>]... [--level 0..9]\n"
+			"           [--assets <project zone.ff>[,<type> ..]]... [--rawfile <name>=<file>]... [--append-rawfile <name>=<file>]...\n"
 			"           [--no-entities] [--no-models] [--no-brushes] [--no-surfaces]\n"
 			"codol_mapc --check <map.ff> --exe <C1.exe>\n");
 		return 2;

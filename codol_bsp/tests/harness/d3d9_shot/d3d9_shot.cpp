@@ -5,6 +5,10 @@
 //
 //   <exe dir>\codol_shot.req   one line: the path of the .bmp to write. Looked at before every Present ( at most 20
 //                              times a second ); the picture is written to <path>.tmp, renamed, the request deleted.
+//   <exe dir>\codol_stats.req  one line: the path of a text file. Written with what the last frame drew into: per pair
+//                              of render target and depth buffer ( size, format ) the number of draw calls and of
+//                              primitives - which shows whether a frame has shadow map passes ( a depth texture of the
+//                              shadow map's size ) and how much is drawn into them.
 //
 // It changes nothing the game draws. Interception: the IDirect3D9 and the device the game gets have a private copy of
 // their vtable in which CreateDevice / Present point here ( nothing in d3d9.dll or the game is patched ).
@@ -164,11 +168,120 @@ namespace
 	chain_present_fn g_chain_present;
 	volatile LONG g_presents, g_chain_presents, g_end_scenes, g_tests, g_last_test, g_in_present;
 
+	// ---- what a frame draws into ( observation only: every call is passed on unchanged )
+	struct target
+	{
+		UINT w, h;
+		D3DFORMAT format;
+		DWORD usage;
+	};
+	struct pass
+	{
+		target color, depth;
+		LONG draws, primitives;
+	};
+	const int MAX_PASSES = 48;
+	pass g_frame[MAX_PASSES], g_last_frame[MAX_PASSES];
+	int g_frame_passes, g_last_frame_passes;
+	target g_color, g_depth;
+	typedef HRESULT(WINAPI* set_target_fn)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*);
+	typedef HRESULT(WINAPI* set_depth_fn)(IDirect3DDevice9*, IDirect3DSurface9*);
+	typedef HRESULT(WINAPI* draw_fn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, UINT, UINT);
+	typedef HRESULT(WINAPI* draw_indexed_fn)(IDirect3DDevice9*, D3DPRIMITIVETYPE, INT, UINT, UINT, UINT, UINT);
+	set_target_fn g_set_target;
+	set_depth_fn g_set_depth;
+	draw_fn g_draw;
+	draw_indexed_fn g_draw_indexed;
+
+	target describe(IDirect3DSurface9* surface)
+	{
+		target t{};
+		D3DSURFACE_DESC desc{};
+		if (surface && SUCCEEDED(surface->GetDesc(&desc)))
+		{
+			t.w = desc.Width;
+			t.h = desc.Height;
+			t.format = desc.Format;
+			t.usage = desc.Usage;
+		}
+		return t;
+	}
+
+	void count_draw(const UINT primitives)
+	{
+		for (int k = 0; k < g_frame_passes; k++)
+		{
+			if (!std::memcmp(&g_frame[k].color, &g_color, sizeof(target)) && !std::memcmp(&g_frame[k].depth, &g_depth, sizeof(target)))
+			{
+				g_frame[k].draws++;
+				g_frame[k].primitives += static_cast<LONG>(primitives);
+				return;
+			}
+		}
+		if (g_frame_passes < MAX_PASSES)
+		{
+			pass& p = g_frame[g_frame_passes++];
+			p.color = g_color;
+			p.depth = g_depth;
+			p.draws = 1;
+			p.primitives = static_cast<LONG>(primitives);
+		}
+	}
+
+	HRESULT WINAPI hook_set_target(IDirect3DDevice9* dev, DWORD index, IDirect3DSurface9* surface)
+	{
+		if (index == 0)
+		{
+			g_color = describe(surface);
+		}
+		return g_set_target(dev, index, surface);
+	}
+
+	HRESULT WINAPI hook_set_depth(IDirect3DDevice9* dev, IDirect3DSurface9* surface)
+	{
+		g_depth = describe(surface);
+		return g_set_depth(dev, surface);
+	}
+
+	HRESULT WINAPI hook_draw(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, UINT start, UINT count)
+	{
+		count_draw(count);
+		return g_draw(dev, type, start, count);
+	}
+
+	HRESULT WINAPI hook_draw_indexed(IDirect3DDevice9* dev, D3DPRIMITIVETYPE type, INT base, UINT min_index, UINT vertices, UINT start, UINT count)
+	{
+		count_draw(count);
+		return g_draw_indexed(dev, type, base, min_index, vertices, start, count);
+	}
+
+	void end_frame()
+	{
+		std::memcpy(g_last_frame, g_frame, sizeof(g_frame));
+		g_last_frame_passes = g_frame_passes;
+		g_frame_passes = 0;
+	}
+
+	void write_stats(const char* path)
+	{
+		if (FILE* f = std::fopen(path, "wb"))
+		{
+			for (int k = 0; k < g_last_frame_passes; k++)
+			{
+				const pass& p = g_last_frame[k];
+				std::fprintf(f, "color %ux%u format %d usage 0x%lX, depth %ux%u format %d usage 0x%lX: %ld draws, %ld primitives\n", p.color.w, p.color.h, static_cast<int>(p.color.format),
+					p.color.usage, p.depth.w, p.depth.h, static_cast<int>(p.depth.format), p.depth.usage, p.draws, p.primitives);
+			}
+			std::fclose(f);
+		}
+	}
+
 	// before a frame is presented: the log line every 5 seconds, a pending request
 	void before_present(IDirect3DDevice9* dev)
 	{
 		static DWORD last, last_log;
 		const DWORD now = GetTickCount();
+		end_frame();
 		if (now - last_log >= 5000)
 		{
 			last_log = now;
@@ -180,6 +293,35 @@ namespace
 			return;
 		}
 		last = now;
+		{
+			// the statistics of the frame that was just drawn
+			char request[MAX_PATH];
+			std::strcpy(request, g_request);
+			std::strcpy(request + std::strlen(request) - 8, "stats.req");
+			if (GetFileAttributesA(request) != INVALID_FILE_ATTRIBUTES)
+			{
+				char to[MAX_PATH] = {};
+				if (FILE* f = std::fopen(request, "rb"))
+				{
+					const size_t got = std::fread(to, 1, sizeof(to) - 1, f);
+					std::fclose(f);
+					to[got] = 0;
+					for (char* c = to; *c; c++)
+					{
+						if (*c == '\r' || *c == '\n')
+						{
+							*c = 0;
+							break;
+						}
+					}
+					DeleteFileA(request);
+					if (to[0])
+					{
+						write_stats(to);
+					}
+				}
+			}
+		}
 		if (GetFileAttributesA(g_request) == INVALID_FILE_ATTRIBUTES)
 		{
 			return;
@@ -259,6 +401,26 @@ namespace
 			vt[17] = static_cast<void*>(hook_present);
 			g_end_scene = static_cast<device_fn>(vt[42]);
 			vt[42] = static_cast<void*>(hook_end_scene);
+			g_set_target = static_cast<set_target_fn>(vt[37]);
+			vt[37] = static_cast<void*>(hook_set_target);
+			g_set_depth = static_cast<set_depth_fn>(vt[39]);
+			vt[39] = static_cast<void*>(hook_set_depth);
+			g_draw = static_cast<draw_fn>(vt[81]);
+			vt[81] = static_cast<void*>(hook_draw);
+			g_draw_indexed = static_cast<draw_indexed_fn>(vt[82]);
+			vt[82] = static_cast<void*>(hook_draw_indexed);
+			IDirect3DSurface9* now = nullptr;
+			if (SUCCEEDED((*out)->GetRenderTarget(0, &now)) && now)
+			{
+				g_color = describe(now);
+				now->Release();
+			}
+			now = nullptr;
+			if (SUCCEEDED((*out)->GetDepthStencilSurface(&now)) && now)
+			{
+				g_depth = describe(now);
+				now->Release();
+			}
 			IDirect3DSwapChain9* chain = nullptr;
 			if (SUCCEEDED((*out)->GetSwapChain(0, &chain)) && chain)
 			{

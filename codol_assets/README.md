@@ -148,7 +148,13 @@ Two ways the game gets pixels, both written:
   which is 1 in map zones and 0 in the common zones ( the compiler writes 0 ), and the `.iwi` has the same size and
   level table. `--iwd` packs the files into a plain zip: the game's file system only decrypts archives whose name
   contains `iw_image`, `iw_model`, `iw_config`, `iw_sound`, `iw_ui_image` or `iw_adlc` ( `main\codol_iwd.py` of the
-  install ), so the archive has to be named differently, e.g. `zz_mod_images.iwd`. No encrypted archive is written.
+  install ), so a plain archive has to be named differently, e.g. `zz_mod_images.iwd`. An `--iwd` **with** one of
+  those names is written encrypted the way the game's are ( `write_iwd` with the key of `C1.exe`: AES-192 in
+  counter mode over every entry's name and data, seeded with the CRC of the archive's file name - so the file must
+  keep its name ); `--iwd-add <plain archive.iwd>` puts the files of an existing archive into it. The test writes
+  one and reads it back with `codol_render`'s reader for the game's archives; the install's own `codol_iwd.py`
+  lists such an archive ( `ENCRYPTED .. sound/codol_test/wind.wav` ), and the client opens one named
+  `iw_sound_04.iwd` - a plain archive, under any name tried, it never opened.
 * **inline** ( default ): the pixels are in the zone, in the `D3DFORMAT` of the same data, per face from level 0
   down. Shipped inline images: lightmaps, reflection probes ( A8R8G8B8 with mips ), `$white` .., and the 72 pad icons
   of `codol_common_postgfx_mp` ( A8R8G8B8 with mips, category 1 ). **Inline DXT is not among them**; `format=rgba`
@@ -561,8 +567,12 @@ channel 1>]`. `codol_asset_verify sound-extract` writes the shipped maps in this
   referenced by name ( `,weapons/foley/x.wav` ) - the way to reuse a shipped sound - and the tool says so;
 * per `.vfcurve` used: a top level `SndCurve`; other curves by name;
 * per alias name: a `snd_alias_list_t` with its variants, strings, `SoundFile`, curve pointer and speaker map;
-* streamed files found under `sound/` are packed into the `--iwd` archive as `sound/<file>` ( a plain zip; name it
-  without `iw_sound`, as for images ). They are not converted: the shipped ones are `.mp3` and a few `.wav`.
+* streamed files found under `sound/` are packed into the `--iwd` archive as `sound/<file>`. They are not
+  converted: the shipped ones are `.mp3` and a few `.wav`. **In the client a project's streamed sound does not
+  play yet** ( `codol_bsp/README.md`, "Fifth round" ): the client only opens archives named like its own
+  ( `iw_sound_NN.iwd` .. ) - a plain `zz_*.iwd` is never opened, the alias stays silent; an archive with such a
+  name has to be encrypted, which `--iwd` now does by itself ( below ), and the client opens it - and then ends
+  when the alias plays. Loaded sounds play.
 
 ```
 > python tests/make_sound_sources.py src

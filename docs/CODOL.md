@@ -70,7 +70,10 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
    **Light.** A `light` is created with `radius 600`, `intensity 1`, `_color 1 1 1`; it reaches as far as its
    radius and is down to a quarter at half of it. `spawnflags 2` ( `PRIMARY_SPOT`, with `fov_outer` / `fov_inner` /
    `exponent` and `angles` or a `target` ) or `1` ( `PRIMARY_OMNI` ) makes it a primary light: the game lights the
-   world and the models with it at run time instead of from the lightmap. The worldspawn takes `sundirection`,
+   world and the models with it at run time instead of from the lightmap, and a spot throws the shadows of players
+   and script models ( seen in the client ). Floors and walls are cut where the reach of such lights ends, so two
+   of them can light one floor side by side. `spawnflags 4` keeps the light as an entity a script can change;
+   `def` names its falloff ( `light_point_linear`, `light_point_quadratic` .. - any definition of the install ). The worldspawn takes `sundirection`,
    `suncolor`, `sunlight`, `ambient` with `_color`, `skylight` with `skycolor`; without them a map has a sun of
    1.3 from `-50 40 0`, an ambient light of 0.1 and a sky light of 0.4. All keys with their defaults:
    `codol_bsp/README.md`, "Light keys".
@@ -332,8 +335,10 @@ not in any mounted zone".
 project of one effect, two animated models and three sound aliases loads; the **effect** placed with a `script_fx`
 entity is drawn, its smoke puffs coming again and again; the two **models** stand where the level script spawns
 them but their **animations do not move** - on this test server no script model animation reaches the client, the
-hanging clothes of shipped mp_crash_tropical stand still as well; **sound** cannot be heard on the test machine,
-the client's log has no "Missing soundalias" and no load error. The effects a map places are made by the client
+hanging clothes of shipped mp_crash_tropical stand still as well ( `codol_bsp/README.md`, "Script model
+animations": what the map side provides is there, the rest is the server's ); **sounds**: a project's loaded sounds
+play - measured at the client's audio session, with their distance falloff ( "Fifth round" ) -, its streamed ones
+( `.mp3`, `type streamed` ) do not yet: use loaded sounds. The effects a map places are made by the client
 from the text of `maps\mp\<map>_fx.gsc` and `maps\createfx\<map>_fx.gsc`: leave those two to the build, or keep
 their exact form.
 
@@ -343,7 +348,8 @@ line ), showing an effect in the editor, streamed images ( `.iwi` in an `.iwd` )
 common animation options ( `deltapart`, `assettype`, tolerances: `codol_assetc --xanim` has them ), copying the
 effects an effect emits on import ( put them into `fx\` by hand ). The shipped animtrees ( `animated_props` .. ) are
 not extended: give your animations a tree of their own. Sounds and effects of a map edited with File > Compile map
-( `codol_mapc` ) are not carried - only File > Build map does it.
+( `codol_mapc` ) are not carried by the editor - only File > Build map does it; the tool itself can
+( `codol_mapc --assets <project zone>`, `codol_mapc/README.md`, "A project's assets" ).
 ## What works
 
 | Area | Status |
@@ -363,20 +369,19 @@ not extended: give your animations a tree of their own. Sounds and effects of a 
 
 Be aware of these before planning work around this branch:
 
-- **Maps of your own: lighting is simpler than the game's own maps.** A surface has one primary light ( the sun,
-  or one `light` with `PRIMARY_SPOT` / `PRIMARY_OMNI` ) and is not cut where the reach of two meets; a player's
-  shadow in a primary light entity was not seen in the client ( the sun's is ); bounced light does not take the
-  colour of the materials; no T-junction repair. See "Limits" in `codol_bsp/README.md`.
+- **Maps of your own: lighting is simpler than the game's own maps.** Surfaces are cut by the reach of the
+  primary lights along a coarse grid, not as finely as the game's compiler does; bounced light does not take the
+  colour of the materials; a light region has no planes through doorways. See "Limits" in `codol_bsp/README.md`.
 - **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
   players do not: put clip brushes around models.
-- **Nobody has seen an animation of your own move in the game or heard a sound of your own there.** The editor
-  plays both ( the Preview window: the compiled animation read back from the project's zone, the alias' loaded
-  sound decoded from it ), the Assets window builds them and File > Build map puts them into the map with their
-  animtrees, animlist and your level script; a dedicated server runs a level script that uses them without a
-  script error, and the client loads such a map and draws its effect ( [In the built map](#in-the-built-map) ).
-  But script model animations do not move in the client on the test server - shipped ones do not either -, the
-  test machine has no audio, and streamed sounds need their `.iwd` in the game's `main\` folder ( the client
-  started with one there; whether it played the file is not known ).
+- **Nobody has seen an animation of your own move in the game.** The editor plays the compiled animation ( the
+  Preview window reads it back from the project's zone ), the Assets window builds it and File > Build map puts it
+  into the map with its animtree, animlist and your level script; a dedicated server runs a level script that uses
+  it without a script error, and the client loads such a map and draws its effect
+  ( [In the built map](#in-the-built-map) ). But script model animations do not move in the client on the test
+  server - shipped ones do not either; what a map has to bring is there ( `codol_bsp/README.md`, "Script model
+  animations" ). **Sounds**: loaded sounds of your own play in the client ( measured, not listened to ) and in the
+  editor's Preview window; streamed ones do not work in the game yet.
 - **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
   of deleted brushes and does not re-bake light. For that, build the map from scratch.
 - **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;

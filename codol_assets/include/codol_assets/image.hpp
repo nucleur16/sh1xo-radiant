@@ -91,9 +91,14 @@ namespace codol::assets
 	// The GfxImage as the game's loaders read it: header, name, GfxImageLoadDef ( and the pixels when inline ).
 	std::vector<zone::ZoneNewPiece> image_pieces(const CompiledImage& image);
 
-	// A plain ( stored ) zip with the given files. The game only decrypts archives whose name contains iw_image,
-	// iw_model, iw_config, iw_sound, iw_ui_image or iw_adlc; give the .iwd any other name.
-	Status write_iwd(const std::filesystem::path& path, std::span<const std::pair<std::string, std::vector<std::uint8_t>>> files);
+	// A ( stored ) zip with the given files. Without a key a plain one: the game only decrypts archives whose name
+	// contains iw_image, iw_model, iw_config, iw_sound, iw_ui_image or iw_adlc - a plain archive needs any other name.
+	// With `key` ( codol::render::derive_iwd_key, 24 bytes ) the entry names and the file data are encrypted the way
+	// the game's own archives are ( AES-192 in counter mode, seeded with the CRC of the archive's FILE NAME, which
+	// therefore must not change afterwards ): for an archive with one of those names. iwd_needs_key says which it is.
+	Status write_iwd(const std::filesystem::path& path, std::span<const std::pair<std::string, std::vector<std::uint8_t>>> files,
+		const std::array<std::uint8_t, 24>* key = nullptr);
+	bool iwd_needs_key(const std::filesystem::path& path);
 
 	// An IWI file read back through codol_render ( the reader of the renderer ): every surface as RGBA.
 	struct IwiLevels

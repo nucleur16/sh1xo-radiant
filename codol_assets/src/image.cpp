@@ -838,10 +838,35 @@ namespace codol::assets
 		return pieces;
 	}
 
-	Status write_iwd(const std::filesystem::path& path, const std::span<const std::pair<std::string, std::vector<std::uint8_t>>> files)
+	bool iwd_needs_key(const std::filesystem::path& path)
+	{
+		const std::string name = path.filename().string();
+		for (const char* part : { "iw_image", "iw_model", "iw_config", "iw_sound", "iw_ui_image", "iw_adlc" })
+		{
+			if (name.find(part) != std::string::npos)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	Status write_iwd(const std::filesystem::path& path, const std::span<const std::pair<std::string, std::vector<std::uint8_t>>> files,
+		const std::array<std::uint8_t, 24>* key)
 	try
 	{
 		std::vector<std::uint8_t> out, directory;
+		// the cipher of an encrypted archive ( codol_render iwd.hpp ): counter { 0x01010101, crc32( file name ), entry
+		// index, 0x01010101 } for an entry's name, { offset of the chunk in the file, crc32( file name ), 0x01010101,
+		// 0x01010101 } for every 0x4000 bytes of its data
+		const std::string file_name = path.filename().string();
+		const std::uint32_t name_hash = r::crc32(r::byte_span(reinterpret_cast<const std::uint8_t*>(file_name.data()), file_name.size()));
+		const auto counter = [](std::uint8_t iv[16], const std::uint32_t a, const std::uint32_t b, const std::uint32_t c, const std::uint32_t d)
+		{
+			const std::uint32_t words[4] = { a, b, c, d };
+			std::memcpy(iv, words, 16);
+		};
+		std::size_t index = 0;
 		const auto u16 = [](std::vector<std::uint8_t>& to, const std::uint32_t v)
 		{
 			to.push_back(static_cast<std::uint8_t>(v));
@@ -870,8 +895,30 @@ namespace codol::assets
 			u32(out, size);
 			u16(out, static_cast<std::uint32_t>(name.size()));
 			u16(out, 0);
-			out.insert(out.end(), name.begin(), name.end());
+			std::vector<std::uint8_t> stored_name(name.begin(), name.end());
+			std::string cipher_error;
+			if (key)
+			{
+				std::uint8_t iv[16];
+				counter(iv, 0x01010101u, name_hash, static_cast<std::uint32_t>(index), 0x01010101u);
+				if (!r::aes_ctr_transform(*key, iv, stored_name.data(), stored_name.size(), &cipher_error))
+				{
+					return Status::error("iwd: " + cipher_error);
+				}
+			}
+			out.insert(out.end(), stored_name.begin(), stored_name.end());
+			const std::size_t data_at = out.size();
 			out.insert(out.end(), data.begin(), data.end());
+			for (std::size_t k = 0; key && k < data.size(); k += 0x4000)
+			{
+				std::uint8_t iv[16];
+				counter(iv, static_cast<std::uint32_t>(data_at + k), name_hash, 0x01010101u, 0x01010101u);
+				if (!r::aes_ctr_transform(*key, iv, out.data() + data_at + k, std::min<std::size_t>(0x4000, data.size() - k), &cipher_error))
+				{
+					return Status::error("iwd: " + cipher_error);
+				}
+			}
+			index++;
 
 			u32(directory, 0x02014B50);
 			u16(directory, 20);
@@ -890,7 +937,7 @@ namespace codol::assets
 			u16(directory, 0);
 			u32(directory, 0);
 			u32(directory, offset);
-			directory.insert(directory.end(), name.begin(), name.end());
+			directory.insert(directory.end(), stored_name.begin(), stored_name.end());
 		}
 		const std::uint32_t start = static_cast<std::uint32_t>(out.size());
 		out.insert(out.end(), directory.begin(), directory.end());

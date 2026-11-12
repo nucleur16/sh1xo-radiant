@@ -140,6 +140,7 @@ namespace codol::bsp
 		render_world rw;
 		build_render_surfaces(ctx, rw);
 		bake_lighting(ctx, rw);
+		repair_t_junctions(ctx, rw);
 
 		const std::vector<render_surface>& surfaces = rw.surfaces;
 		const std::size_t surface_count = surfaces.size();
@@ -654,8 +655,18 @@ namespace codol::bsp
 				{
 					std::memcpy(hulls[k].kdopMidPoint, rw.light_regions[l][k].mid, sizeof(hulls[k].kdopMidPoint));
 					std::memcpy(hulls[k].kdopHalfSize, rw.light_regions[l][k].half, sizeof(hulls[k].kdopHalfSize));
+					hulls[k].axisCount = static_cast<std::uint32_t>(rw.light_regions[l][k].axes.size());
+					hulls[k].axis = hulls[k].axisCount ? FOLLOWS : 0;
 				}
 				b.add_array(hulls);
+				for (std::size_t k = 0; k < hulls.size(); k++)
+				{
+					if (hulls[k].axisCount)
+					{
+						static_assert(sizeof(render_light_hull::axis) == 20);
+						b.add_array(rw.light_regions[l][k].axes);
+					}
+				}
 			}
 		}
 

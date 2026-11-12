@@ -237,6 +237,74 @@ namespace
 		}
 	};
 
+	// T-junctions of a compiled world: vertices that lie in the middle of a side of a triangle ( of the same brush
+	// model; sky surfaces aside ) that is not shared, end for end, with another triangle - a diagonal inside a face
+	// may run through anything. Every such vertex is a place where the rasteriser may leave a pixel open.
+	std::size_t count_t_junctions(const zone_light& light)
+	{
+		const std::vector<c1::GfxWorldVertex> vertices = light.world.vertices();
+		const std::vector<std::uint16_t> indices = light.world.indices();
+		struct p3
+		{
+			double x, y, z;
+		};
+		std::vector<p3> points;
+		std::vector<std::pair<p3, p3>> edges;
+		const std::size_t static_surfaces = light.world.raw.dpvs.staticSurfaceCount;
+		for (std::size_t si = 0; si < light.world.surfaces.size() && si < static_surfaces; si++)
+		{
+			const c1::GfxSurface& surface = light.world.surfaces[si].raw;
+			if (surface.lightmapIndex == 31 && light.world.surfaces[si].materialName.find("sky") != std::string_view::npos)
+			{
+				continue;
+			}
+			for (std::uint32_t i = 0; i < 3u * surface.triCount; i += 3)
+			{
+				p3 corner[3];
+				for (std::uint32_t k = 0; k < 3; k++)
+				{
+					const c1::GfxWorldVertex& v = vertices[surface.firstVertex + indices[surface.baseIndex + i + k]];
+					corner[k] = { v.xyz[0], v.xyz[1], v.xyz[2] };
+					points.push_back(corner[k]);
+				}
+				for (int k = 0; k < 3; k++)
+				{
+					edges.emplace_back(corner[k], corner[(k + 1) % 3]);
+				}
+			}
+		}
+		std::sort(points.begin(), points.end(), [](const p3& a, const p3& b) { return a.x != b.x ? a.x < b.x : a.y != b.y ? a.y < b.y : a.z < b.z; });
+		points.erase(std::unique(points.begin(), points.end(), [](const p3& a, const p3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }), points.end());
+		std::size_t found = 0;
+		std::set<std::array<double, 6>> directed;
+		for (const auto& [a, b] : edges)
+		{
+			directed.insert({ a.x, a.y, a.z, b.x, b.y, b.z });
+		}
+		for (const auto& [a, b] : edges)
+		{
+			const double dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z, len2 = dx * dx + dy * dy + dz * dz;
+			if (len2 < 1e-6 || directed.count({ b.x, b.y, b.z, a.x, a.y, a.z }))
+			{
+				continue;
+			}
+			const double len = std::sqrt(len2);
+			// the points are sorted by x: only those inside the edge's range of x
+			const double lo = std::min(a.x, b.x) - 0.05, hi = std::max(a.x, b.x) + 0.05;
+			for (auto it = std::lower_bound(points.begin(), points.end(), lo, [](const p3& p, const double x) { return p.x < x; }); it != points.end() && it->x <= hi; ++it)
+			{
+				const double t = ((it->x - a.x) * dx + (it->y - a.y) * dy + (it->z - a.z) * dz) / len2;
+				if (t * len < 0.1 || (1.0 - t) * len < 0.1)
+				{
+					continue;
+				}
+				const double ex = a.x + dx * t - it->x, ey = a.y + dy * t - it->y, ez = a.z + dz * t - it->z;
+				found += ex * ex + ey * ey + ez * ez < 0.01 * 0.01;
+			}
+		}
+		return found;
+	}
+
 	// the box room's .map with other lights: the worldspawn's light keys and the light entities taken out, `entities` added
 	bool write_light_map(const fs::path& maps, const char* name, const std::string& worldspawn_keys, const std::string& entities)
 	{
@@ -866,6 +934,161 @@ int main(const int argc, char** argv)
 		{
 			CHECK(omni_light.lights[2].type == 3 && omni_light.lights[2].exponent == 0 && std::fabs(omni_light.lights[2].radius - 600.0f) < 0.01f);
 			CHECK(std::fabs(omni_light.lights[2].cosHalfFovOuter - 0.5f) < 0.001f && omni_light.lights[2].canUseShadowMap == 1);
+		}
+	}
+
+	// ---- light: two primary spots side by side over one floor, the second with another falloff and scriptable. The
+	// floor is cut between them, each piece names its light; both light definitions with their strips in row 0; the
+	// scriptable light stays an entity with "pl#"; region hulls with further axes; no T-junction is left by the cuts
+	{
+		const std::string two = "{\n\"classname\" \"light\"\n\"origin\" \"-220 0 230\"\n\"spawnflags\" \"2\"\n\"radius\" \"480\"\n\"intensity\" \"1.5\"\n"
+			"\"fov_outer\" \"90\"\n\"fov_inner\" \"40\"\n\"exponent\" \"1\"\n\"angles\" \"90 0 0\"\n}\n"
+			"{\n\"classname\" \"light\"\n\"origin\" \"220 0 230\"\n\"spawnflags\" \"6\"\n\"radius\" \"480\"\n\"intensity\" \"1.5\"\n\"_color\" \"0.7 0.8 1\"\n"
+			"\"fov_outer\" \"90\"\n\"fov_inner\" \"40\"\n\"exponent\" \"1\"\n\"angles\" \"90 0 0\"\n\"def\" \"light_point_quadratic\"\n\"targetname\" \"lamp\"\n"
+			"\"maxturn\" \"30\"\n\"maxmove\" \"16\"\n}\n";
+		CHECK(write_light_map(out / "maps", "two_spots", "\"sunlight\" \"0\"", two));
+		const compiled c = compile(out, game, "two_spots");
+		check_zone(c, game, out / "maps" / "two_spots.map");
+		CHECK(c.rep.primary_lights == 4 && has_note(c.rep, "faces cut by the reach of the primary lights") && has_note(c.rep, "scriptable spot at 220 0 230"));
+		CHECK(has_note(c.rep, "light_point_quadratic: images/falloff_quadratic.iwi") && has_note(c.rep, "T-junctions:"));
+		const zone_light light(c.file, game);
+		CHECK(light.ok && light.lights.size() == 4);
+		if (light.ok && light.lights.size() == 4)
+		{
+			// the records: the second light may turn 30 degrees and move 16 units, and names the other definition
+			CHECK(light.lights[2].rotationLimit == 1.0f && light.lights[2].translationLimit == 0.0f);
+			CHECK(std::fabs(light.lights[3].rotationLimit - 0.8660f) < 0.001f && light.lights[3].translationLimit == 16.0f);
+			CHECK(light.lights[3].defName && light.z.c_string(light.lights[3].defName) == std::string_view("light_point_quadratic"));
+			// the definitions and their strips: 34 texels each from 1 and 35, the first texel of a strip a copy of the second
+			const zone::zaddr linear = light.z.find_asset(c1::ASSET_TYPE_LIGHT_DEF, "light_point_linear"), quadratic = light.z.find_asset(c1::ASSET_TYPE_LIGHT_DEF, "light_point_quadratic");
+			CHECK(linear && quadratic);
+			if (linear && quadratic)
+			{
+				CHECK(light.z.get<std::int32_t>(linear + 12) == 1 && light.z.get<std::int32_t>(quadratic + 12) == 35);
+				zone::ImageView picture;
+				CHECK(zone::read_image(light.z, light.z.get<zone::zaddr>(quadratic + 4), picture) && picture.name == "falloff_quadratic" && picture.raw.width == 32);
+			}
+			CHECK(light.texel(0, 1, 0)[1] == 255 && light.texel(0, 32, 0)[1] == 0);
+			CHECK(light.texel(0, 34, 0)[1] == light.texel(0, 35, 0)[1] && light.texel(0, 35, 0)[1] > 240 && light.texel(0, 66, 0)[1] < 16 && light.texel(0, 67, 0)[1] == light.texel(0, 66, 0)[1]);
+			// the quadratic curve lies below the linear one half way out
+			CHECK(light.texel(0, 35 + 16, 0)[1] < light.texel(0, 1 + 16, 0)[1]);
+			for (int x = 36; x < 67; x++)
+			{
+				CHECK(light.texel(0, x, 0)[1] <= light.texel(0, x - 1, 0)[1]);
+			}
+			// the floor: pieces that name the first light on its side, the second on the other, of one material
+			const std::vector<c1::GfxWorldVertex> vertices = light.world.vertices();
+			const std::vector<std::uint16_t> indices = light.world.indices();
+			std::set<std::string> floor_materials[4];
+			double floor_x[4][2] = { { 1e9, -1e9 }, { 1e9, -1e9 }, { 1e9, -1e9 }, { 1e9, -1e9 } };
+			for (const zone::WorldSurface& surface : light.world.surfaces)
+			{
+				if (surface.raw.primaryLightIndex > 3)
+				{
+					continue;
+				}
+				for (std::uint32_t i = 0; i < 3u * surface.raw.triCount; i += 3)
+				{
+					const c1::GfxWorldVertex* v[3];
+					bool flat = true;
+					for (std::uint32_t k = 0; k < 3; k++)
+					{
+						v[k] = &vertices[surface.raw.firstVertex + indices[surface.raw.baseIndex + i + k]];
+						flat = flat && v[k]->xyz[2] == 0.0f;
+					}
+					if (flat)
+					{
+						floor_materials[surface.raw.primaryLightIndex].insert(std::string(surface.materialName));
+						for (int k = 0; k < 3; k++)
+						{
+							floor_x[surface.raw.primaryLightIndex][0] = std::min<double>(floor_x[surface.raw.primaryLightIndex][0], v[k]->xyz[0]);
+							floor_x[surface.raw.primaryLightIndex][1] = std::max<double>(floor_x[surface.raw.primaryLightIndex][1], v[k]->xyz[0]);
+						}
+					}
+				}
+			}
+			CHECK(!floor_materials[2].empty() && floor_materials[2] == floor_materials[3]);
+			// each light's pieces lie on its side of the room, and they meet in the middle
+			CHECK(floor_x[2][0] < -300 && floor_x[2][1] <= 32 && floor_x[3][0] >= -32 && floor_x[3][1] > 300 && std::fabs(floor_x[2][1] - floor_x[3][0]) < 0.01);
+			// the scriptable light is an entity of the map, its first key the index of its primary light
+			zone::MapEntsView ents;
+			CHECK(zone::read_map_ents(light.z, zone::find_map_ents(light.z), ents));
+			const std::string text(ents.entityString);
+			CHECK(text.find("{\n\"pl#\" \"3\"\n") != std::string::npos && text.find("\"classname\" \"light_spot\"") != std::string::npos && text.find("\"targetname\" \"lamp\"") != std::string::npos);
+			CHECK(text.find("\"pl#\" \"2\"") == std::string::npos && text.find("\"classname\" \"light\"\n") == std::string::npos);
+			// the regions: a hull with further axes ( planes of the cone ); the floor under a light is inside all of them,
+			// a point beside the cone at the light's height is not
+			std::uint32_t region_at = 0;
+			std::memcpy(&region_at, light.world.raw._unk416 + 36, 4);
+			const std::vector<std::uint32_t> regions = light.z.get_array<std::uint32_t>(region_at, 8);
+			CHECK(regions[4] >= 1 && regions[6] >= 1);
+			if (regions[4] >= 1 && regions[5])
+			{
+				const std::vector<float> hull = light.z.get_array<float>(regions[5], 18);
+				const std::vector<std::uint32_t> tail = light.z.get_array<std::uint32_t>(regions[5] + 72, 2);
+				CHECK(tail[0] >= 1 && tail[0] <= 8 && tail[1] != 0);
+				if (tail[0] >= 1 && tail[0] <= 8 && tail[1])
+				{
+					const std::vector<float> axes = light.z.get_array<float>(tail[1], 5u * tail[0]);
+					const auto inside = [&](const float x, const float y, const float zz)
+					{
+						const float v[9] = { x, y, zz, x + y, x - y, x + zz, x - zz, y + zz, y - zz };
+						for (int a = 0; a < 9; a++)
+						{
+							if (std::fabs(v[a] - hull[static_cast<std::size_t>(a)]) > hull[9 + static_cast<std::size_t>(a)])
+							{
+								return false;
+							}
+						}
+						for (std::uint32_t a = 0; a < tail[0]; a++)
+						{
+							const float d = x * axes[a * 5] + y * axes[a * 5 + 1] + zz * axes[a * 5 + 2];
+							if (std::fabs(d - axes[a * 5 + 3]) > axes[a * 5 + 4])
+							{
+								return false;
+							}
+						}
+						return true;
+					};
+					CHECK(inside(0, 0, -220) && inside(60, -60, -200) && inside(0, 0, 0));
+					CHECK(!inside(-200, 0, -30) && !inside(0, 200, -30));
+					bool unit = true;
+					for (std::uint32_t a = 0; a < tail[0]; a++)
+					{
+						unit = unit && std::fabs(axes[a * 5] * axes[a * 5] + axes[a * 5 + 1] * axes[a * 5 + 1] + axes[a * 5 + 2] * axes[a * 5 + 2] - 1.0f) < 0.001f;
+					}
+					CHECK(unit);
+				}
+			}
+			// the cuts leave no vertex in the middle of a triangle's side
+			CHECK(count_t_junctions(light) == 0);
+		}
+		// without the repair the same map has them
+		_putenv("CODOL_BSP_NO_TJUNC=1");
+		const compiled raw = compile(out, game, "two_spots");
+		_putenv("CODOL_BSP_NO_TJUNC=");
+		const zone_light raw_light(raw.file, game);
+		CHECK(raw.ok && raw_light.ok && count_t_junctions(raw_light) > 0);
+		// a definition no zone has is replaced, and said so
+		CHECK(write_light_map(out / "maps", "odd_def", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"spawnflags\" \"1\"\n\"def\" \"light_point_nowhere\"\n}\n"));
+		const compiled odd = compile(out, game, "odd_def");
+		CHECK(odd.ok && std::any_of(odd.rep.warnings.begin(), odd.rep.warnings.end(), [](const std::string& w) { return w.find("'light_point_nowhere' is in no zone") != std::string::npos; }));
+	}
+
+	// ---- T-junctions: the test maps with crates on floors, doorways and terrain have none left
+	for (const char* map : { "box_room", "two_rooms", "content", "terrain" })
+	{
+		const fs::path file = out / "ff" / ("mp_" + std::string(map) + ".ff");
+		const zone_light light(file, game);
+		CHECK(light.ok);
+		if (light.ok)
+		{
+			const std::size_t left = count_t_junctions(light);
+			if (left)
+			{
+				std::printf("%s: %zu T-junctions\n", map, left);
+			}
+			CHECK(left == 0);
 		}
 	}
 
