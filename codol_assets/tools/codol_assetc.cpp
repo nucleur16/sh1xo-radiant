@@ -17,11 +17,20 @@
 //     --material gdt:<file.gdt>[:<entry>]   the material entries of a GDT ( one, or all ); their images are compiled too
 //     --xmodel <name>=<lod0.xmodel_export>[@dist][,<lod1>[@dist] ..][,collision=<lod>][,contents=<n>][,mtl:<export name>=<material>]
 //                                 [,hitloc:<bone>=<class>]
+//     --xanim <name>=<file.xanim_export>[,model=<file.xmodel_export>][,type=relative|delta|delta3d][,loop][,deltapart=<part>]
+//                                 [,assettype=<n>][,rottol=<s16 units>][,transtol=<units>]
 //     --rawfile <name>=<file>
+//     --soundalias <file.csv>        sound aliases; loaded .wav files, curves and speaker maps from the tree around it
+//     --sound-root <dir>             the folder that holds sound/ and soundaliases/ ( default: next to / above the csv )
+//     --fx <name>=<file.efx>         an effect ( name as loadfx takes it: misc/my_effect ); effects it emits are read from
+//                                    <name>.efx files of the same fx folder
+//     --fx-atlas <file>              texture atlas table of the shipped materials ( default <out dir>/codol_fxatlas.txt; made
+//                                    on first use, half a minute )
 //
 //   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
 //     loads the file with the game's loaders, writes it again ( must be identical ), lists what is in it
 
+#include "codol_assets/fx.hpp"
 #include "codol_assets/link.hpp"
 #include "codol_render/texture.hpp"
 #include "codol_zone/assets.hpp"
@@ -236,6 +245,81 @@ namespace
 				}
 				std::printf("\n");
 			}
+			else if (e.type == c1::ASSET_TYPE_SOUND)
+			{
+				CompiledAliasList list;
+				bool ok = extract_sound_alias_list(zone, e.header, list);
+				std::string files;
+				for (const CompiledAlias& a : list.aliases)
+				{
+					const std::string channel(sound_channel_name(static_cast<int>((a.raw.flags >> 9) & 0x3F)));
+					ok = ok && !channel.empty();
+					files += " " + (!a.hasFile ? std::string("( no file )") : a.streamed ? "streamed:" + a.streamDir + "/" + a.streamName
+						: a.loadedName + (zone.find_asset(c1::ASSET_TYPE_LOADED_SOUND, a.loadedName) ? "" : " ( by name )")) + " [" + channel + ((a.raw.flags & 1) ? ", looping" : "") + "]";
+				}
+				bad += ok ? 0 : 1;
+				std::printf("  sound     %-40s %zu alias(es):%s%s\n", name.c_str(), list.aliases.size(), files.c_str(), ok ? "" : "  DOES NOT READ");
+			}
+			else if (e.type == c1::ASSET_TYPE_LOADED_SOUND)
+			{
+				CompiledLoadedSound sound;
+				WaveData pcm;
+				const bool ok = extract_loaded_sound(editor, e.header, sound) && (sound.info.format != WAVE_IMA_ADPCM || ima_adpcm_decode(loaded_sound_wave(sound), pcm));
+				bad += ok ? 0 : 1;
+				std::printf("  loaded_sound %-37s %s, %d channel(s), %u Hz, %u samples, %u bytes%s\n", name.c_str(), sound.info.format == WAVE_IMA_ADPCM ? "IMA ADPCM" : "16 bit PCM",
+					sound.info.channels, sound.info.rate, sound.info.samples, sound.info.dataLen, ok ? (sound.info.format == WAVE_IMA_ADPCM ? ", decodes" : "") : "  DOES NOT READ");
+			}
+			else if (e.type == c1::ASSET_TYPE_SOUND_CURVE)
+			{
+				SndCurveDef curve;
+				extract_snd_curve(zone, e.header, curve);
+				std::printf("  sndcurve  %-40s %zu knots\n", name.c_str(), curve.knots.size());
+			}
+			else if (e.type == c1::ASSET_TYPE_XANIMPARTS)
+			{
+				RawAnim raw;
+				DecodedAnim decoded;
+				std::string error;
+				Status status;
+				if (!read_raw_anim(zone, e.header, raw, &error))
+				{
+					status = Status::error(error);
+				}
+				else
+				{
+					status = decode_anim(raw, decoded);
+				}
+				const c1::XAnimParts& h = raw.header;
+				std::string notes;
+				for (const auto& [note, time] : raw.notifies)
+				{
+					char text[32];
+					std::snprintf(text, sizeof(text), "@%.3f", time);
+					notes += " " + note + text;
+				}
+				std::printf("  xanim     %-40s %u parts, %u frames at %g / s, flags %u%s%s, tracks %s, notifies:%s\n", name.c_str(), h.boneCount[9], h.numframes + 1u, h.framerate, h.flags,
+					h.flags & ANIM_FLAG_LOOP ? " loop" : "", h.flags & (ANIM_FLAG_DELTA | ANIM_FLAG_DELTA_3D) ? " delta" : "", status ? "decode" : ("DO NOT DECODE: " + status.message).c_str(),
+					notes.c_str());
+				bad += status ? 0 : 1;
+			}
+			else if (e.type == c1::ASSET_TYPE_FX)
+			{
+				CompiledFx fx;
+				const bool ok = read_fx(zone, e.header, fx);
+				std::set<std::string> visuals;
+				for (const FxElem& elem : fx.elems)
+				{
+					visuals.insert(elem.visuals.begin(), elem.visuals.end());
+				}
+				std::string list;
+				for (const std::string& v : visuals)
+				{
+					list += " " + v;
+				}
+				std::printf("  fx        %-40s %zu elements ( %d looping, %d one shot, %d emission ), %d bytes, visuals:%s%s\n", name.c_str(), fx.elems.size(), fx.countLooping,
+					fx.countOneShot, fx.countEmission, fx.totalSize, list.c_str(), ok && fx.totalSize == fx_total_size(fx) ? "" : "  DOES NOT READ");
+				bad += ok && fx.totalSize == fx_total_size(fx) ? 0 : 1;
+			}
 			else
 			{
 				std::printf("  %-9s %s\n", z::asset_type_name(e.type).c_str(), name.c_str());
@@ -250,6 +334,10 @@ int main(const int argc, char** argv)
 	LinkOptions link;
 	fs::path out, sourceRoot, iwiDir, iwd, zoneOut, verifyFile;
 	std::vector<std::string> images, materials, models, rawfiles;
+	std::vector<std::string> anims, soundAliases;
+	fs::path soundRoot;
+	std::vector<std::string> effects;
+	fs::path fxAtlasFile;
 	bool nameGiven = false;
 	for (int k = 1; k < argc; k++)
 	{
@@ -270,6 +358,11 @@ int main(const int argc, char** argv)
 		else if (a == "--material") materials.push_back(value());
 		else if (a == "--xmodel") models.push_back(value());
 		else if (a == "--rawfile") rawfiles.push_back(value());
+		else if (a == "--xanim") anims.push_back(value());
+		else if (a == "--soundalias") soundAliases.push_back(value());
+		else if (a == "--sound-root") soundRoot = value();
+		else if (a == "--fx") effects.push_back(value());
+		else if (a == "--fx-atlas") fxAtlasFile = value();
 		else if (a == "--verify") verifyFile = value();
 		else return fail("unknown option " + a + " ( usage: see the head of codol_assetc.cpp or the README )");
 	}
@@ -298,6 +391,25 @@ int main(const int argc, char** argv)
 	if (const Status s = linker.begin(link); !s)
 	{
 		return fail(s.message);
+	}
+
+	// ---- sounds: loaded sounds and curves, then the alias lists that name them
+	SoundBuild sounds;
+	for (const std::string& file : soundAliases)
+	{
+		if (const Status s = build_sound_aliases(file, soundRoot.empty() ? sound_source_root(file) : soundRoot, linker.editor(), sounds); !s)
+		{
+			return fail(s.message);
+		}
+	}
+	for (const std::string& line : sounds.log)
+	{
+		std::printf("%s\n", line.c_str());
+	}
+	if (!soundAliases.empty())
+	{
+		std::printf("sounds: %u alias lists ( %u aliases ), %u loaded sounds, %u curves, %zu streamed files found\n", sounds.lists, sounds.aliases, sounds.loadedSounds,
+			sounds.curves, sounds.streamedFiles.size());
 	}
 
 	// ---- material definitions first: they say what the images are used for
@@ -427,13 +539,19 @@ int main(const int argc, char** argv)
 			}
 		}
 	}
-	if (!iwd.empty() && !iwiFiles.empty())
+	if (!iwd.empty() && !(iwiFiles.empty() && sounds.streamedFiles.empty()))
 	{
-		if (const Status s = write_iwd(iwd, iwiFiles); !s)
+		auto packed = iwiFiles;
+		packed.insert(packed.end(), sounds.streamedFiles.begin(), sounds.streamedFiles.end());
+		if (const Status s = write_iwd(iwd, packed); !s)
 		{
 			return fail(s.message);
 		}
-		std::printf("wrote %s: %zu images\n", iwd.string().c_str(), iwiFiles.size());
+		std::printf("wrote %s: %zu images, %zu streamed sound files\n", iwd.string().c_str(), iwiFiles.size(), sounds.streamedFiles.size());
+	}
+	if (iwd.empty() && !sounds.streamedFiles.empty())
+	{
+		std::printf("warning: %zu streamed sound file(s) and no --iwd: the game will not find them\n", sounds.streamedFiles.size());
 	}
 	else if (!iwiFiles.empty() && iwiDir.empty())
 	{
@@ -547,6 +665,121 @@ int main(const int argc, char** argv)
 		}
 		std::printf("xmodel %s: %zu bones, %zu LODs, %zu surfaces, %zu vertices, %zu triangles, %zu collision surfaces\n", compiled.name.c_str(), compiled.boneNames.size(),
 			compiled.lods.size(), surfaces, vertices, triangles, compiled.collision.size());
+	}
+
+	// ---- animations
+	for (const std::string& spec : anims)
+	{
+		const std::size_t equal = spec.find('=');
+		if (equal == std::string::npos || equal == 0)
+		{
+			return fail("--xanim wants <name>=<file.xanim_export>");
+		}
+		AnimOptions options;
+		options.name = spec.substr(0, equal);
+		ExportAnim source;
+		ExportModel skeleton;
+		bool sourceRead = false;
+		for (const std::string& part : split(spec.substr(equal + 1), ','))
+		{
+			if (part.rfind("model=", 0) == 0)
+			{
+				if (const Status s = load_xmodel_export(part.substr(6), skeleton); !s)
+				{
+					return fail(s.message);
+				}
+				options.skeleton = &skeleton;
+			}
+			else if (part.rfind("type=", 0) == 0)
+			{
+				const std::string type = part.substr(5);
+				if (type != "relative" && type != "delta" && type != "delta3d")
+				{
+					return fail("--xanim type= is relative, delta or delta3d");
+				}
+				options.type = type == "delta" ? AnimType::delta : type == "delta3d" ? AnimType::delta3d : AnimType::relative;
+			}
+			else if (part == "loop") options.looping = true;
+			else if (part.rfind("deltapart=", 0) == 0) options.deltaPart = part.substr(10);
+			else if (part.rfind("assettype=", 0) == 0) options.assetType = static_cast<std::uint8_t>(std::atoi(part.c_str() + 10));
+			else if (part.rfind("rottol=", 0) == 0) options.rotationTolerance = static_cast<float>(std::atof(part.c_str() + 7));
+			else if (part.rfind("transtol=", 0) == 0) options.translationTolerance = static_cast<float>(std::atof(part.c_str() + 9));
+			else if (!sourceRead)
+			{
+				if (const Status s = load_xanim_export(part, source); !s)
+				{
+					return fail(part + ": " + s.message);
+				}
+				sourceRead = true;
+			}
+			else
+			{
+				return fail("--xanim: unknown option '" + part + "'");
+			}
+		}
+		if (!sourceRead)
+		{
+			return fail("--xanim wants <name>=<file.xanim_export>");
+		}
+		CompiledAnim compiled;
+		if (const Status s = compile_anim(source, options, compiled); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = linker.add_anim(compiled); !s)
+		{
+			return fail(s.message);
+		}
+		const c1::XAnimParts& h = compiled.raw.header;
+		std::printf("xanim %s: %u parts, %u frames at %g / s%s%s, %u notifies, %zu bytes of tracks\n", compiled.raw.name.c_str(), h.boneCount[9], h.numframes + 1u, h.framerate,
+			h.flags & ANIM_FLAG_LOOP ? ", looping" : "", h.flags & ANIM_FLAG_DELTA ? ", delta" : h.flags & ANIM_FLAG_DELTA_3D ? ", delta 3d" : "", h.notifyCount,
+			compiled.raw.dataByte.size() + compiled.raw.dataShort.size() * 2 + compiled.raw.dataInt.size() * 4 + compiled.raw.randomDataShort.size() * 2
+				+ compiled.raw.randomDataByte.size() + compiled.raw.indices.size() * 2);
+		for (const std::string& note : compiled.notes)
+		{
+			std::printf("  xanim %s: %s\n", compiled.raw.name.c_str(), note.c_str());
+		}
+	}
+
+	// ---- effects: after the materials and models they draw
+	FxAtlasLibrary fxAtlas;
+	for (const std::string& spec : effects)
+	{
+		const std::size_t equal = spec.find('=');
+		if (equal == std::string::npos || equal == 0)
+		{
+			return fail("--fx wants <name>=<file.efx>");
+		}
+		const std::string name = spec.substr(0, equal);
+		const fs::path file = spec.substr(equal + 1);
+		if (fxAtlas.size() == 0)
+		{
+			if (const Status s = fxAtlas.open(link.install, linker.key(), fxAtlasFile.empty() ? out.parent_path() / "codol_fxatlas.txt" : fxAtlasFile); !s)
+			{
+				return fail(s.message);
+			}
+		}
+		EditorEffect effect;
+		CompiledFx fx;
+		if (const Status s = load_efx(file, effect); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = compile_fx(name, effect, fx, fx_compile_options(linker.editor(), fxAtlas, fx_source_root(file, name))); !s)
+		{
+			return fail(s.message);
+		}
+		std::vector<std::string> notes = fx.notes;
+		if (const Status s = link_fx(linker.editor(), fx, &notes); !s)
+		{
+			return fail(s.message);
+		}
+		std::printf("fx %s: %zu elements ( %d looping, %d one shot, %d emission ), %d bytes\n", name.c_str(), fx.elems.size(), fx.countLooping, fx.countOneShot,
+			fx.countEmission, fx.totalSize);
+		for (const std::string& note : notes)
+		{
+			std::printf("  %s\n", note.c_str());
+		}
 	}
 
 	for (const std::string& spec : rawfiles)

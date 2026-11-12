@@ -545,6 +545,119 @@ namespace codol::c1
 	C1_HEADER(StringTable, ASSET_TYPE_STRINGTABLE);
 
 	// ------------------------------------------------------------------------------------------
+	// sound ( Load_snd_alias_list_t 0x004B8750, Load_snd_alias_t 0x004B84B0, Load_SoundFile 0x004B8240,
+	// Load_LoadedSound 0x004B80B0, Load_MssSound_data 0x004B7F30, Load_SndCurve 0x004B82B0, Load_SpeakerMap 0x004B8420 )
+	// The Miles sound system structures of IW4 with two differences: the alias has the master priority and separate
+	// master / slave percentages ( 108 bytes, IW4: 100; the IW5 layout ), and the AILSOUNDINFO of a loaded sound has
+	// a channel mask ( 40 bytes, IW4: 36 ).
+
+	struct MssSound
+	{
+		std::int32_t format;			// WAVE format tag: 1 PCM, 17 IMA ADPCM
+		zptr dataPtr;					// runtime
+		std::uint32_t dataLen;			// bytes of `data`
+		std::uint32_t rate;
+		std::int32_t bits;
+		std::int32_t channels;
+		std::uint32_t channelMask;		// not in IW4
+		std::uint32_t samples;
+		std::uint32_t blockSize;
+		zptr initialPtr;				// runtime
+		zptr data;
+	};
+	C1_SIZE(MssSound, 44);
+	C1_OFFSET(MssSound, data, 40);
+
+	struct LoadedSound
+	{
+		zptr name;
+		MssSound sound;
+	};
+	C1_HEADER(LoadedSound, ASSET_TYPE_LOADED_SOUND);	// 0x30, IW4: 0x2C
+
+	inline constexpr std::uint8_t SAT_LOADED = 1;
+	inline constexpr std::uint8_t SAT_STREAMED = 2;
+
+	struct SoundFile
+	{
+		std::uint8_t type;				// SAT_LOADED / SAT_STREAMED
+		std::uint8_t exists;
+		std::uint8_t _pad2[2];
+		zptr loadSndOrDir;				// loaded: LoadedSound; streamed: directory string
+		zptr streamName;				// streamed: file name string
+	};
+	C1_SIZE(SoundFile, 12);
+
+	struct SndCurve
+	{
+		zptr filename;
+		std::uint16_t knotCount;
+		std::uint8_t _pad6[2];
+		float knots[16][2];
+	};
+	C1_HEADER(SndCurve, ASSET_TYPE_SOUND_CURVE);	// 0x88, same layout as IW4
+
+	struct MSSChannelMap
+	{
+		std::int32_t speakerCount;
+		struct { std::int32_t speaker; std::int32_t numLevels; float levels[2]; } speakers[6];
+	};
+	C1_SIZE(MSSChannelMap, 100);
+
+	struct SpeakerMap
+	{
+		std::uint8_t isDefault;
+		std::uint8_t _pad1[3];
+		zptr name;
+		MSSChannelMap channelMaps[2][2];
+	};
+	C1_SIZE(SpeakerMap, 408);
+
+	struct snd_alias_t
+	{
+		zptr aliasName;
+		zptr subtitle;
+		zptr secondaryAliasName;
+		zptr chainAliasName;
+		zptr mixerGroup;
+		zptr soundFile;					// SoundFile
+		std::int32_t sequence;
+		float volMin;
+		float volMax;
+		float pitchMin;
+		float pitchMax;
+		float distMin;
+		float distMax;
+		float velocityMin;
+		std::uint32_t flags;			// SNDALIAS_* below
+		std::uint8_t masterPriority;	// not in IW4
+		std::uint8_t _pad61[3];
+		float masterPercentage;			// not in IW4 ( one field with slavePercentage there )
+		float slavePercentage;
+		float probability;
+		float lfePercentage;
+		float centerPercentage;
+		std::int32_t startDelay;
+		zptr volumeFalloffCurve;		// SndCurve
+		float envelopMin;
+		float envelopMax;
+		float envelopPercentage;
+		zptr speakerMap;				// SpeakerMap
+	};
+	C1_SIZE(snd_alias_t, 108);
+	C1_OFFSET(snd_alias_t, flags, 0x38);
+	C1_OFFSET(snd_alias_t, volumeFalloffCurve, 0x58);
+	C1_OFFSET(snd_alias_t, speakerMap, 0x68);
+
+	struct snd_alias_list_t
+	{
+		zptr aliasName;
+		zptr head;						// snd_alias_t
+		std::int32_t count;
+	};
+	C1_HEADER(snd_alias_list_t, ASSET_TYPE_SOUND);
+
+	// ------------------------------------------------------------------------------------------
 	// map: entities
 
 	struct MapTriggers
@@ -1027,6 +1140,197 @@ namespace codol::c1
 	C1_OFFSET(GfxWorld, dpvsDyn, 564);
 	C1_OFFSET(GfxWorld, heroOnlyLightCount, 616);
 	C1_OFFSET(GfxWorld, heroOnlyLights, 620);
+
+	// ------------------------------------------------------------------------------------------
+	// effects ( FxEffectDef, loader 0x004BD5E0; FxElemDef, loader 0x004BD2B0 )
+	//
+	// IW4's layout with these differences: the element type list is the later one ( IW4's plus "rotated sprite" 2 and
+	// "line" 4, everything behind them moved up: trail 5, cloud 6, spark cloud 7, spark fountain 8, model 9, omni
+	// light 10, spot light 11, sound 12, decal 13, runner 14 ), and the element is 260 bytes instead of 252: eight
+	// bytes behind fadeInfo, the last four a string pointer.
+
+	enum FxElemType : std::uint8_t
+	{
+		FX_ELEM_TYPE_SPRITE_BILLBOARD = 0,
+		FX_ELEM_TYPE_SPRITE_ORIENTED = 1,
+		FX_ELEM_TYPE_SPRITE_ROTATED = 2,
+		FX_ELEM_TYPE_TAIL = 3,
+		FX_ELEM_TYPE_LINE = 4,
+		FX_ELEM_TYPE_TRAIL = 5,
+		FX_ELEM_TYPE_CLOUD = 6,
+		FX_ELEM_TYPE_SPARK_CLOUD = 7,
+		FX_ELEM_TYPE_SPARK_FOUNTAIN = 8,
+		FX_ELEM_TYPE_MODEL = 9,
+		FX_ELEM_TYPE_OMNI_LIGHT = 10,
+		FX_ELEM_TYPE_SPOT_LIGHT = 11,
+		FX_ELEM_TYPE_SOUND = 12,
+		FX_ELEM_TYPE_DECAL = 13,
+		FX_ELEM_TYPE_RUNNER = 14,
+		FX_ELEM_TYPE_COUNT = 15,
+	};
+
+	struct FxFloatRange
+	{
+		float base;
+		float amplitude;
+	};
+
+	struct FxIntRange
+	{
+		std::int32_t base;
+		std::int32_t amplitude;
+	};
+
+	struct FxElemAtlas
+	{
+		std::uint8_t behavior;
+		std::uint8_t index;
+		std::uint8_t fps;
+		std::uint8_t loopCount;
+		std::uint8_t colIndexBits;
+		std::uint8_t rowIndexBits;
+		std::int16_t entryCount;
+	};
+
+	struct FxElemVec3Range
+	{
+		float base[3];
+		float amplitude[3];
+	};
+
+	struct FxElemVelStateInFrame
+	{
+		FxElemVec3Range velocity;
+		FxElemVec3Range totalDelta;
+	};
+
+	struct FxElemVelStateSample
+	{
+		FxElemVelStateInFrame local;
+		FxElemVelStateInFrame world;
+	};
+	C1_SIZE(FxElemVelStateSample, 96);
+
+	struct FxElemVisualState
+	{
+		std::uint8_t color[4];			// r g b a
+		float rotationDelta;
+		float rotationTotal;
+		float size[2];
+		float scale;
+	};
+
+	struct FxElemVisStateSample
+	{
+		FxElemVisualState base;
+		FxElemVisualState amplitude;
+	};
+	C1_SIZE(FxElemVisStateSample, 48);	// as IW4; the later builds have 64
+
+	struct FxTrailVertex
+	{
+		float pos[2];
+		float normal[2];
+		float texCoord;
+	};
+	C1_SIZE(FxTrailVertex, 20);
+
+	struct FxTrailDef
+	{
+		std::int32_t scrollTimeMsec;
+		std::int32_t repeatDist;
+		float invSplitDist;
+		float invSplitArcDist;
+		float invSplitTime;
+		std::int32_t vertCount;
+		zptr verts;						// FxTrailVertex
+		std::int32_t indCount;
+		zptr inds;						// u16
+	};
+	C1_SIZE(FxTrailDef, 36);
+
+	struct FxSparkFountainDef
+	{
+		float gravity;
+		float bounceFrac;
+		float bounceRand;
+		float sparkSpacing;
+		float sparkLength;
+		std::int32_t sparkCount;
+		float loopTime;
+		float velMin;
+		float velMax;
+		float velConeFraction;
+		float restSpeed;
+		float boostTime;
+		float boostFactor;
+	};
+	C1_SIZE(FxSparkFountainDef, 52);
+
+	struct FxElemDef
+	{
+		std::int32_t flags;
+		std::int32_t spawn[2];			// looping: interval msec, count; one shot: count base, amplitude
+		FxFloatRange spawnRange;
+		FxFloatRange fadeInRange;
+		FxFloatRange fadeOutRange;
+		float spawnFrustumCullRadius;
+		FxIntRange spawnDelayMsec;
+		FxIntRange lifeSpanMsec;
+		FxFloatRange spawnOrigin[3];
+		FxFloatRange spawnOffsetRadius;
+		FxFloatRange spawnOffsetHeight;
+		FxFloatRange spawnAngles[3];
+		FxFloatRange angularVelocity[3];
+		FxFloatRange initialRotation;
+		FxFloatRange gravity;
+		FxFloatRange reflectionFactor;
+		FxElemAtlas atlas;
+		std::uint8_t elemType;
+		std::uint8_t visualCount;
+		std::uint8_t velIntervalCount;
+		std::uint8_t visStateIntervalCount;
+		zptr velSamples;				// FxElemVelStateSample[ velIntervalCount + 1 ]
+		zptr visSamples;				// FxElemVisStateSample[ visStateIntervalCount + 1 ]
+		zptr visuals;					// one visual: the handle itself; several: an array; decal: pairs of materials
+		Bounds collBounds;
+		zptr effectOnImpact;			// in the file: the effect's name
+		zptr effectOnDeath;
+		zptr effectEmitted;
+		FxFloatRange emitDist;
+		FxFloatRange emitDistVariance;
+		zptr extended;					// FxTrailDef ( trail ), FxSparkFountainDef ( spark fountain ), else one byte
+		std::uint8_t sortOrder;
+		std::uint8_t lightingFrac;
+		std::uint8_t useItemClip;
+		std::uint8_t fadeInfo;
+		std::uint8_t _unk252[4];		// not in IW4
+		zptr _string256;				// not in IW4: a string
+	};
+	C1_SIZE(FxElemDef, 260);			// IW4: 252
+	C1_OFFSET(FxElemDef, spawnDelayMsec, 40);
+	C1_OFFSET(FxElemDef, gravity, 152);
+	C1_OFFSET(FxElemDef, atlas, 168);
+	C1_OFFSET(FxElemDef, elemType, 176);
+	C1_OFFSET(FxElemDef, velSamples, 180);
+	C1_OFFSET(FxElemDef, visuals, 188);
+	C1_OFFSET(FxElemDef, effectOnImpact, 216);
+	C1_OFFSET(FxElemDef, extended, 244);
+	C1_OFFSET(FxElemDef, sortOrder, 248);
+
+	struct FxEffectDef
+	{
+		zptr name;
+		std::int32_t flags;
+		std::int32_t totalSize;
+		std::int32_t msecLoopingLife;
+		std::int32_t elemDefCountLooping;
+		std::int32_t elemDefCountOneShot;
+		std::int32_t elemDefCountEmission;
+		zptr elemDefs;
+	};
+	C1_HEADER(FxEffectDef, ASSET_TYPE_FX);	// 0x20, same layout as IW4
+
 
 #pragma pack(pop)
 

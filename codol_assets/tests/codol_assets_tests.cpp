@@ -31,6 +31,12 @@ namespace
 		}
 	}
 #define CHECK(x) check(static_cast<bool>(x), #x, __FILE__, __LINE__)
+}
+
+#include "anim_tests.hpp"
+
+namespace
+{
 
 	Bitmap test_image(const int w, const int h, const bool alpha)
 	{
@@ -426,6 +432,8 @@ namespace
 		CompiledModel compiled;
 		CHECK(compile_model(options, compiled));
 		CHECK(linker.add_model(compiled));
+		std::vector<RawAnim> anims;
+		anim_tests::test_anim_zone(linker, anims);
 
 		// the game's loaders take it, and the reader finds what went in
 		std::vector<std::uint8_t> bytes;
@@ -439,6 +447,7 @@ namespace
 		z::Zone zone;
 		CHECK(zone.load(bytes, "codol_assets_test"));
 		CHECK(zone.warnings().empty());
+		anim_tests::check_anim_zone(zone, anims);
 		z::MaterialView material;
 		CHECK(z::read_material(zone, zone.find_asset(c1::ASSET_TYPE_MATERIAL, "wc/codol_unit"), material));
 		CHECK(material.techsetName == "wc_l_sm_r0c0" && material.textures.size() == 2 && material.raw.surfaceTypeBits == 0x10 && material.raw.sortKey == 1);
@@ -479,6 +488,9 @@ namespace
 	}
 }
 
+#include "test_sounds.inc"
+#include "test_fx.inc"
+
 int main()
 {
 	std::error_code ec;
@@ -488,11 +500,17 @@ int main()
 	test_iwd(scratch);
 	test_materials();
 	test_models();
+	anim_tests::test_anims();
+	test_sound_files();
+	test_sound_zone(scratch);
+	test_fx(scratch);
 	const char* env = std::getenv("CODOL_ASSETS_GAME_DIR");
 	const fs::path install = env && *env ? env : CODOL_ASSETS_GAME_DIR;
 	if (fs::exists(install / "C1.exe", ec))
 	{
 		test_install(install, scratch);
+		test_sounds_install(install);
+		test_fx_install(install);
 	}
 	else
 	{
