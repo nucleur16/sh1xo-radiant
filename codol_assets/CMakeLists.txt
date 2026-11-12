@@ -65,6 +65,10 @@ if(CODOL_ASSETS_BUILD_TOOLS)
 	add_executable(codol_asset_probe tools/asset_probe.cpp)
 	target_link_libraries(codol_asset_probe PRIVATE codol_assets)
 	codol_assets_options(codol_asset_probe)
+
+	add_executable(codol_asset_verify tools/asset_verify.cpp)
+	target_link_libraries(codol_asset_verify PRIVATE codol_assets)
+	codol_assets_options(codol_asset_verify)
 endif()
 
 if(CODOL_ASSETS_BUILD_TESTS)
