@@ -1027,124 +1027,6 @@ namespace editor::ui
 		}).detach();
 	}
 
-	// Install: the package of the last build goes where the game reads it. Zones to <install>\usermaps\<map>\ ( client
-	// and server read that folder ), the level scripts to the server's script folder. Both destinations can be given
-	// ( map_install <zone folder> [script folder] ), which is how a server on another path is served.
-	void install_map(const std::string& zone_to, const std::string& scripts_to)
-	{
-		auto& s = get_scene();
-
-		if (!s.open || s.map_file.empty())
-		{
-			ImGui::Toast(ImGuiToastType_Warning, "Install", "Open the map and build it first.");
-			return;
-		}
-
-		const std::string name = to_utf8(s.map_file.stem());
-		const auto package = std::filesystem::u8path(utils::fs::get_basepath()) / "compiled" / name;
-		std::error_code ec;
-
-		if (!std::filesystem::is_regular_file(package / "zone" / (name + ".ff"), ec))
-		{
-			ImGui::Toast(ImGuiToastType_Warning, "Install", ("compiled\\" + name + "\\zone\\" + name + ".ff is not there: File > Build map first.").c_str(), 6000);
-			return;
-		}
-
-		const std::string install = components::codol_game::install_path();
-		std::filesystem::path zone_dir = !zone_to.empty() ? std::filesystem::u8path(zone_to) : install.empty() ? std::filesystem::path() : std::filesystem::u8path(install) / "usermaps" / name;
-
-		std::filesystem::path script_dir;
-		if (!scripts_to.empty())
-		{
-			script_dir = std::filesystem::u8path(scripts_to);
-		}
-		else if (dvars::codol_script_root && dvars::codol_script_root->current.string && *dvars::codol_script_root->current.string)
-		{
-			script_dir = std::filesystem::u8path(dvars::codol_script_root->current.string);
-		}
-
-		if (zone_dir.empty())
-		{
-			ImGui::Toast(ImGuiToastType_Error, "Install", "The CoDOL install folder is not set ( File > Settings ).", 6000);
-			return;
-		}
-
-		int copied = 0, failed = 0;
-		const auto copy = [&](const std::filesystem::path& from, const std::filesystem::path& to)
-		{
-			std::error_code error;
-			std::filesystem::create_directories(to.parent_path(), error);
-			std::filesystem::copy_file(from, to, std::filesystem::copy_options::overwrite_existing, error);
-
-			if (error)
-			{
-				failed++;
-				game::printf_to_console("^1[CoDOL] install: %s: %s\n", to_utf8(to).c_str(), error.message().c_str());
-			}
-			else
-			{
-				copied++;
-				game::printf_to_console("[CoDOL] install: %s\n", to_utf8(to).c_str());
-			}
-		};
-
-		for (const auto& entry : std::filesystem::directory_iterator(package / "zone", ec))
-		{
-			if (entry.is_regular_file() && entry.path().extension() == ".ff")
-			{
-				copy(entry.path(), zone_dir / entry.path().filename());
-			}
-		}
-
-		// the streamed sounds of the project: next to the game's archives. Only into the install itself - a zone
-		// folder given by hand says nothing about where main\ is
-		for (const auto& entry : std::filesystem::directory_iterator(package / "main", ec))
-		{
-			if (!entry.is_regular_file() || entry.path().extension() != ".iwd")
-			{
-				continue;
-			}
-
-			if (zone_to.empty() && !install.empty())
-			{
-				copy(entry.path(), std::filesystem::u8path(install) / "main" / entry.path().filename());
-			}
-			else
-			{
-				game::printf_to_console("^3[CoDOL] install: compiled\\%s\\main\\%s ( streamed sounds ) belongs into the game's main folder: not copied, the zone folder was given by hand\n",
-					name.c_str(), to_utf8(entry.path().filename()).c_str());
-			}
-		}
-
-		if (!script_dir.empty())
-		{
-			const auto from = package / "scripts";
-
-			for (const auto& entry : std::filesystem::recursive_directory_iterator(from, ec))
-			{
-				if (entry.is_regular_file())
-				{
-					copy(entry.path(), script_dir / std::filesystem::relative(entry.path(), from, ec));
-				}
-			}
-		}
-		else
-		{
-			game::printf_to_console("^3[CoDOL] install: the server's script folder is not set ( File > Settings, codol_script_root ): the level scripts in compiled\\%s\\scripts were not copied\n", name.c_str());
-		}
-
-		game::printf_to_console("[CoDOL] install: to play, start the lobby with CODOL_FORCE_MAP=%s; for the create-room list see compiled\\%s\\presence\\INSTALL.txt\n", name.c_str(), name.c_str());
-
-		if (failed)
-		{
-			ImGui::Toast(ImGuiToastType_Error, "Install", (std::to_string(failed) + " files could not be written, see the console.").c_str(), 8000);
-		}
-		else
-		{
-			ImGui::Toast(ImGuiToastType_Success, "Install", ("Installed " + name + ": " + std::to_string(copied) + " files.").c_str(), 6000);
-		}
-	}
-
 	void close_map(const bool force)
 	{
 		guarded(force, [] { get_scene().close(); });
@@ -1281,14 +1163,15 @@ namespace editor::ui
 			build_map(true);
 		}
 
-		if (ImGui::MenuItem("Install the built map into the game", nullptr, false, s.open))
+		if (ImGui::MenuItem("Install the built map ..", nullptr, false, s.open))
 		{
-			install_map({}, {});
+			open_install_window();
 		}
 
 		if (ImGui::IsItemHovered())
 		{
-			ImGui::SetTooltip("Copies the zones of the last build to <install>\\usermaps\\<map>\\ and the level scripts to the server's\nscript folder ( File > Settings ). Files of an earlier install of the same map are replaced.");
+			ImGui::SetTooltip("Where the package of the last build goes: the zones to <game>\\usermaps\\<map>\\, the level scripts to the server's script\n"
+				"folder, and - when asked for - the map into the create-room list. Replaced files are kept as backups; Uninstall undoes it.");
 		}
 
 		if (ImGui::MenuItem("Compile map to a fastfile", nullptr, false, s.open))
@@ -1540,9 +1423,51 @@ namespace editor::ui
 		});
 
 		// map_install [zone folder] [script folder]
+		// map_install [zone folder] [script folder] [game=<folder>] [scripts=<folder>] [zones=<folder>] [list]
+		//   without arguments: the folders of File > Settings. game=: zones to <folder>\usermaps\<map>, the sound archive
+		//   to <folder>\main; with "list" the map is added to the create-room list of that game folder.
 		command::register_command("map_install", [](args_t args)
 		{
-			if (need_map()) { install_map(args.size() > 1 ? args[1] : std::string(), args.size() > 2 ? args[2] : std::string()); }
+			if (!need_map()) { return; }
+
+			// map_install window: the window of File > Install the built map ..
+			if (args.size() > 1 && args[1] == "window") { open_install_window(); return; }
+
+			install_request request;
+			bool keywords = false;
+			std::vector<std::string> plain;
+
+			for (std::size_t i = 1; i < args.size(); i++)
+			{
+				const std::string& a = args[i];
+				if (a.rfind("game=", 0) == 0) { request.game = a.substr(5); keywords = true; }
+				else if (a.rfind("scripts=", 0) == 0) { request.script_dir = a.substr(8); keywords = true; }
+				else if (a.rfind("zones=", 0) == 0) { request.zone_dir = a.substr(6); keywords = true; }
+				else if (a == "list") { request.list = true; keywords = true; }
+				else { plain.push_back(a); }
+			}
+
+			if (!keywords)
+			{
+				install_map(plain.size() > 0 ? plain[0] : std::string(), plain.size() > 1 ? plain[1] : std::string());
+				return;
+			}
+
+			if (!plain.empty() && request.zone_dir.empty()) { request.zone_dir = plain[0]; }
+			if (plain.size() > 1 && request.script_dir.empty()) { request.script_dir = plain[1]; }
+			install_map(request);
+		});
+
+		// map_list [game folder]: the create-room list of a game folder ( read only )
+		command::register_command("map_list", [](args_t args)
+		{
+			print_map_list(args.size() > 1 ? args[1] : std::string());
+		});
+
+		// map_uninstall [map]: undoes what map_install wrote ( compiled\<map>\work\installed.txt )
+		command::register_command("map_uninstall", [](args_t args)
+		{
+			uninstall_map(args.size() > 1 ? args[1] : std::string());
 		});
 
 		command::register_command("map_close", [](args_t) { close_map(true); });

@@ -104,7 +104,20 @@ namespace editor::ui
 	void new_map(const std::string& name, bool force = false);
 	void build_map(bool fast);
 	void add_gameplay_entities();
-	void install_map(const std::string& zone_to, const std::string& scripts_to);
+	// install.cpp: the package of the last build to where the game reads it, and out again
+	struct install_request
+	{
+		std::string game;			// the game folder: usermaps\<map>\, main\, and the create-room list
+		std::string zone_dir;		// a zone folder by hand instead of <game>\usermaps\<map>
+		std::string script_dir;		// the server's script folder; empty: no scripts
+		bool list = false;			// add the map to the create-room list of `game`
+	};
+	void install_map(const install_request& request);
+	void install_map(const std::string& zone_to, const std::string& scripts_to);	// empty: the folders of File > Settings
+	void uninstall_map(const std::string& map);										// empty: the open map
+	void print_map_list(const std::string& game_folder);							// empty: the install of File > Settings
+	void open_install_window();
+	void draw_install_window();
 	void close_map(bool force = false);
 	void exit_editor();
 

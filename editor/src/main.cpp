@@ -595,6 +595,7 @@ namespace editor
 			ui::draw_surface_window();
 			ui::draw_create_entity_popup();
 			ui::draw_modals();
+			ui::draw_install_window();
 
 			// map name and the modified mark in the title bar
 			if (std::string title = get_scene().title(); title != g_title)
