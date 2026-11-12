@@ -169,6 +169,7 @@ namespace codol::bsp
 	{
 		std::map<std::string, std::string, std::less<>> material_zone;		// material name -> fast file ( relative to the install )
 		std::map<std::string, std::string, std::less<>> model_zone;			// xmodel that is a top level asset -> fast file
+		std::map<std::string, std::string, std::less<>> nested_model_zone;	// xmodel nested in another asset ( a map's gfx_map ) -> fast file
 		std::map<std::string, clip_material_info, std::less<>> clip_materials;
 		std::map<std::string, std::string, std::less<>> image_zone;			// image with pixels in a zone -> fast file
 
@@ -183,6 +184,7 @@ namespace codol::bsp
 	{
 		float mid[3] = {}, half[3] = {}, radius = 0;	// its box, in model space
 		int coll_surfs = 0;							// > 0: it has collision
+		bool nested = false;							// written again from a model nested in another asset
 	};
 
 	// what the compiler has to know about a world material

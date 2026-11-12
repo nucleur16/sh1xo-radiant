@@ -45,7 +45,7 @@ namespace codol::bsp
 				}
 				count++;
 			}
-			return format("codol_bsp catalog 4 %zu %016llx", count, static_cast<unsigned long long>(hash));
+			return format("codol_bsp catalog 5 %zu %016llx", count, static_cast<unsigned long long>(hash));
 		}
 	}
 
@@ -100,6 +100,10 @@ namespace codol::bsp
 			{
 				model_zone[f[1]] = f[2];
 			}
+			else if (f.size() >= 3 && f[0] == "n")
+			{
+				nested_model_zone[f[1]] = f[2];
+			}
 			else if (f.size() >= 3 && f[0] == "i")
 			{
 				image_zone[f[1]] = f[2];
@@ -129,6 +133,10 @@ namespace codol::bsp
 		for (const auto& [name, z] : model_zone)
 		{
 			out << "x\t" << name << "\t" << z << "\n";
+		}
+		for (const auto& [name, z] : nested_model_zone)
+		{
+			out << "n\t" << name << "\t" << z << "\n";
 		}
 		for (const auto& [name, z] : image_zone)
 		{
@@ -190,6 +198,10 @@ namespace codol::bsp
 				else if (r.type == c1::ASSET_TYPE_XMODEL && top.count(r.header))
 				{
 					model_zone.emplace(name, relative);
+				}
+				else if (r.type == c1::ASSET_TYPE_XMODEL)
+				{
+					nested_model_zone.emplace(name, relative);		// e.g. a static model inside a map's gfx_map
 				}
 				else if (r.type == c1::ASSET_TYPE_IMAGE)
 				{
