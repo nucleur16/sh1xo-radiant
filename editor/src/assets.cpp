@@ -1355,7 +1355,8 @@ namespace editor::assets
 
 		const std::string wanted = clean_name(map);
 
-		if (wanted != g.project)
+		// the same map again keeps the project that was chosen for it ( asset_project )
+		if (wanted != g.project && (map != g.project_map || g.project.empty()))
 		{
 			auto& s = get_scene();
 
@@ -2230,6 +2231,12 @@ namespace editor::assets
 			g.compile_problems.clear();
 			close_dialogs();
 		}
+		else if (s.open && !g.busy && g.project_map != s.map_name)
+		{
+			// a map was opened while a build of another project ran: its project is chosen now
+			g.project_map = s.map_name;
+			set_project({});
+		}
 
 		draw_windows();
 	}
@@ -2268,8 +2275,14 @@ namespace editor::assets
 				set_project(args[1] == "default" ? std::string() : args[1]);
 			}
 
-			game::printf_to_console("project %s: %s; zone %s%s\n", g.project.empty() ? "( none: open a map )" : g.project.c_str(), to_utf8(project_dir()).c_str(),
-				to_utf8(zone_file().filename()).c_str(), zone_exists() ? "" : " ( not built )");
+			if (g.project.empty())
+			{
+				game::printf_to_console("no project: open a map ( its project is mod\\<map> next to the editor )\n");
+				return;
+			}
+
+			game::printf_to_console("project %s: %s; zone %s%s\n", g.project.c_str(), to_utf8(project_dir()).c_str(), to_utf8(zone_file().filename()).c_str(),
+				zone_exists() ? "" : " ( not built )");
 		});
 
 		command::register_command("asset_list", [](args_t)
