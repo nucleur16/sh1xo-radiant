@@ -128,6 +128,7 @@ namespace codol::zone
 			std::vector<AllocKey> allocOrdinals;					// g_streamPos stores that are relocation targets
 			std::vector<ScriptRef> scriptRefs;						// u16 fields that hold an index into the zone's script string list
 			bool modified = false;
+			std::shared_ptr<const Unit> importedFrom;				// the unit of a donor zone this one is an unchanged copy of
 
 			const std::uint8_t* data(const Chunk& c) const
 			{
@@ -884,7 +885,7 @@ namespace codol::zone
 
 		void build(const Capture& capture);
 		Status import(const ZoneEditor::Impl& donor, std::size_t donorIndex, std::size_t position, bool withDependencies,
-			std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& strings, std::shared_ptr<Unit>& imported) const;
+			std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& strings, std::shared_ptr<Unit>& imported, bool closure = false) const;
 		void set_script_strings(const std::vector<std::string>& strings);
 	};
 
@@ -1592,12 +1593,13 @@ namespace codol::zone
 
 	// copies donor asset `donorIndex` into `working` in front of `position`; pointers that leave the asset are re-targeted
 	Status ZoneEditor::Impl::import(const ZoneEditor::Impl& donor, const std::size_t donorIndex, std::size_t position, const bool withDependencies,
-		std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& scriptList, std::shared_ptr<Unit>& imported) const
+		std::vector<std::shared_ptr<Unit>>& working, std::vector<std::string>& scriptList, std::shared_ptr<Unit>& imported, const bool closure) const
 	{
 		const Unit& source = *donor.assets[donorIndex];
 		const std::string what = describe(source, donorIndex) + " of zone '" + donor.name + "'";
 		auto unit = std::make_shared<Unit>(source);
 		unit->modified = true;
+		unit->importedFrom = donor.assets[donorIndex];
 		imported = unit;
 		for (Chunk& c : unit->chunks)
 		{
@@ -1692,7 +1694,33 @@ namespace codol::zone
 					}
 					std::shared_ptr<Unit> dependency;
 					const auto at = static_cast<std::size_t>(std::find(working.begin(), working.end(), unit) - working.begin());
-					if (const Status s = import(donor, other, at, true, working, scriptList, dependency); !s)
+					if (const Status s = import(donor, other, at, true, working, scriptList, dependency, closure); !s)
+					{
+						return s;
+					}
+					here = dependency.get();
+					indexed = false;
+				}
+				reloc.unit = here;
+				continue;
+			}
+			if (closure && other != npos && (reloc.kind == TargetKind::CHUNK || reloc.kind == TargetKind::ALLOC))
+			{
+				// data of another asset of the donor: that asset comes along ( once ), the pointer keeps its place in it
+				const Unit* here = nullptr;
+				for (const auto& candidate : working)
+				{
+					if (candidate->importedFrom.get() == reloc.unit)
+					{
+						here = candidate.get();
+						break;
+					}
+				}
+				if (!here)
+				{
+					std::shared_ptr<Unit> dependency;
+					const auto at = static_cast<std::size_t>(std::find(working.begin(), working.end(), unit) - working.begin());
+					if (const Status s = import(donor, other, at, true, working, scriptList, dependency, true); !s)
 					{
 						return s;
 					}
@@ -1743,6 +1771,120 @@ namespace codol::zone
 			return s;
 		}
 		impl_->assets = std::move(working);
+		impl_->set_script_strings(strings);
+		impl_->idsDirty = true;
+		impl_->hints.clear();
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::add_asset_closure(const ZoneEditor& donor, const std::size_t donorIndex, const std::size_t position)
+	try
+	{
+		if (!loaded() || !donor.loaded() || donorIndex >= donor.impl_->assets.size())
+		{
+			return Status::error("no such asset");
+		}
+		std::vector<std::shared_ptr<Unit>> working = impl_->assets;
+		std::vector<std::string> strings = impl_->scriptStrings;
+		std::shared_ptr<Unit> imported;
+		if (const Status s = impl_->import(*donor.impl_, donorIndex, position, true, working, strings, imported, true); !s)
+		{
+			return s;
+		}
+		impl_->assets = std::move(working);
+		impl_->set_script_strings(strings);
+		impl_->idsDirty = true;
+		impl_->hints.clear();
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	Status ZoneEditor::add_new_asset(const std::int32_t type, const std::string_view name, const std::span<const ZoneNewPiece> pieces, const std::size_t position)
+	try
+	{
+		if (!loaded())
+		{
+			return Status::error("no zone loaded");
+		}
+		if (type < 0 || type >= c1::ASSET_TYPE_COUNT || pieces.empty() || pieces[0].bytes.size() != c1::XASSET_HEADER_SIZE[type])
+		{
+			return Status::error("a new asset needs a known type and its header as the first piece");
+		}
+		auto unit = std::make_shared<Unit>();
+		unit->type = type;
+		unit->name = std::string(name);
+		unit->modified = true;
+		std::vector<std::string> strings = impl_->scriptStrings;
+		for (std::uint32_t k = 0; k < pieces.size(); k++)
+		{
+			const ZoneNewPiece& piece = pieces[k];
+			if (piece.bytes.empty() || (piece.string && piece.bytes.back() != 0))
+			{
+				return Status::error("a piece of a new asset cannot be empty, a string has to end with its terminator");
+			}
+			unit->add_chunk(piece.bytes, piece.string);
+			for (const ZoneNewPointer& p : piece.pointers)
+			{
+				if (p.offset > piece.bytes.size() || piece.bytes.size() - p.offset < 4)
+				{
+					return Status::error("a pointer field does not lie inside its piece");
+				}
+				Reloc reloc;
+				reloc.chunk = k;
+				reloc.offset = p.offset;
+				if (p.asset != npos)
+				{
+					if (p.asset >= impl_->assets.size())
+					{
+						return Status::error("a pointer names an asset that is not part of the zone");
+					}
+					reloc.kind = TargetKind::SLOT;
+					reloc.unit = impl_->assets[p.asset].get();
+					reloc.targetOffset = 8;
+				}
+				else
+				{
+					if (p.piece >= pieces.size() || p.pieceOffset > pieces[p.piece].bytes.size())
+					{
+						return Status::error("a pointer leads outside the pieces of its asset");
+					}
+					reloc.kind = TargetKind::CHUNK;
+					reloc.unit = unit.get();
+					reloc.index = p.piece;
+					reloc.targetOffset = p.pieceOffset;
+				}
+				unit->relocs.push_back(reloc);
+			}
+			for (const auto& [offset, text] : piece.scriptStrings)
+			{
+				if (offset > piece.bytes.size() || piece.bytes.size() - offset < 2)
+				{
+					return Status::error("a script string field does not lie inside its piece");
+				}
+				std::size_t here = static_cast<std::size_t>(std::find(strings.begin(), strings.end(), text) - strings.begin());
+				if (here == strings.size())
+				{
+					if (here >= 0xFFFF)
+					{
+						return Status::error("the script string list is full ( 65535 strings )");
+					}
+					strings.push_back(text);
+				}
+				const auto index = static_cast<std::uint16_t>(here);
+				std::memcpy(unit->local.data() + unit->chunks[k].source + offset, &index, 2);
+				unit->scriptRefs.push_back({ k, offset });
+			}
+		}
+		std::sort(unit->relocs.begin(), unit->relocs.end(),
+			[](const Reloc& a, const Reloc& b) { return a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset; });
+		impl_->assets.insert(impl_->assets.begin() + static_cast<std::ptrdiff_t>(std::min(position, impl_->assets.size())), std::move(unit));
 		impl_->set_script_strings(strings);
 		impl_->idsDirty = true;
 		impl_->hints.clear();
