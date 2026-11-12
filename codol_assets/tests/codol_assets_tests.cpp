@@ -673,6 +673,7 @@ namespace
 
 #include "test_sounds.inc"
 #include "test_fx.inc"
+#include "test_fx_preview.inc"
 
 int main()
 {
@@ -687,6 +688,7 @@ int main()
 	test_sound_files();
 	test_sound_zone(scratch);
 	test_fx(scratch);
+	test_fx_preview();
 	const char* env = std::getenv("CODOL_ASSETS_GAME_DIR");
 	const fs::path install = env && *env ? env : CODOL_ASSETS_GAME_DIR;
 	if (fs::exists(install / "C1.exe", ec))

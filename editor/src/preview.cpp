@@ -13,6 +13,7 @@
 #include <codol_assets/model.hpp>
 #include <codol_assets/sound.hpp>
 #include <codol_assets/bitmap.hpp>
+#include <codol_assets/fx_preview.hpp>
 
 #include <mmsystem.h>
 
@@ -40,6 +41,7 @@ namespace editor::preview
 			image,
 			anim,
 			sound,
+			fx,
 		};
 
 		// ---- math: a bone is an offset and three axes ( rows ), a point goes p * R + o ------------------------------
@@ -195,6 +197,15 @@ namespace editor::preview
 			std::vector<sound_row> sounds;
 			std::string sound_message;
 			std::string zone_alias, zone_name;
+
+			// effect
+			ca::EditorEffect fx;
+			std::string fx_zone;						// asked for: a zone of the game or a .ff; empty: the project's .efx, else zones
+			float fx_time = 0.0f, fx_duration = 1.0f;
+			bool fx_loop = true;
+			std::vector<std::string> fx_skipped;
+			std::size_t fx_count = 0, fx_missing = 0;	// particles drawn last frame; of them without a picture
+			std::map<std::string, IDirect3DTexture9*> fx_pictures;	// owned by the renderer
 		};
 
 		state_t g;
@@ -222,6 +233,7 @@ namespace editor::preview
 			g.meshes.clear();
 			g.mesh_materials.clear();
 			g.picture = nullptr;
+			g.fx_pictures.clear();
 		}
 
 		void clear_subject(const bool renderer_alive = true)
@@ -248,6 +260,12 @@ namespace editor::preview
 			g.image_info.clear();
 			g.shown_frame = -1.0f;
 			g.frame = 0.0f;
+			g.fx = {};
+			g.fx_zone.clear();
+			g.fx_time = 0.0f;
+			g.fx_skipped.clear();
+			g.fx_pictures.clear();
+			g.fx_count = g.fx_missing = 0;
 		}
 
 		void begin(const kind what)
@@ -1255,11 +1273,451 @@ namespace editor::preview
 			ImGui::Image(texture, size);
 		}
 
+		// ---- effect ------------------------------------------------------------------------------------------
+		// An effect of the project is its .efx; one of the game is read out of a zone ( FxEffectDef ) and turned back
+		// into the editor's form ( codol_assets read_fx / extract_fx ), so both are simulated the same way.
+		bool fx_from_zone(const fs::path& file, const std::string& name, std::string& why)
+		{
+			cz::ClientKey key;
+			if (const auto status = key.load_from_exe(fs::u8path(components::codol_game::install_path()) / "C1.exe"); !status)
+			{
+				why = status.message;
+				return false;
+			}
+
+			cz::Zone zone;
+			if (const auto status = zone.open(file, key); !status)
+			{
+				why = to_utf8(file.filename()) + ": " + status.message;
+				return false;
+			}
+
+			const auto header = zone.find_asset(codol::c1::ASSET_TYPE_FX, lower(name));
+			ca::CompiledFx compiled;
+
+			if (!header || !ca::read_fx(zone, header, compiled))
+			{
+				why = to_utf8(file.filename()) + " has no effect " + name;
+				return false;
+			}
+
+			if (const auto status = ca::extract_fx(compiled, g.fx); !status)
+			{
+				why = name + ": " + status.message;
+				return false;
+			}
+
+			return true;
+		}
+
+		void make_fx()
+		{
+			const auto install = fs::u8path(components::codol_game::install_path());
+			std::error_code ec;
+			std::string why;
+			bool found = false;
+			g.fx = {};
+
+			const auto zone_path = [&](const std::string& zone) -> fs::path
+			{
+				if (lower(zone).size() > 3 && lower(zone).substr(zone.size() - 3) == ".ff") { return fs::u8path(zone); }
+
+				for (const auto& dir : { install / "client_shipRetail" / "patch", install / "client_shipRetail" / "chinese" })
+				{
+					if (fs::is_regular_file(dir / (zone + ".ff"), ec)) { return dir / (zone + ".ff"); }
+				}
+
+				return {};
+			};
+
+			if (!g.fx_zone.empty())
+			{
+				const fs::path file = zone_path(g.fx_zone);
+				found = !file.empty() && fx_from_zone(file, g.name, why);
+				if (file.empty()) { why = "there is no zone " + g.fx_zone; }
+				if (found) { g.note = "read out of " + to_utf8(file.filename()) + " ( the compiled effect, turned back into curves )"; }
+			}
+			else
+			{
+				// the project's source file, else the zones the game would have it in: the map's, the common ones
+				const fs::path source = assets::project_dir() / "fx" / fs::u8path(g.name + ".efx");
+
+				if (!assets::project().empty() && fs::is_regular_file(source, ec))
+				{
+					if (const auto status = ca::load_efx(source, g.fx); status)
+					{
+						found = true;
+						g.note = "the project's fx\\" + g.name + ".efx";
+					}
+					else
+					{
+						why = to_utf8(source.filename()) + ": " + status.message;
+					}
+				}
+				else
+				{
+					std::vector<std::string> zones;
+					if (!get_scene().map_name.empty()) { zones.push_back(get_scene().map_name); }
+					zones.insert(zones.end(), { "common_mp", "common_gametype_mp", "code_post_gfx_mp" });
+
+					for (const auto& zone : zones)
+					{
+						const fs::path file = zone_path(zone);
+
+						if (!file.empty() && fx_from_zone(file, g.name, why))
+						{
+							found = true;
+							g.note = "read out of " + to_utf8(file.filename()) + " ( the compiled effect, turned back into curves )";
+							break;
+						}
+					}
+
+					if (!found) { why = "no effect " + g.name + ": neither fx\\" + g.name + ".efx of the project nor in the zone of the map or the common zones ( name a zone: asset_preview fx <name> <zone> )"; }
+				}
+			}
+
+			if (!found)
+			{
+				g.error = why;
+				return;
+			}
+
+			// An element that names no atlas size of its own draws a material with an atlas all the same: the effects
+			// compiler takes columns and rows from the material ( the table of the install's materials, made with the
+			// first effect build ), and so does the preview - else a cell would show the whole sheet.
+			{
+				ca::FxAtlasLibrary atlas;
+
+				if (atlas.load(assets::project_dir().parent_path() / "codol_fxatlas.txt"))
+				{
+					for (auto& e : g.fx.elems)
+					{
+						int columns = 1, rows = 1;
+
+						if (e.atlasColIndexBits == 0 && e.atlasRowIndexBits == 0 && !e.visuals.empty() && atlas.find(e.visuals[0], columns, rows))
+						{
+							while ((1 << e.atlasColIndexBits) < columns) { e.atlasColIndexBits++; }
+							while ((1 << e.atlasRowIndexBits) < rows) { e.atlasRowIndexBits++; }
+						}
+					}
+				}
+			}
+
+			g.fx_duration = ca::fx_preview_duration(g.fx);
+			g.fx_time = 0.0f;
+
+			// what the camera turns around: everything the effect reaches during one pass
+			float mins[3] = { 1e9f, 1e9f, 1e9f }, maxs[3] = { -1e9f, -1e9f, -1e9f };
+			ca::FxPreview moment;
+
+			for (int k = 0; k <= 24; k++)
+			{
+				ca::simulate_fx(g.fx, g.fx_duration * static_cast<float>(k) / 24.0f, moment);
+
+				for (const auto& p : moment.particles)
+				{
+					const float reach = std::max(p.width, p.height) * 0.5f;
+					for (int a = 0; a < 3; a++)
+					{
+						// what falls below the ground the effect stands on is not what one wants to look at
+						const float at = a == 2 ? std::max(p.position[a], -8.0f) : p.position[a];
+						mins[a] = std::min(mins[a], at - reach);
+						maxs[a] = std::max(maxs[a], at + reach);
+					}
+				}
+			}
+
+			ca::simulate_fx(g.fx, 0.0f, moment);
+			g.fx_skipped = moment.skipped;
+
+			if (mins[0] > maxs[0])
+			{
+				g.centre = {};
+				g.radius = 64.0f;
+			}
+			else
+			{
+				g.centre = { (mins[0] + maxs[0]) * 0.5f, (mins[1] + maxs[1]) * 0.5f, (mins[2] + maxs[2]) * 0.5f };
+				const float dx = maxs[0] - mins[0], dy = maxs[1] - mins[1], dz = maxs[2] - mins[2];
+				g.radius = std::clamp(0.5f * std::sqrt(dx * dx + dy * dy + dz * dz), 8.0f, 4000.0f);
+			}
+		}
+
+		// a material is drawn additively when its name says light: the editor does not read blend functions here
+		bool fx_additive(const std::string_view material)
+		{
+			for (const char* word : { "spark", "fire", "flare", "glow", "flash", "light", "tracer", "_add", "ember", "muzzle" })
+			{
+				if (material.find(word) != std::string_view::npos) { return true; }
+			}
+
+			return false;
+		}
+
+		// The effect at g.fx_time: every particle as a textured quad, far ones first, in the window's draw list. The
+		// camera turns around the effect like the one of the 3D pictures.
+		void draw_fx(const int w, const int h)
+		{
+			auto& s = get_scene();
+			auto* dl = ImGui::GetWindowDrawList();
+			const ImVec2 at = ImGui::GetCursorScreenPos();
+			const ImVec2 end(at.x + static_cast<float>(w), at.y + static_cast<float>(h));
+			dl->AddRectFilled(at, end, IM_COL32(42, 44, 48, 255));
+			dl->PushClipRect(at, end, true);
+
+			view::camera cam;
+			cam.fov_x = 50.0f;
+			cam.pitch = g.pitch;
+			cam.yaw = g.yaw;
+			const auto axes = cam.axes();
+			const float tan_half = std::tan(cam.fov_x * 0.5f * PI / 180.0f);
+			const float distance = g.radius / std::max(tan_half * std::min(1.0f, static_cast<float>(h) / static_cast<float>(w)), 0.05f) * 1.25f * g.zoom;
+			const float eye[3] = { g.centre.x - axes.forward.x * distance, g.centre.y - axes.forward.y * distance, g.centre.z - axes.forward.z * distance };
+			const float fwd[3] = { axes.forward.x, axes.forward.y, axes.forward.z }, right[3] = { -axes.left.x, -axes.left.y, -axes.left.z }, up[3] = { axes.up.x, axes.up.y, axes.up.z };
+			const float focal = static_cast<float>(w) * 0.5f / tan_half;
+			const float cx = at.x + static_cast<float>(w) * 0.5f, cy = at.y + static_cast<float>(h) * 0.5f;
+
+			const auto project = [&](const float p[3], ImVec2& out) -> float
+			{
+				const float d[3] = { p[0] - eye[0], p[1] - eye[1], p[2] - eye[2] };
+				const float z = d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2];
+				if (z < 0.5f) { return z; }
+				out = ImVec2(cx + (d[0] * right[0] + d[1] * right[1] + d[2] * right[2]) / z * focal, cy - (d[0] * up[0] + d[1] * up[1] + d[2] * up[2]) / z * focal);
+				return z;
+			};
+
+			// the ground the effect stands on: a grid of 32 units through its origin
+			{
+				// at most a dozen lines each way: a tall plume does not get a carpet
+				const float step = 32.0f * std::max(1.0f, std::ceil(g.radius / 32.0f / 6.0f));
+				const float reach = std::max(2.0f * step, std::ceil(g.radius / step) * step);
+				for (float v = -reach; v <= reach + 0.5f; v += step)
+				{
+					const float a[3] = { v, -reach, 0 }, b[3] = { v, reach, 0 }, c[3] = { -reach, v, 0 }, d[3] = { reach, v, 0 };
+					ImVec2 pa, pb, pc, pd;
+					if (project(a, pa) >= 0.5f && project(b, pb) >= 0.5f) { dl->AddLine(pa, pb, v == 0.0f ? IM_COL32(110, 114, 122, 255) : IM_COL32(64, 67, 73, 255)); }
+					if (project(c, pc) >= 0.5f && project(d, pd) >= 0.5f) { dl->AddLine(pc, pd, v == 0.0f ? IM_COL32(110, 114, 122, 255) : IM_COL32(64, 67, 73, 255)); }
+				}
+			}
+
+			static ca::FxPreview moment;
+			ca::simulate_fx(g.fx, g.fx_time, moment);
+
+			struct drawn
+			{
+				const ca::FxParticle* p;
+				float depth;
+			};
+
+			std::vector<drawn> order;
+			order.reserve(moment.particles.size());
+
+			for (const auto& p : moment.particles)
+			{
+				const float d[3] = { p.position[0] - eye[0], p.position[1] - eye[1], p.position[2] - eye[2] };
+				order.push_back({ &p, d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2] });
+			}
+
+			std::sort(order.begin(), order.end(), [](const drawn& a, const drawn& b) { return a.depth > b.depth; });
+
+			g.fx_count = order.size();
+			g.fx_missing = 0;
+			int mode = 0;		// 0: as ImGui blends, 1: additive
+
+			for (const auto& item : order)
+			{
+				const auto& p = *item.p;
+				if (item.depth < 1.0f || p.width <= 0.0f || p.color[3] <= 0.003f) { continue; }
+
+				// the picture of its material ( the colour map, whole: the cell is cut out by the texture coordinates )
+				const std::string material(p.material);
+				auto found = g.fx_pictures.find(material);
+
+				if (found == g.fx_pictures.end())
+				{
+					found = g.fx_pictures.emplace(material, s.renderer.loaded() ? s.renderer.material_thumbnail(material, 512) : nullptr).first;
+				}
+
+				// two edges of the quad, half lengths
+				float e1[3], e2[3], centre[3] = { p.position[0], p.position[1], p.position[2] };
+				const float turn = p.rotation * PI / 180.0f, c = std::cos(turn), sn = std::sin(turn);
+
+				if (p.shape == ca::FxShape::tail || p.shape == ca::FxShape::line)
+				{
+					float along[3] = { p.velocity[0], p.velocity[1], p.velocity[2] };
+					float len = std::sqrt(along[0] * along[0] + along[1] * along[1] + along[2] * along[2]);
+					if (len < 1e-4f) { along[0] = up[0]; along[1] = up[1]; along[2] = up[2]; len = 1.0f; }
+					for (float& v : along) { v /= len; }
+					// across: perpendicular to the way it flies and to the line of sight
+					float across[3] = { along[1] * fwd[2] - along[2] * fwd[1], along[2] * fwd[0] - along[0] * fwd[2], along[0] * fwd[1] - along[1] * fwd[0] };
+					float al = std::sqrt(across[0] * across[0] + across[1] * across[1] + across[2] * across[2]);
+					if (al < 1e-4f) { across[0] = right[0]; across[1] = right[1]; across[2] = right[2]; al = 1.0f; }
+					for (int k = 0; k < 3; k++)
+					{
+						e1[k] = across[k] / al * p.width * 0.5f;
+						e2[k] = along[k] * p.height * 0.5f;
+						centre[k] -= along[k] * p.height * 0.5f;
+					}
+				}
+				else if (p.shape == ca::FxShape::oriented)
+				{
+					// in the plane across the effect's forward axis
+					const float n[3] = { p.normal[0], p.normal[1], p.normal[2] };
+					float a[3] = { n[1], -n[0], 0.0f };
+					if (std::fabs(a[0]) + std::fabs(a[1]) < 1e-4f) { a[0] = 1.0f; a[1] = 0.0f; }
+					const float al = std::sqrt(a[0] * a[0] + a[1] * a[1]);
+					a[0] /= al; a[1] /= al;
+					const float b[3] = { n[1] * a[2] - n[2] * a[1], n[2] * a[0] - n[0] * a[2], n[0] * a[1] - n[1] * a[0] };
+					for (int k = 0; k < 3; k++)
+					{
+						e1[k] = (a[k] * c + b[k] * sn) * p.width * 0.5f;
+						e2[k] = (b[k] * c - a[k] * sn) * p.height * 0.5f;
+					}
+				}
+				else
+				{
+					for (int k = 0; k < 3; k++)
+					{
+						e1[k] = (right[k] * c + up[k] * sn) * p.width * 0.5f;
+						e2[k] = (up[k] * c - right[k] * sn) * p.height * 0.5f;
+					}
+				}
+
+				ImVec2 q[4];
+				bool visible = true;
+				const float sign[4][2] = { { -1, 1 }, { 1, 1 }, { 1, -1 }, { -1, -1 } };		// top left, top right, bottom right, bottom left
+
+				for (int k = 0; k < 4 && visible; k++)
+				{
+					const float corner[3] = { centre[0] + e1[0] * sign[k][0] + e2[0] * sign[k][1], centre[1] + e1[1] * sign[k][0] + e2[1] * sign[k][1], centre[2] + e1[2] * sign[k][0] + e2[2] * sign[k][1] };
+					visible = project(corner, q[k]) >= 0.5f;
+				}
+
+				if (!visible) { continue; }
+
+				const ImU32 colour = IM_COL32(static_cast<int>(p.color[0] * 255.0f), static_cast<int>(p.color[1] * 255.0f), static_cast<int>(p.color[2] * 255.0f), static_cast<int>(p.color[3] * 255.0f));
+				const int wanted = fx_additive(p.material) ? 1 : 0;
+
+				if (wanted != mode)
+				{
+					if (wanted)
+					{
+						dl->AddCallback([](const ImDrawList*, const ImDrawCmd*)
+						{
+							if (game::glob::d3d9_device)
+							{
+								game::glob::d3d9_device->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+								game::glob::d3d9_device->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+							}
+						}, nullptr);
+					}
+					else
+					{
+						dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+					}
+
+					mode = wanted;
+				}
+
+				if (found->second)
+				{
+					dl->AddImageQuad(found->second, q[0], q[1], q[2], q[3], ImVec2(p.u0, p.v0), ImVec2(p.u1, p.v0), ImVec2(p.u1, p.v1), ImVec2(p.u0, p.v1), colour);
+				}
+				else
+				{
+					// no picture ( the material is not in the zones of the open map ): a soft disc of its size and colour
+					g.fx_missing++;
+					const float radius = 0.5f * std::max(std::fabs(q[1].x - q[0].x) + std::fabs(q[1].y - q[0].y), std::fabs(q[3].x - q[0].x) + std::fabs(q[3].y - q[0].y)) * 0.6f;
+					const ImVec2 mid((q[0].x + q[2].x) * 0.5f, (q[0].y + q[2].y) * 0.5f);
+					dl->AddCircleFilled(mid, std::max(radius, 1.0f), (colour & 0x00FFFFFF) | (static_cast<ImU32>(p.color[3] * 110.0f) << 24), 20);
+					dl->AddCircleFilled(mid, std::max(radius * 0.55f, 1.0f), (colour & 0x00FFFFFF) | (static_cast<ImU32>(p.color[3] * 150.0f) << 24), 16);
+				}
+			}
+
+			if (mode)
+			{
+				dl->AddCallback(ImDrawCallback_ResetRenderState, nullptr);
+			}
+
+			dl->PopClipRect();
+
+			// turn with the left button, zoom with the wheel
+			ImGui::InvisibleButton("##preview_fx_orbit", ImVec2(static_cast<float>(w), static_cast<float>(h)));
+
+			if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f))
+			{
+				const auto& io = ImGui::GetIO();
+				g.yaw -= io.MouseDelta.x * 0.5f;
+				g.pitch = std::clamp(g.pitch + io.MouseDelta.y * 0.5f, -5.0f, 89.0f);
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				if (const float wheel = ImGui::GetIO().MouseWheel; wheel != 0.0f)
+				{
+					g.zoom = std::clamp(g.zoom * (wheel > 0.0f ? 0.88f : 1.14f), 0.2f, 6.0f);
+				}
+			}
+		}
+
+		void draw_fx_controls()
+		{
+			if (g.playing)
+			{
+				g.fx_time += ImGui::GetIO().DeltaTime * g.speed;
+
+				if (g.fx_time > g.fx_duration)
+				{
+					if (g.fx_loop) { g.fx_time = std::fmod(g.fx_time, std::max(g.fx_duration, 0.05f)); }
+					else { g.fx_time = g.fx_duration; g.playing = false; }
+				}
+			}
+
+			if (ImGui::Button(g.playing ? "Pause" : "Play", ImVec2(64.0f, 0.0f)))
+			{
+				g.playing = !g.playing;
+				if (g.playing && g.fx_time >= g.fx_duration) { g.fx_time = 0.0f; }
+			}
+
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(std::max(80.0f, ImGui::GetContentRegionAvail().x - 250.0f));
+			if (ImGui::SliderFloat("##fx_time", &g.fx_time, 0.0f, g.fx_duration, "%.2f s")) { g.playing = false; }
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(70.0f);
+			ImGui::DragFloat("##fx_speed", &g.speed, 0.01f, 0.05f, 4.0f, "x %.2f");
+			ImGui::SameLine();
+			ImGui::Checkbox("Loop", &g.fx_loop);
+			ImGui::SameLine();
+			ImGui::TextColored(dim, "%d particles", static_cast<int>(g.fx_count));
+
+			ImGui::PushTextWrapPos(0.0f);
+			ImGui::TextColored(dim, "%s. %d element( s ), one pass %.2f s. A preview by the editor, not the game's effect system: sprites, tails and lines as flat pictures of their material's "
+				"colour map, blended ( added where the material's name says light ), no depth, no lighting.", g.note.c_str(), static_cast<int>(g.fx.elems.size()), g.fx_duration);
+
+			if (g.fx_missing)
+			{
+				ImGui::TextColored(yellow, "%d particle( s ) as plain discs: their material is not in the zones of the open map.", static_cast<int>(g.fx_missing));
+			}
+
+			for (const auto& line : g.fx_skipped)
+			{
+				ImGui::TextColored(yellow, "%s", line.c_str());
+			}
+
+			ImGui::PopTextWrapPos();
+		}
+
 		void make_objects()
 		{
 			g.dirty = false;
 			g.error.clear();
 			auto& s = get_scene();
+
+			if (g.what == kind::fx)
+			{
+				make_fx();
+				return;
+			}
 
 			if (g.what == kind::image)
 			{
@@ -1494,6 +1952,17 @@ namespace editor::preview
 		g.name = to_utf8(csv.filename());
 	}
 
+	void show_fx(const std::string& name, const std::string& zone)
+	{
+		begin(kind::fx);
+		g.name = name;
+		g.fx_zone = zone;
+		g.playing = true;
+		g.speed = 1.0f;
+		g.pitch = 12.0f;
+		g.zoom = 0.75f;
+	}
+
 	bool play_alias(const std::string& alias, const std::string& zone, std::string& message)
 	{
 		// a row of one of the project's csv files first: its source file
@@ -1537,7 +2006,7 @@ namespace editor::preview
 
 	void assets_changed()
 	{
-		if (g.what == kind::model || g.what == kind::material || g.what == kind::anim)
+		if (g.what == kind::model || g.what == kind::material || g.what == kind::anim || g.what == kind::fx)
 		{
 			drop_objects(true);
 			g.dirty = true;
@@ -1551,6 +2020,7 @@ namespace editor::preview
 		g.model_handle = 0;
 		g.meshes.clear();
 		g.picture = nullptr;
+		g.fx_pictures.clear();
 
 		if (g.what == kind::model || g.what == kind::material || g.what == kind::anim)
 		{
@@ -1604,7 +2074,7 @@ namespace editor::preview
 			make_objects();
 		}
 
-		static const char* const words[] = { "", "model", "material", "image", "animation", "sounds" };
+		static const char* const words[] = { "", "model", "material", "image", "animation", "sounds", "effect" };
 		ImGui::TextColored(dim, "%s", words[static_cast<int>(g.what)]);
 		ImGui::SameLine();
 		ImGui::TextUnformatted(g.name.c_str());
@@ -1709,6 +2179,14 @@ namespace editor::preview
 			draw_sounds();
 			break;
 
+		case kind::fx:
+		{
+			const float below = line * (3.6f + static_cast<float>(std::min<std::size_t>(g.fx_skipped.size(), 6)));
+			draw_fx(std::max(64, static_cast<int>(avail.x)), std::max(64, static_cast<int>(avail.y - below)));
+			draw_fx_controls();
+			break;
+		}
+
 		default:
 			break;
 		}
@@ -1742,6 +2220,8 @@ namespace editor::preview
 				if (!file.is_absolute()) { file = assets::project_dir() / "soundaliases" / file; }
 				show_sounds(file);
 			}
+			else if (what == "fx" && !name.empty()) { show_fx(name, args.size() > 3 ? args[3] : std::string()); }
+			else if (what == "time" && !name.empty()) { g.fx_time = static_cast<float>(std::atof(name.c_str())); g.playing = false; }
 			else if (what == "frame" && !name.empty()) { g.frame = static_cast<float>(std::atof(name.c_str())); g.playing = false; }
 			else if (what == "play") { g.playing = true; }
 			else if (what == "pause") { g.playing = false; }
@@ -1756,10 +2236,28 @@ namespace editor::preview
 			{
 				game::printf_to_console("[preview] %s %s: %s%s  frame %.1f of %d, %s, %d meshes, model handle %d\n", what.c_str(), g.name.c_str(), g.error.empty() ? "ok" : g.error.c_str(),
 					g.note.empty() ? "" : ( "  " + g.note ).c_str(), g.frame, static_cast<int>(g.anim.frames.size()), g.playing ? "playing" : "paused", static_cast<int>(g.meshes.size()), g.model_handle);
+
+				if (g.what == kind::fx)
+				{
+					game::printf_to_console("[preview] effect: %d elements, one pass %.2f s, at %.2f s: %d particles ( %d without a picture ), %d elements not drawn\n", static_cast<int>(g.fx.elems.size()),
+						g.fx_duration, g.fx_time, static_cast<int>(g.fx_count), static_cast<int>(g.fx_missing), static_cast<int>(g.fx_skipped.size()));
+					for (const auto& skipped : g.fx_skipped) { game::printf_to_console("[preview]   %s\n", skipped.c_str()); }
+
+					// the first particles, to check a picture against numbers
+					ca::FxPreview moment;
+					ca::simulate_fx(g.fx, g.fx_time, moment);
+					for (std::size_t k = 0; k < moment.particles.size() && k < 4; k++)
+					{
+						const auto& p = moment.particles[k];
+						game::printf_to_console("[preview]   particle %d of element %d: %s at %.1f %.1f %.1f, %.1f x %.1f, colour %.2f %.2f %.2f alpha %.2f, age %.2f of %.2f s\n", p.index, p.element,
+							std::string(p.material).c_str(), p.position[0], p.position[1], p.position[2], p.width, p.height, p.color[0], p.color[1], p.color[2], p.color[3], p.age, p.life);
+					}
+					game::printf_to_console("[preview]   camera around %.1f %.1f %.1f, radius %.1f\n", g.centre.x, g.centre.y, g.centre.z, g.radius);
+				}
 			}
 			else
 			{
-				game::printf_to_console("usage: asset_preview model <xmodel> | material <name> | image <file> | anim <name> [model] | sounds <csv> | frame <n> | play | pause | orbit <yaw> <pitch> [zoom] | status | close\n");
+				game::printf_to_console("usage: asset_preview model <xmodel> | material <name> | image <file> | anim <name> [model] | sounds <csv> | fx <name> [zone | file.ff] | time <seconds> | frame <n> | play | pause | orbit <yaw> <pitch> [zoom] | status | close\n");
 			}
 		});
 
