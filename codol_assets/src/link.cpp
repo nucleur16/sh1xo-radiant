@@ -183,6 +183,26 @@ namespace codol::assets
 			}
 			index = editor.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, name);
 			log.push_back("techset " + name + ": copied from " + t->donorZone + " ( " + std::to_string(editor.asset_count() - before) + " assets with what it shares )");
+			// "<..>_sm_<..>" has a sibling "<..>_hsm_<..>" wherever it is defined: the set the game draws with when it
+			// shadows with hardware shadow maps, found by name. Without it the material gets no dynamic sun shadow.
+			if (const std::size_t at = name.find("_sm_"); at != std::string::npos && index != ZoneEditor::npos)
+			{
+				std::string sibling = name;
+				sibling.replace(at, 4, "_hsm_");
+				if (editor.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, sibling) == ZoneEditor::npos)
+				{
+					const std::size_t theirs = from->find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, sibling);
+					if (theirs != ZoneEditor::npos && editor.add_asset_closure(*from, theirs))
+					{
+						log.push_back("techset " + sibling + ": copied with it ( hardware shadow maps )");
+					}
+					else
+					{
+						log.push_back("techset " + sibling + ": not a top level asset of " + t->donorZone + "; materials with " + name + " get no dynamic sun shadow from this zone alone");
+					}
+					index = editor.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, name);
+				}
+			}
 			return index == ZoneEditor::npos ? Status::error("technique set '" + name + "' did not arrive") : Status{};
 		}
 	};

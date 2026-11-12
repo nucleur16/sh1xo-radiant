@@ -230,6 +230,9 @@ namespace codol::bsp
 		zone_ref material_from(const Zone& donor, zaddr header);
 		zone_ref image_from(const Zone& donor, zaddr header);
 		const Zone* open_zone(const std::string& relative, std::string* why = nullptr);
+		// lit technique sets ( "_sm_" ) that were written without their hardware shadow map sibling ( "_hsm_" ): no zone
+		// the material came from has it. Such a material shows no dynamic sun shadow.
+		const std::vector<std::string>& technique_sets_without_shadow_sibling() const;
 		const ZoneEditor* open_editor(const std::string& relative, std::string* why = nullptr);
 
 		struct state;

@@ -407,6 +407,21 @@ namespace codol::bsp
 		}
 		write_scripts(ctx);
 
+		{
+			// lit technique sets come with their hardware shadow map sibling ( "_sm_" -> "_hsm_" ); where no zone had one
+			std::size_t siblings = 0;
+			for (std::size_t a = 0; a < editor.asset_count(); a++)
+			{
+				const zone::EditorAsset asset = editor.asset(a);
+				siblings += asset.type == c1::ASSET_TYPE_TECHNIQUE_SET && asset.name.find("_hsm_") != std::string::npos;
+			}
+			rep.notes.push_back(format("materials: %zu technique sets for hardware shadow maps ( _hsm_ ) came with the lit ones", siblings));
+			for (const std::string& name : importer.technique_sets_without_shadow_sibling())
+			{
+				rep.warnings.push_back("technique set " + name + " has no hardware shadow map sibling ( _hsm_ ) in the zone it came from: its materials get no dynamic sun shadow");
+			}
+		}
+
 		zone::ZoneWriteReport written;
 		check(editor.write(zone_bytes, &written), "laying out the zone ( the game's loaders refuse what was built )");
 		rep.assets = editor.asset_count();

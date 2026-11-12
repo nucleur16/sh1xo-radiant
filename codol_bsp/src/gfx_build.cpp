@@ -542,7 +542,9 @@ namespace codol::bsp
 			}
 		}
 
-		// no sun flare: hasValidData 0, both materials null ( sun: 96 bytes of zero )
+		// no sun flare: hasValidData 0, both materials null. The block's last three floats are the direction towards the
+		// sun ( in the shipped maps the direction of ComWorld light 1 ): written, the rest is zero
+		std::memcpy(b.chunks[head].bytes.data() + offsetof(c1::GfxWorld, sun) + 84, w.sun_dir, sizeof(w.sun_dir));
 
 		// ---- outdoor image ( height of what is open to the sky, for weather effects ) and its lookup matrix
 		{
@@ -559,7 +561,9 @@ namespace codol::bsp
 
 		// ---- runtime arrays: a pointer that says "allocate", nothing in the stream
 		hput(W_CELL_CASTER_BITS, FOLLOWS);
-		hput(W_CELL_SUN_LIT_BITS, FOLLOWS);
+		// W_CELL_SUN_LIT_BITS ( which cells have surfaces the sun lights ) stays null, as in every shipped map
+		// ( codol_bsp_probe sun ): with a pointer the loader allocates an array of zeros in the runtime block, which
+		// nothing shipped ever has. What the game does with one was not established.
 		if (light_count > header.lastSunPrimaryLightIndex + 1)
 		{
 			hput(W_LIGHT_ENT_SHADOW_VIS, FOLLOWS);

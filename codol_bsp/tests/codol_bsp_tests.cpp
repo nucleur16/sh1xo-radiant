@@ -143,6 +143,39 @@ namespace
 
 		zone::ClientKey key;
 		CHECK(static_cast<bool>(key.load_from_exe(game / "C1.exe")));
+		{
+			// every lit technique set of the zone ( "_sm_" ) has its hardware shadow map sibling ( "_hsm_" ) in the zone, or
+			// the compiler said that no donor has one: without it the game draws the material without the sun's shadow map
+			zone::ZoneEditor editor;
+			CHECK(static_cast<bool>(editor.open(c.file, key)));
+			std::set<std::string> sets;
+			for (std::size_t a = 0; a < editor.asset_count(); a++)
+			{
+				// ( a set of two stream pieces is a header and a name: the stand in for a set of a zone that is loaded already )
+				if (editor.asset(a).type == c1::ASSET_TYPE_TECHNIQUE_SET && editor.asset(a).chunks > 2)
+				{
+					sets.insert(editor.asset(a).name);
+				}
+			}
+			std::size_t lit = 0, with_sibling = 0, told = 0;
+			for (const std::string& name : sets)
+			{
+				const std::size_t at = name.find("_sm_");
+				if (at == std::string::npos || name[0] == ',')
+				{
+					continue;
+				}
+				lit++;
+				std::string sibling = name;
+				sibling.replace(at, 4, "_hsm_");
+				with_sibling += sets.count(sibling);
+				for (const std::string& warning : c.rep.warnings)
+				{
+					told += warning.find("technique set " + name + " has no hardware shadow map sibling") != std::string::npos;
+				}
+			}
+			CHECK(lit > 0 && with_sibling + told == lit && with_sibling > 0);
+		}
 		std::vector<std::uint8_t> bytes;
 		CHECK(static_cast<bool>(zone::read_fastfile(c.file, key, bytes)));
 

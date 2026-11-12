@@ -1103,7 +1103,7 @@ namespace codol::bsp
 		{
 			render_grid& grid = rw.grid;
 			GfxLightGrid& h = grid.header;
-			h.hasLightRegions = 0;
+			h.hasLightRegions = 1;			// as every shipped map ( the regions themselves are empty: only suns )
 			h.lastSunPrimaryLightIndex = 1;
 			// The grid covers the map; a map whose brushes reach far beyond where anything happens ( sky boxes, clip
 			// walls ) gets a grid around its entities, and at most GRID_SAMPLES points are sampled.
