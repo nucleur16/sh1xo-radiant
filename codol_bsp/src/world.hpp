@@ -152,6 +152,8 @@ namespace codol::bsp
 		zone_ref ref;					// the xmodel in the zone; !valid(): not found, the model is left out
 		box3 box;						// world box
 		bool collides = false;
+		float last_lod_dist = 0;		// of the xmodel
+		std::vector<vec3> triangles;	// LOD 0 placed in the world, 3 points per triangle: what casts the model's baked shadow
 	};
 
 	struct map_light

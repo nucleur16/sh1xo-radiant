@@ -185,6 +185,8 @@ namespace codol::bsp
 		float mid[3] = {}, half[3] = {}, radius = 0;	// its box, in model space
 		int coll_surfs = 0;							// > 0: it has collision
 		bool nested = false;							// written again from a model nested in another asset
+		float last_lod_dist = 0;						// draw distance of its last LOD ( 1000000: no limit )
+		std::vector<float> triangles;					// LOD 0 in model space, 9 floats per triangle ( light bake: shadows )
 	};
 
 	// what the compiler has to know about a world material

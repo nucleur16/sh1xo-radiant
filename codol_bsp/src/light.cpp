@@ -72,13 +72,137 @@ namespace codol::bsp
 				int child[2] = { -1, -1 };
 				int first = 0, count = 0;
 			};
+			// a triangle that blocks light without being a brush: static models ( LOD 0 )
+			struct triangle
+			{
+				vec3 a, e1, e2;
+				box3 box;
+			};
 			const world& w;
 			std::vector<int> brushes;		// world::brushes indices, in tree order
 			std::vector<node> nodes;
 			std::vector<std::uint8_t> sky;	// per world brush: has a sky face
+			std::vector<triangle> triangles;
+			std::vector<node> triangle_nodes;
+
+			int build_triangles(const int first, const int count)
+			{
+				const int index = static_cast<int>(triangle_nodes.size());
+				triangle_nodes.push_back({});
+				box3 box;
+				for (int k = first; k < first + count; k++)
+				{
+					box.add(triangles[static_cast<std::size_t>(k)].box);
+				}
+				triangle_nodes[static_cast<std::size_t>(index)].box = box;
+				if (count <= 4)
+				{
+					triangle_nodes[static_cast<std::size_t>(index)].first = first;
+					triangle_nodes[static_cast<std::size_t>(index)].count = count;
+					return index;
+				}
+				int axis = 0;
+				for (int k = 1; k < 3; k++)
+				{
+					if (box.maxs[k] - box.mins[k] > box.maxs[axis] - box.mins[axis])
+					{
+						axis = k;
+					}
+				}
+				std::sort(triangles.begin() + first, triangles.begin() + first + count, [&](const triangle& x, const triangle& y)
+				{
+					return x.box.mins[axis] + x.box.maxs[axis] < y.box.mins[axis] + y.box.maxs[axis];
+				});
+				const int half = count / 2;
+				const int l = build_triangles(first, half);
+				triangle_nodes[static_cast<std::size_t>(index)].child[0] = l;
+				const int r = build_triangles(first + half, count - half);
+				triangle_nodes[static_cast<std::size_t>(index)].child[1] = r;
+				return index;
+			}
+
+			// does the ray meet a triangle within max_t? one_sided: triangles seen from behind do not count - a sample
+			// inside a closed model ( the light grid point a model is lit by ) sees out of it
+			bool hits_triangle(const vec3& o, const vec3& d, const double max_t, const bool one_sided) const
+			{
+				if (triangle_nodes.empty())
+				{
+					return false;
+				}
+				const vec3 inv{ 1.0 / (std::fabs(d.x) > 1e-12 ? d.x : 1e-12), 1.0 / (std::fabs(d.y) > 1e-12 ? d.y : 1e-12), 1.0 / (std::fabs(d.z) > 1e-12 ? d.z : 1e-12) };
+				int stack[64];
+				int top = 0;
+				stack[top++] = 0;
+				while (top > 0)
+				{
+					const node& n = triangle_nodes[static_cast<std::size_t>(stack[--top])];
+					if (!box_hit(n.box, o, inv, max_t))
+					{
+						continue;
+					}
+					if (n.child[0] >= 0)
+					{
+						stack[top++] = n.child[0];
+						stack[top++] = n.child[1];
+						continue;
+					}
+					for (int k = n.first; k < n.first + n.count; k++)
+					{
+						const triangle& t = triangles[static_cast<std::size_t>(k)];
+						const vec3 p = cross(d, t.e2);
+						const double det = dot(t.e1, p);
+						// model triangles are stored clockwise seen from outside ( cross( e1, e2 ) points inwards ): det < 0 is a ray that meets the front
+						if (std::fabs(det) < 1e-12 || (one_sided && det > 0))
+						{
+							continue;
+						}
+						const double inv_det = 1.0 / det;
+						const vec3 s = o - t.a;
+						const double u = dot(s, p) * inv_det;
+						if (u < 0 || u > 1)
+						{
+							continue;
+						}
+						const vec3 q = cross(s, t.e1);
+						const double v = dot(d, q) * inv_det;
+						if (v < 0 || u + v > 1)
+						{
+							continue;
+						}
+						const double at = dot(t.e2, q) * inv_det;
+						if (at > 1e-3 && at < max_t)
+						{
+							return true;
+						}
+					}
+				}
+				return false;
+			}
 
 			explicit ray_world(const world& world_) : w(world_)
 			{
+				for (const map_model& model : w.models)
+				{
+					if (!model.ref.valid())
+					{
+						continue;
+					}
+					for (std::size_t k = 0; k + 2 < model.triangles.size(); k += 3)
+					{
+						triangle t;
+						t.a = model.triangles[k];
+						t.e1 = model.triangles[k + 1] - t.a;
+						t.e2 = model.triangles[k + 2] - t.a;
+						t.box.add(model.triangles[k]);
+						t.box.add(model.triangles[k + 1]);
+						t.box.add(model.triangles[k + 2]);
+						triangles.push_back(t);
+					}
+				}
+				if (!triangles.empty())
+				{
+					build_triangles(0, static_cast<int>(triangles.size()));
+				}
 				sky.assign(w.brushes.size(), 0);
 				for (std::size_t b = 0; b < w.brushes.size(); b++)
 				{
@@ -229,26 +353,27 @@ namespace codol::bsp
 			}
 
 			// true when the ray runs into the sky ( or leaves the map ) before anything else
-			bool reaches_sky(const vec3& o, const vec3& d) const
+			bool reaches_sky(const vec3& o, const vec3& d, const bool one_sided = false) const
 			{
 				ray_hit hit;
 				if (!trace(o, d, 1e9, hit))
 				{
-					return true;
+					return !hits_triangle(o, d, 1e9, one_sided);
 				}
 				if (hit.face < 0 || !sky[static_cast<std::size_t>(hit.brush)])
 				{
 					return false;
 				}
-				return w.brushes[static_cast<std::size_t>(hit.brush)].faces[static_cast<std::size_t>(hit.face)].material.rfind("sky", 0) == 0;
+				return w.brushes[static_cast<std::size_t>(hit.brush)].faces[static_cast<std::size_t>(hit.face)].material.rfind("sky", 0) == 0
+					&& !hits_triangle(o, d, hit.t, one_sided);
 			}
 
-			bool blocked(const vec3& from, const vec3& to) const
+			bool blocked(const vec3& from, const vec3& to, const bool one_sided = false) const
 			{
 				const vec3 delta = to - from;
 				const double distance = length(delta);
 				ray_hit hit;
-				return distance > 1e-6 && trace(from, delta * (1.0 / distance), distance - 0.5, hit);
+				return distance > 1e-6 && (trace(from, delta * (1.0 / distance), distance - 0.5, hit) || hits_triangle(from, delta * (1.0 / distance), distance - 0.5, one_sided));
 			}
 
 			bool in_solid(const vec3& p) const
@@ -279,7 +404,7 @@ namespace codol::bsp
 					continue;
 				}
 				weight += c;
-				if (s.rays.reaches_sky(p, d))
+				if (s.rays.reaches_sky(p, d, !normal))
 				{
 					sky += c;
 				}
@@ -317,7 +442,7 @@ namespace codol::bsp
 						scale *= (c - light.cos_half_fov_outer) / std::max(1e-6, static_cast<double>(light.cos_half_fov_inner - light.cos_half_fov_outer));
 					}
 				}
-				if (s.rays.blocked(p, origin))
+				if (s.rays.blocked(p, origin, !normal))
 				{
 					continue;
 				}
@@ -740,7 +865,7 @@ namespace codol::bsp
 					if (ctx.opts.light)
 					{
 						gather(setup, p, nullptr, color);
-						s.light = rays.reaches_sky(p, setup.sun) ? 1 : 0;
+						s.light = rays.reaches_sky(p, setup.sun, true) ? 1 : 0;
 					}
 					else
 					{
@@ -927,13 +1052,14 @@ namespace codol::bsp
 			}
 		}
 
-		// ---- static models: the sun where it reaches the model's centre, the nearest probe of its cell. ( Their
-		// brightness comes from the light grid at run time; they are not in the lightmap and cast no baked shadow. )
+		// ---- static models: the sun where it reaches the model's centre, the nearest probe of its cell. Their
+		// brightness comes from the light grid at run time ( the sample at their lighting origin looks out of the model:
+		// its triangles are one sided for points in space ); their LOD 0 triangles shadow the lightmaps and the grid.
 		for (render_smodel& s : rw.smodels)
 		{
 			const box3& box = w.models[static_cast<std::size_t>(s.model)].box;
 			const vec3 centre{ (box.mins[0] + box.maxs[0]) * 0.5, (box.mins[1] + box.maxs[1]) * 0.5, (box.mins[2] + box.maxs[2]) * 0.5 };
-			s.primary_light = !ctx.opts.light || rays.reaches_sky(centre, setup.sun) ? 1 : 0;
+			s.primary_light = !ctx.opts.light || rays.reaches_sky(centre, setup.sun, true) ? 1 : 0;
 			float best = 1e30f;
 			for (const std::uint8_t p : rw.cells[static_cast<std::size_t>(s.cell)].probes)
 			{

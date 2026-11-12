@@ -756,6 +756,44 @@ namespace codol::bsp
 		return s->find(c1::ASSET_TYPE_IMAGE, name, s->cat.image_zone, why, [&](const Zone& z, const zaddr h) { return s->image_from(z, h); });
 	}
 
+	namespace
+	{
+		// what the compiler wants to know about a model: box, collision, draw distance, the triangles of LOD 0
+		void describe_model(const Zone& z, const zaddr header, model_desc& desc)
+		{
+			const c1::XModel raw = z.get<c1::XModel>(header);
+			desc.coll_surfs = raw.numCollSurfs;
+			// XModel + 316: radius, then the box as centre and half size ( codol_mapc XMODEL_RADIUS / XMODEL_BOUNDS )
+			desc.radius = z.get<float>(header + 316);
+			const c1::Bounds box = z.get<c1::Bounds>(header + 320);
+			std::memcpy(desc.mid, box.midPoint, sizeof(desc.mid));
+			std::memcpy(desc.half, box.halfSize, sizeof(desc.half));
+			desc.last_lod_dist = raw.numLods ? raw.lodInfo[raw.numLods - 1].dist : 0.0f;
+			zone::ModelView view;
+			if (zone::read_model(z, header, view, true) && !view.lods.empty())
+			{
+				for (const zone::SurfaceView& surface : view.lods[0].surfs.surfaces)
+				{
+					const std::vector<zone::SurfaceVertex> vertices = surface.vertices();
+					const std::vector<std::uint16_t> indices = surface.indices();
+					for (std::size_t k = 0; k + 2 < indices.size(); k += 3)
+					{
+						if (indices[k] == indices[k + 1] || indices[k + 1] == indices[k + 2] || indices[k] >= vertices.size() || indices[k + 1] >= vertices.size()
+							|| indices[k + 2] >= vertices.size())
+						{
+							continue;
+						}
+						for (int c = 0; c < 3; c++)
+						{
+							const zone::SurfaceVertex& v = vertices[indices[k + static_cast<std::size_t>(c)]];
+							desc.triangles.insert(desc.triangles.end(), { v.position[0], v.position[1], v.position[2] });
+						}
+					}
+				}
+			}
+		}
+	}
+
 	zone_ref asset_importer::model(const std::string_view name, std::string* why, model_desc* desc)
 	{
 		// An xmodel that is a top level asset of its zone - a model of the common zones, of a ported map, one compiled by
@@ -793,13 +831,7 @@ namespace codol::bsp
 			}
 			if (desc)
 			{
-				const c1::XModel raw = donor.zone().get<c1::XModel>(header);
-				desc->coll_surfs = raw.numCollSurfs;
-				// XModel + 316: radius, then the box as centre and half size ( codol_mapc XMODEL_RADIUS / XMODEL_BOUNDS )
-				desc->radius = donor.zone().get<float>(header + 316);
-				const c1::Bounds box = donor.zone().get<c1::Bounds>(header + 320);
-				std::memcpy(desc->mid, box.midPoint, sizeof(desc->mid));
-				std::memcpy(desc->half, box.halfSize, sizeof(desc->half));
+				describe_model(donor.zone(), header, *desc);
 			}
 			if (const auto known = s->by_name.find(key_name); known != s->by_name.end())
 			{
@@ -839,12 +871,7 @@ namespace codol::bsp
 			}
 			if (desc)
 			{
-				const c1::XModel raw = z->get<c1::XModel>(header);
-				desc->coll_surfs = raw.numCollSurfs;
-				desc->radius = z->get<float>(header + 316);
-				const c1::Bounds box = z->get<c1::Bounds>(header + 320);
-				std::memcpy(desc->mid, box.midPoint, sizeof(desc->mid));
-				std::memcpy(desc->half, box.halfSize, sizeof(desc->half));
+				describe_model(*z, header, *desc);
 				desc->nested = true;
 			}
 			return s->model_from(*z, header);

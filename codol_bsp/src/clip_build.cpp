@@ -213,6 +213,17 @@ namespace codol::bsp
 				continue;
 			}
 			model.collides = desc.coll_surfs > 0;
+			model.last_lod_dist = desc.last_lod_dist;
+			for (std::size_t k = 0; k + 2 < desc.triangles.size(); k += 3)
+			{
+				vec3 p{ model.origin[0], model.origin[1], model.origin[2] };
+				for (int a = 0; a < 3; a++)
+				{
+					const double local = static_cast<double>(desc.triangles[k + static_cast<std::size_t>(a)]) * model.scale;
+					p = p + vec3{ model.axis[a][0], model.axis[a][1], model.axis[a][2] } * local;
+				}
+				model.triangles.push_back(p);
+			}
 			// the model's box, placed
 			for (int corner = 0; corner < 8; corner++)
 			{
