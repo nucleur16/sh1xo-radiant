@@ -1141,6 +1141,197 @@ namespace codol::c1
 	C1_OFFSET(GfxWorld, heroOnlyLightCount, 616);
 	C1_OFFSET(GfxWorld, heroOnlyLights, 620);
 
+	// ------------------------------------------------------------------------------------------
+	// effects ( FxEffectDef, loader 0x004BD5E0; FxElemDef, loader 0x004BD2B0 )
+	//
+	// IW4's layout with these differences: the element type list is the later one ( IW4's plus "rotated sprite" 2 and
+	// "line" 4, everything behind them moved up: trail 5, cloud 6, spark cloud 7, spark fountain 8, model 9, omni
+	// light 10, spot light 11, sound 12, decal 13, runner 14 ), and the element is 260 bytes instead of 252: eight
+	// bytes behind fadeInfo, the last four a string pointer.
+
+	enum FxElemType : std::uint8_t
+	{
+		FX_ELEM_TYPE_SPRITE_BILLBOARD = 0,
+		FX_ELEM_TYPE_SPRITE_ORIENTED = 1,
+		FX_ELEM_TYPE_SPRITE_ROTATED = 2,
+		FX_ELEM_TYPE_TAIL = 3,
+		FX_ELEM_TYPE_LINE = 4,
+		FX_ELEM_TYPE_TRAIL = 5,
+		FX_ELEM_TYPE_CLOUD = 6,
+		FX_ELEM_TYPE_SPARK_CLOUD = 7,
+		FX_ELEM_TYPE_SPARK_FOUNTAIN = 8,
+		FX_ELEM_TYPE_MODEL = 9,
+		FX_ELEM_TYPE_OMNI_LIGHT = 10,
+		FX_ELEM_TYPE_SPOT_LIGHT = 11,
+		FX_ELEM_TYPE_SOUND = 12,
+		FX_ELEM_TYPE_DECAL = 13,
+		FX_ELEM_TYPE_RUNNER = 14,
+		FX_ELEM_TYPE_COUNT = 15,
+	};
+
+	struct FxFloatRange
+	{
+		float base;
+		float amplitude;
+	};
+
+	struct FxIntRange
+	{
+		std::int32_t base;
+		std::int32_t amplitude;
+	};
+
+	struct FxElemAtlas
+	{
+		std::uint8_t behavior;
+		std::uint8_t index;
+		std::uint8_t fps;
+		std::uint8_t loopCount;
+		std::uint8_t colIndexBits;
+		std::uint8_t rowIndexBits;
+		std::int16_t entryCount;
+	};
+
+	struct FxElemVec3Range
+	{
+		float base[3];
+		float amplitude[3];
+	};
+
+	struct FxElemVelStateInFrame
+	{
+		FxElemVec3Range velocity;
+		FxElemVec3Range totalDelta;
+	};
+
+	struct FxElemVelStateSample
+	{
+		FxElemVelStateInFrame local;
+		FxElemVelStateInFrame world;
+	};
+	C1_SIZE(FxElemVelStateSample, 96);
+
+	struct FxElemVisualState
+	{
+		std::uint8_t color[4];			// r g b a
+		float rotationDelta;
+		float rotationTotal;
+		float size[2];
+		float scale;
+	};
+
+	struct FxElemVisStateSample
+	{
+		FxElemVisualState base;
+		FxElemVisualState amplitude;
+	};
+	C1_SIZE(FxElemVisStateSample, 48);	// as IW4; the later builds have 64
+
+	struct FxTrailVertex
+	{
+		float pos[2];
+		float normal[2];
+		float texCoord;
+	};
+	C1_SIZE(FxTrailVertex, 20);
+
+	struct FxTrailDef
+	{
+		std::int32_t scrollTimeMsec;
+		std::int32_t repeatDist;
+		float invSplitDist;
+		float invSplitArcDist;
+		float invSplitTime;
+		std::int32_t vertCount;
+		zptr verts;						// FxTrailVertex
+		std::int32_t indCount;
+		zptr inds;						// u16
+	};
+	C1_SIZE(FxTrailDef, 36);
+
+	struct FxSparkFountainDef
+	{
+		float gravity;
+		float bounceFrac;
+		float bounceRand;
+		float sparkSpacing;
+		float sparkLength;
+		std::int32_t sparkCount;
+		float loopTime;
+		float velMin;
+		float velMax;
+		float velConeFraction;
+		float restSpeed;
+		float boostTime;
+		float boostFactor;
+	};
+	C1_SIZE(FxSparkFountainDef, 52);
+
+	struct FxElemDef
+	{
+		std::int32_t flags;
+		std::int32_t spawn[2];			// looping: interval msec, count; one shot: count base, amplitude
+		FxFloatRange spawnRange;
+		FxFloatRange fadeInRange;
+		FxFloatRange fadeOutRange;
+		float spawnFrustumCullRadius;
+		FxIntRange spawnDelayMsec;
+		FxIntRange lifeSpanMsec;
+		FxFloatRange spawnOrigin[3];
+		FxFloatRange spawnOffsetRadius;
+		FxFloatRange spawnOffsetHeight;
+		FxFloatRange spawnAngles[3];
+		FxFloatRange angularVelocity[3];
+		FxFloatRange initialRotation;
+		FxFloatRange gravity;
+		FxFloatRange reflectionFactor;
+		FxElemAtlas atlas;
+		std::uint8_t elemType;
+		std::uint8_t visualCount;
+		std::uint8_t velIntervalCount;
+		std::uint8_t visStateIntervalCount;
+		zptr velSamples;				// FxElemVelStateSample[ velIntervalCount + 1 ]
+		zptr visSamples;				// FxElemVisStateSample[ visStateIntervalCount + 1 ]
+		zptr visuals;					// one visual: the handle itself; several: an array; decal: pairs of materials
+		Bounds collBounds;
+		zptr effectOnImpact;			// in the file: the effect's name
+		zptr effectOnDeath;
+		zptr effectEmitted;
+		FxFloatRange emitDist;
+		FxFloatRange emitDistVariance;
+		zptr extended;					// FxTrailDef ( trail ), FxSparkFountainDef ( spark fountain ), else one byte
+		std::uint8_t sortOrder;
+		std::uint8_t lightingFrac;
+		std::uint8_t useItemClip;
+		std::uint8_t fadeInfo;
+		std::uint8_t _unk252[4];		// not in IW4
+		zptr _string256;				// not in IW4: a string
+	};
+	C1_SIZE(FxElemDef, 260);			// IW4: 252
+	C1_OFFSET(FxElemDef, spawnDelayMsec, 40);
+	C1_OFFSET(FxElemDef, gravity, 152);
+	C1_OFFSET(FxElemDef, atlas, 168);
+	C1_OFFSET(FxElemDef, elemType, 176);
+	C1_OFFSET(FxElemDef, velSamples, 180);
+	C1_OFFSET(FxElemDef, visuals, 188);
+	C1_OFFSET(FxElemDef, effectOnImpact, 216);
+	C1_OFFSET(FxElemDef, extended, 244);
+	C1_OFFSET(FxElemDef, sortOrder, 248);
+
+	struct FxEffectDef
+	{
+		zptr name;
+		std::int32_t flags;
+		std::int32_t totalSize;
+		std::int32_t msecLoopingLife;
+		std::int32_t elemDefCountLooping;
+		std::int32_t elemDefCountOneShot;
+		std::int32_t elemDefCountEmission;
+		zptr elemDefs;
+	};
+	C1_HEADER(FxEffectDef, ASSET_TYPE_FX);	// 0x20, same layout as IW4
+
+
 #pragma pack(pop)
 
 #undef C1_SIZE

@@ -551,7 +551,10 @@ namespace codol::assets
 			range(out, "collRadius", &e.collRadius, 1);
 			out += "\tfxOnImpact \"" + e.fxOnImpact + "\";\n";
 			out += "\tfxOnDeath \"" + e.fxOnDeath + "\";\n";
-			irange(out, "sortOrder", &e.sortOrder, 1);
+			if (e.hasSortOrder)
+			{
+				irange(out, "sortOrder", &e.sortOrder, 1);
+			}
 			out += "\temission \"" + e.emission + "\";\n";
 			range(out, "emitDist", e.emitDist);
 			range(out, "emitDistVariance", e.emitDistVariance);
