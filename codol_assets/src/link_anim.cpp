@@ -119,7 +119,7 @@ namespace codol::assets
 			if (raw.deltaTrans.present)
 			{
 				const RawDeltaTrans& t = raw.deltaTrans;
-				const std::uint8_t head[4] = { static_cast<std::uint8_t>(t.size & 0xFF), static_cast<std::uint8_t>(t.size >> 8), static_cast<std::uint8_t>(t.size && t.small ? 1 : 0), 0 };
+				const std::uint8_t head[4] = { static_cast<std::uint8_t>(t.size & 0xFF), static_cast<std::uint8_t>(t.size >> 8), static_cast<std::uint8_t>(t.size && t.small_box ? 1 : 0), 0 };
 				add_piece(pieces, head, 4);
 				if (t.size == 0)
 				{
@@ -134,7 +134,7 @@ namespace codol::assets
 					std::memcpy(box + 24, &frames, 4);
 					add_piece(pieces, box, sizeof(box));
 					add_indices(pieces, t.indices, wide);
-					if (t.small)
+					if (t.small_box)
 					{
 						add_stream(pieces, low_bytes(t.frames));
 					}

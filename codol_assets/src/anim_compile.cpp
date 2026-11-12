@@ -471,7 +471,7 @@ namespace codol::assets
 					else
 					{
 						d.size = static_cast<std::uint16_t>(trans.keys.size() - 1);
-						d.small = trans.type == ANIM_TRANS_SMALL;
+						d.small_box = trans.type == ANIM_TRANS_SMALL;
 						std::memcpy(d.mins, trans.mins.data(), 12);
 						std::memcpy(d.frameSize, trans.size.data(), 12);
 						d.indices = trans.keys;

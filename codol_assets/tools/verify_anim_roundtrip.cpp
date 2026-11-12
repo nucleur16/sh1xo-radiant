@@ -102,7 +102,7 @@ namespace
 		all = all && (notifies || differ("notifies"));
 		const bool delta = shipped.hasDelta == compiled.hasDelta && shipped.deltaTrans.present == compiled.deltaTrans.present && shipped.deltaQuat2.present == compiled.deltaQuat2.present
 			&& shipped.deltaQuat.present == compiled.deltaQuat.present && (shipped.deltaTrans.size == 0) == (compiled.deltaTrans.size == 0)
-			&& shipped.deltaTrans.small == compiled.deltaTrans.small && (shipped.deltaQuat2.size == 0) == (compiled.deltaQuat2.size == 0);
+			&& shipped.deltaTrans.small_box == compiled.deltaTrans.small_box && (shipped.deltaQuat2.size == 0) == (compiled.deltaQuat2.size == 0);
 		totals.delta.add(delta);
 		all = all && (delta || differ("delta part: what it has, how it is stored"));
 
@@ -379,7 +379,7 @@ int anim_zone(const fs::path& install, const fs::path& exe, const int every, con
 		const bool equal = read && std::memcmp(&back.header.dataByteCount, &c.header.dataByteCount, 44) == 0 && back.boneNames == c.boneNames && back.notifies == c.notifies
 			&& back.dataByte == c.dataByte && back.dataShort == c.dataShort && back.dataInt == c.dataInt && back.randomDataShort == c.randomDataShort
 			&& back.randomDataByte == c.randomDataByte && back.indices == c.indices && back.hasDelta == c.hasDelta && back.deltaTrans.present == c.deltaTrans.present
-			&& back.deltaTrans.size == c.deltaTrans.size && back.deltaTrans.small == c.deltaTrans.small && back.deltaTrans.indices == c.deltaTrans.indices
+			&& back.deltaTrans.size == c.deltaTrans.size && back.deltaTrans.small_box == c.deltaTrans.small_box && back.deltaTrans.indices == c.deltaTrans.indices
 			&& back.deltaTrans.frames == c.deltaTrans.frames && std::memcmp(back.deltaTrans.frame0, c.deltaTrans.frame0, 36) == 0
 			&& back.deltaQuat2.present == c.deltaQuat2.present && back.deltaQuat2.indices == c.deltaQuat2.indices && back.deltaQuat2.frames == c.deltaQuat2.frames
 			&& back.deltaQuat.present == c.deltaQuat.present && back.deltaQuat.indices == c.deltaQuat.indices && back.deltaQuat.frames == c.deltaQuat.frames;

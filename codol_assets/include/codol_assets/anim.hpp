@@ -77,7 +77,7 @@ namespace codol::assets
 	{
 		bool present = false;
 		std::uint16_t size = 0;				// keys - 1; 0: one constant value ( frame0 )
-		bool small = false;
+		bool small_box = false;
 		float frame0[3] = {};
 		float mins[3] = {};
 		float frameSize[3] = {};

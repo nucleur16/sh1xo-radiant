@@ -243,7 +243,7 @@ namespace anim_tests
 		// the root is the delta part and is not listed; the hand does not move on the arm: no rotation, no translation track
 		CHECK(raw.header.flags == ANIM_FLAG_DELTA && raw.hasDelta && raw.deltaTrans.present && raw.deltaQuat2.present && !raw.deltaQuat.present);
 		CHECK((raw.boneNames == std::vector<std::string>{ "j_hand", "j_arm" }) && raw.header.boneCount[0] == 1 && raw.header.boneCount[1] == 1 && raw.header.boneCount[8] == 2);
-		CHECK(raw.deltaTrans.size == 1 && !raw.deltaTrans.small);		// a straight walk of 80 units: two keys, 16 bit
+		CHECK(raw.deltaTrans.size == 1 && !raw.deltaTrans.small_box);		// a straight walk of 80 units: two keys, 16 bit
 		const DecodedBone* arm = bone(d, "j_arm");
 		CHECK(arm && arm->rotation == ANIM_ROT_2D && arm->translation == ANIM_TRANS_NONE);
 		float worst = 0, worstMove = 0;

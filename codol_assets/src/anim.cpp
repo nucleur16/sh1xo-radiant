@@ -257,7 +257,7 @@ namespace codol::assets
 				RawDeltaTrans& t = out.deltaTrans;
 				t.present = true;
 				t.size = zone.get<std::uint16_t>(part[0]);
-				t.small = zone.get<std::uint8_t>(part[0] + 2) != 0;
+				t.small_box = zone.get<std::uint8_t>(part[0] + 2) != 0;
 				if (t.size == 0)
 				{
 					zone.get(part[0] + 4, t.frame0);
@@ -272,7 +272,7 @@ namespace codol::assets
 					{
 						return fail("delta translation indices are not mapped");
 					}
-					if (t.small)
+					if (t.small_box)
 					{
 						std::vector<std::uint8_t> bytes;
 						if (!read_array(zone, frames, keys * 3, bytes))

@@ -326,7 +326,7 @@ int anim_survey(const fs::path& install, const fs::path& exe, const std::string&
 			deltaKind[std::string(raw.deltaTrans.present ? "trans " : "") + (raw.deltaQuat2.present ? "quat2 " : "") + (raw.deltaQuat.present ? "quat " : "") + "flags " + number(h.flags)]++;
 			if (raw.deltaTrans.present)
 			{
-				deltaTransKind[raw.deltaTrans.size == 0 ? "constant" : raw.deltaTrans.small ? "u8 keys" : "u16 keys"]++;
+				deltaTransKind[raw.deltaTrans.size == 0 ? "constant" : raw.deltaTrans.small_box ? "u8 keys" : "u16 keys"]++;
 				if (raw.deltaTrans.size)
 				{
 					deltaFirst[d.deltaTrans.frames.front() == 0 ? "first key 0" : "first key > 0"]++;
