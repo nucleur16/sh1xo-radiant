@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 struct Rate
@@ -20,6 +21,12 @@ void print_rate(const char* name, const Rate& r);
 
 // the fast files of <install>/client_shipRetail/chinese and /patch, sorted
 std::vector<std::filesystem::path> install_zones(const std::filesystem::path& install);
+
+int model_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, int every, const std::string& filter);
+int model_file(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::string& name, const std::vector<std::filesystem::path>& exports);
+
+int model_extract(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::string& name, const std::filesystem::path& outDir);
+int model_compare(const std::filesystem::path& zoneA, const std::string& nameA, const std::filesystem::path& zoneB, const std::string& nameB, const std::filesystem::path& exe);
 
 int material_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, const std::filesystem::path& cache, int every,
 	const std::filesystem::path& dump);

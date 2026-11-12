@@ -35,6 +35,9 @@ namespace codol::assets
 		int parent = -1;
 		float offset[3] = {};								// model space
 		float axis[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };	// rows X Y Z: the bone's axes in model space
+		// hit location class; not part of the classic format: written and read as the comment line
+		// "//#PARTCLASS <bone> <class>" behind the bone list
+		std::uint8_t partClassification = 0;
 	};
 
 	struct ExportVertex
@@ -90,6 +93,15 @@ namespace codol::assets
 		int collisionLod = -1;				// LOD whose triangles become the collision surfaces; -1: no collision ( contents 0 )
 		std::int32_t contents = 1;			// of the collision surfaces: 1 solid ( the shipped props )
 		std::int32_t collisionSurfaceFlags = 0;
+		// surface flags of the collision surface a material's triangles become ( shipped: the material's surface type
+		// number << 20 ); materials that are not listed get collisionSurfaceFlags
+		std::map<std::string, std::int32_t> collisionFlagsByMaterial;
+		// contents of a material's collision surface when not `contents` ( shipped: glass 0x10 .. ); the model's contents
+		// are all of them together
+		std::map<std::string, std::int32_t> collisionContentsByMaterial;
+		// hit location class per bone name ( 1 helmet, 2 head, 3 neck, 4 / 5 torso, 6 - 11 arms and hands, 12 - 17 legs and
+		// feet, 18 gun, 19 shield ); takes precedence over what the export carries. Props have 0 everywhere.
+		std::map<std::string, std::uint8_t> partClassification;
 		// -1: decide from the mesh. 0 / 1: corner order as in the file / reversed.
 		int reverseWinding = -1;
 	};

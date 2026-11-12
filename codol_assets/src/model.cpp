@@ -276,7 +276,8 @@ namespace codol::assets
 			worldQuat[k] = quat_of_axis(bone.axis);
 			worldTrans[k] = { bone.offset[0], bone.offset[1], bone.offset[2] };
 			out.baseMat.insert(out.baseMat.end(), { worldQuat[k].x, worldQuat[k].y, worldQuat[k].z, worldQuat[k].w, bone.offset[0], bone.offset[1], bone.offset[2], 2.0f });
-			out.partClassification.push_back(0);
+			const auto hit = options.partClassification.find(bone.name);
+			out.partClassification.push_back(hit != options.partClassification.end() ? hit->second : bone.partClassification);
 			if (k >= out.rootBones)
 			{
 				const int parent = remap[static_cast<std::size_t>(bone.parent)];
@@ -410,7 +411,15 @@ namespace codol::assets
 						}
 						tri[static_cast<std::size_t>(c)] = it->second;
 					}
+					if (tri[0] == tri[1] && tri[1] == tri[2])
+					{
+						continue;		// the filler triangle of an odd surface that was exported; it is added again below
+					}
 					triangles.push_back(tri);
+				}
+				if (triangles.empty())
+				{
+					continue;
 				}
 				if (corners.size() > 65535 || triangles.size() > 65535)
 				{
@@ -426,14 +435,24 @@ namespace codol::assets
 					return std::clamp<std::size_t>(mesh.vertices[static_cast<std::size_t>(vertex)].weights.size(), 1, 4);
 				};
 
-				// vertex order: rigid by bone, deformed by number of influences; then as the export has them
+				// vertex order: rigid by bone - the bones in the order the export's vertices bring them up, as the shipped
+				// surfaces have their lists ( not by bone index ) -, deformed by number of influences; then as the export
+				// has them
 				std::vector<std::uint32_t> sorted(corners.size());
 				std::iota(sorted.begin(), sorted.end(), 0u);
+				std::stable_sort(sorted.begin(), sorted.end(), [&](const std::uint32_t a, const std::uint32_t b) { return corners[a].vertex < corners[b].vertex; });
+				std::vector<int> boneRank(boneCount, -1);
+				int ranks = 0;
+				for (const std::uint32_t k : sorted)
+				{
+					int& rank = boneRank[static_cast<std::size_t>(primary_bone(corners[k].vertex))];
+					rank = rank < 0 ? ranks++ : rank;
+				}
 				std::stable_sort(sorted.begin(), sorted.end(), [&](const std::uint32_t a, const std::uint32_t b)
 				{
-					const auto ka = weighted ? static_cast<int>(influence_count(corners[a].vertex)) : primary_bone(corners[a].vertex);
-					const auto kb = weighted ? static_cast<int>(influence_count(corners[b].vertex)) : primary_bone(corners[b].vertex);
-					return ka != kb ? ka < kb : corners[a].vertex < corners[b].vertex;
+					const auto ka = weighted ? static_cast<int>(influence_count(corners[a].vertex)) : boneRank[static_cast<std::size_t>(primary_bone(corners[a].vertex))];
+					const auto kb = weighted ? static_cast<int>(influence_count(corners[b].vertex)) : boneRank[static_cast<std::size_t>(primary_bone(corners[b].vertex))];
+					return ka < kb;
 				});
 				std::vector<std::uint32_t> place(corners.size());
 				for (std::uint32_t k = 0; k < sorted.size(); k++)
@@ -451,8 +470,12 @@ namespace codol::assets
 				const auto triangle_bone = [&](const std::array<std::uint32_t, 3>& tri) { return primary_bone(corners[sorted[tri[0]]].vertex); };
 				if (!weighted)
 				{
-					std::stable_sort(triangles.begin(), triangles.end(), [&](const auto& a, const auto& b) { return triangle_bone(a) < triangle_bone(b); });
+					std::stable_sort(triangles.begin(), triangles.end(), [&](const auto& a, const auto& b)
+					{
+						return boneRank[static_cast<std::size_t>(triangle_bone(a))] < boneRank[static_cast<std::size_t>(triangle_bone(b))];
+					});
 				}
+				const std::size_t realTriangles = triangles.size();
 
 				// tangent frames
 				std::vector<std::array<float, 3>> tangent(corners.size(), { 0, 0, 0 }), binormal(corners.size(), { 0, 0, 0 });
@@ -513,7 +536,9 @@ namespace codol::assets
 					v.color = corner.color;
 					v.texCoordU = corner.u;
 					v.texCoordV = corner.v;
-					v.normal = pack_unit_vector(n);
+					// the normal is stored as the export has it: the packed form carries a length, and shipped models have
+					// normals that are not unit vectors. The frame above is built on the unit normal.
+					v.normal = pack_unit_vector(corner.normal);
 					v.tangent = pack_unit_vector(t);
 
 					// bounds
@@ -532,6 +557,13 @@ namespace codol::assets
 					{
 						surface.indices.push_back(static_cast<std::uint16_t>(index));
 					}
+				}
+				// Every shipped surface has an even number of triangles ( 28506 of 28506 ): an odd one is followed by a
+				// triangle that repeats the last index three times. The rigid lists do not count it.
+				if (triangles.size() % 2 != 0)
+				{
+					triangles.push_back({ triangles.back()[2], triangles.back()[2], triangles.back()[2] });
+					surface.indices.insert(surface.indices.end(), 3, static_cast<std::uint16_t>(triangles.back()[2]));
 				}
 
 				c1::XSurface& h = surface.header;
@@ -579,7 +611,7 @@ namespace codol::assets
 						{
 							vertexEnd++;
 						}
-						while (triangleEnd < triangles.size() && triangle_bone(triangles[triangleEnd]) == bone)
+						while (triangleEnd < realTriangles && triangle_bone(triangles[triangleEnd]) == bone)
 						{
 							triangleEnd++;
 						}
@@ -610,10 +642,19 @@ namespace codol::assets
 			// ---- collision surfaces from this LOD
 			if (static_cast<int>(l) == options.collisionLod)
 			{
-				std::map<int, CompiledCollisionSurface> perBone;
-				std::map<int, BoundsBuilder> perBoneBounds;
-				for (const ExportFace& f : mesh.faces)
+				// one collision surface per surface of the LOD and bone, as the shipped models have them
+				// ( in the order the triangles bring up the bones, like the rigid lists )
+				std::vector<std::pair<std::size_t, int>> keys;
+				std::vector<CompiledCollisionSurface> perBone;
+				std::vector<BoundsBuilder> perBoneBounds;
+				for (std::size_t group = 0; group < groups.size(); group++)
+				for (const std::size_t faceIndex : groupFaces[group])
 				{
+					const ExportFace& f = mesh.faces[faceIndex];
+					// the records are in model space, also those of a surface that follows a bone ( 1302 of the 1313 records of
+					// vehicle_opfor_truck are reproduced that way, none in bone space )
+					const ExportVertex& va = mesh.vertices[static_cast<std::size_t>(f.corners[0].vertex)];
+					const int boneIndex = va.weights.empty() ? 0 : remap[static_cast<std::size_t>(va.weights[0].first)];
 					const float* a = mesh.vertices[static_cast<std::size_t>(f.corners[0].vertex)].position;
 					const float* b = mesh.vertices[static_cast<std::size_t>(f.corners[1].vertex)].position;
 					const float* c = mesh.vertices[static_cast<std::size_t>(f.corners[2].vertex)].position;
@@ -645,25 +686,39 @@ namespace codol::assets
 						sv[k] /= sd;
 						tv[k] /= td;
 					}
-					const ExportVertex& va = mesh.vertices[static_cast<std::size_t>(f.corners[0].vertex)];
-					const int bone = va.weights.empty() ? 0 : remap[static_cast<std::size_t>(va.weights[0].first)];
+					const std::pair<std::size_t, int> key(group, boneIndex);
+					const std::size_t bone = static_cast<std::size_t>(std::find(keys.begin(), keys.end(), key) - keys.begin());
+					if (bone == keys.size())
+					{
+						keys.push_back(key);
+						perBone.emplace_back();
+						perBoneBounds.emplace_back();
+					}
 					perBone[bone].triangles.push_back({ n[0], n[1], n[2], dot(n, a), sv[0], sv[1], sv[2], dot(sv, a), tv[0], tv[1], tv[2], dot(tv, a) });
 					perBoneBounds[bone].add(a);
 					perBoneBounds[bone].add(b);
 					perBoneBounds[bone].add(c);
 				}
-				for (auto& [bone, surface] : perBone)
+				for (std::size_t k = 0; k < keys.size(); k++)
 				{
-					surface.bone = bone;
-					surface.contents = options.contents;
-					surface.surfaceFlags = options.collisionSurfaceFlags;
-					surface.bounds = perBoneBounds[bone].bounds();
+					const std::pair<std::size_t, int> key = keys[k];
+					CompiledCollisionSurface& surface = perBone[k];
+					const std::string exportName = static_cast<std::size_t>(groups[key.first].first) < mesh.materials.size()
+						? mesh.materials[static_cast<std::size_t>(groups[key.first].first)] : std::string();
+					const auto renamed = options.materialNames.find(exportName);
+					const std::string material = renamed != options.materialNames.end() ? renamed->second : exportName;
+					const auto flags = options.collisionFlagsByMaterial.find(material);
+					const auto contents = options.collisionContentsByMaterial.find(material);
+					surface.bone = key.second;
+					surface.contents = contents != options.collisionContentsByMaterial.end() ? contents->second : options.contents;
+					out.contents |= surface.contents;
+					surface.surfaceFlags = flags != options.collisionFlagsByMaterial.end() ? flags->second : options.collisionSurfaceFlags;
+					surface.bounds = perBoneBounds[k].bounds();
 					out.collision.push_back(std::move(surface));
 				}
 				if (!out.collision.empty())
 				{
 					out.collisionLod = static_cast<int>(l);
-					out.contents = options.contents;
 				}
 			}
 			if (l == 0)
@@ -674,6 +729,12 @@ namespace codol::assets
 		}
 		for (std::size_t k = 0; k < boneCount; k++)
 		{
+			// the box of a bone's vertices in the bone's space, grown to hold the bone's origin ( as shipped )
+			if (boneBounds[k].any)
+			{
+				const float origin[3] = { 0, 0, 0 };
+				boneBounds[k].add(origin);
+			}
 			const c1::Bounds b = boneBounds[k].bounds();
 			out.boneInfo.insert(out.boneInfo.end(), { b.midPoint[0], b.midPoint[1], b.midPoint[2], b.halfSize[0], b.halfSize[1], b.halfSize[2],
 				b.halfSize[0] * b.halfSize[0] + b.halfSize[1] * b.halfSize[1] + b.halfSize[2] * b.halfSize[2] });

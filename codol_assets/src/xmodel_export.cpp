@@ -43,6 +43,15 @@ namespace codol::assets
 			std::string line(text.substr(at, end - at));
 			at = end + 1;
 			lineNumber++;
+			if (line.rfind("//#PARTCLASS ", 0) == 0)
+			{
+				int bone = -1, value = 0;
+				if (std::sscanf(line.c_str() + 13, "%d %d", &bone, &value) == 2 && bone >= 0 && static_cast<std::size_t>(bone) < out.bones.size())
+				{
+					out.bones[static_cast<std::size_t>(bone)].partClassification = static_cast<std::uint8_t>(value);
+				}
+				continue;
+			}
 			if (const std::size_t comment = line.find("//"); comment != std::string::npos)
 			{
 				line.erase(comment);
@@ -259,6 +268,13 @@ namespace codol::assets
 			add("Y %.9g %.9g %.9g\n", b.axis[1][0], b.axis[1][1], b.axis[1][2]);
 			add("Z %.9g %.9g %.9g\n\n", b.axis[2][0], b.axis[2][1], b.axis[2][2]);
 		}
+		for (std::size_t k = 0; k < model.bones.size(); k++)
+		{
+			if (model.bones[k].partClassification)
+			{
+				add("//#PARTCLASS %zu %u\n", k, static_cast<unsigned>(model.bones[k].partClassification));
+			}
+		}
 		add("NUMVERTS %zu\n", model.vertices.size());
 		for (std::size_t k = 0; k < model.vertices.size(); k++)
 		{
@@ -315,6 +331,7 @@ namespace codol::assets
 			b.parent = bone.parent;
 			std::memcpy(b.offset, bone.baseTrans, sizeof(b.offset));
 			quat_to_axis(bone.baseQuat, b.axis);
+			b.partClassification = bone.partClassification;
 			out.bones.push_back(b);
 		}
 		const zone::ModelLod& l = model.lods[lod];

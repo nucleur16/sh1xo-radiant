@@ -5,6 +5,14 @@
 //   codol_asset_verify image-roundtrip <install> <C1.exe> <use> <image> ..     shipped image -> source -> compile -> IWI ->
 //                                                                              codol_render; PSNR per level
 //   codol_asset_verify image-file <file> <use> <out.iwi> [<out.png>]           a source file through the compiler
+//   codol_asset_verify model-roundtrip <install> <C1.exe> [<every n-th>] [<zone name part>]
+//                                                 shipped model -> xmodel_export per LOD -> compile; match rate per field
+//   codol_asset_verify model-file <zone.ff> <C1.exe> <model> <lod0.xmodel_export> ..
+//                                                 export files of another tool against the shipped model
+//   codol_asset_verify model-extract <zone.ff> <C1.exe> <model> <out dir>      a shipped model as xmodel_export files; prints
+//                                                 the --xmodel argument that rebuilds it
+//   codol_asset_verify model-compare <zone a.ff> <model a> <zone b.ff> <model b> <C1.exe>
+//                                                 two models as the zone reader sees them
 //   codol_asset_verify material-roundtrip <install> <C1.exe> <library cache> [<every n-th>] [<dump dir>]
 //                                                 shipped material -> definition text -> compile; match rate per field
 
@@ -254,6 +262,22 @@ int main(const int argc, char** argv)
 	{
 		Archives archives;
 		return archives.open(argv[2], argv[3]) ? image_roundtrip(archives, use, std::vector<std::string>(argv + 5, argv + argc)) : 1;
+	}
+	if (command == "model-roundtrip" && argc >= 4)
+	{
+		return model_roundtrip(argv[2], argv[3], argc > 4 ? std::max(1, std::atoi(argv[4])) : 1, argc > 5 ? argv[5] : "");
+	}
+	if (command == "model-extract" && argc == 6)
+	{
+		return model_extract(argv[2], argv[3], argv[4], argv[5]);
+	}
+	if (command == "model-compare" && argc == 7)
+	{
+		return model_compare(argv[2], argv[3], argv[4], argv[5], argv[6]);
+	}
+	if (command == "model-file" && argc >= 6)
+	{
+		return model_file(argv[2], argv[3], argv[4], std::vector<fs::path>(argv + 5, argv + argc));
 	}
 	if (command == "material-roundtrip" && argc >= 5)
 	{

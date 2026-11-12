@@ -16,6 +16,7 @@
 //     --material <file.mtl>          every material of the file
 //     --material gdt:<file.gdt>[:<entry>]   the material entries of a GDT ( one, or all ); their images are compiled too
 //     --xmodel <name>=<lod0.xmodel_export>[@dist][,<lod1>[@dist] ..][,collision=<lod>][,contents=<n>][,mtl:<export name>=<material>]
+//                                 [,hitloc:<bone>=<class>]
 //     --rawfile <name>=<file>
 //
 //   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
@@ -28,6 +29,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <set>
 
 using namespace codol::assets;
@@ -439,6 +441,7 @@ int main(const int argc, char** argv)
 	}
 
 	// ---- materials
+	std::map<std::string, std::int32_t> surfaceFlags;		// material -> surface flags of its collision triangles
 	for (const MaterialDef& def : defs)
 	{
 		CompiledMaterial compiled;
@@ -449,6 +452,13 @@ int main(const int argc, char** argv)
 		if (const Status s = linker.add_material(compiled); !s)
 		{
 			return fail(s.message);
+		}
+		for (int type = 0; type < 32; type++)
+		{
+			if (compiled.header.surfaceTypeBits & (1u << type))
+			{
+				surfaceFlags[compiled.name] = (type + 1) << 20;		// shipped collision surfaces: surface type number << 20
+			}
 		}
 		std::printf("material %s: techset %s, sort %u, %zu textures, state %s\n", compiled.name.c_str(), compiled.techset.c_str(), compiled.header.sortKey,
 			compiled.textures.size(), compiled.stateShipped ? "as shipped materials have it" : "derived");
@@ -464,6 +474,7 @@ int main(const int argc, char** argv)
 		}
 		ModelOptions options;
 		options.name = spec.substr(0, equal);
+		options.collisionFlagsByMaterial = surfaceFlags;
 		for (const std::string& part : split(spec.substr(equal + 1), ','))
 		{
 			if (part.rfind("collision=", 0) == 0)
@@ -473,6 +484,10 @@ int main(const int argc, char** argv)
 			else if (part.rfind("contents=", 0) == 0)
 			{
 				options.contents = static_cast<std::int32_t>(std::strtol(part.c_str() + 9, nullptr, 0));
+			}
+			else if (part.rfind("hitloc:", 0) == 0 && part.find('=') != std::string::npos)
+			{
+				options.partClassification[part.substr(7, part.find('=') - 7)] = static_cast<std::uint8_t>(std::atoi(part.c_str() + part.find('=') + 1));
 			}
 			else if (part.rfind("mtl:", 0) == 0 && part.find('=') != std::string::npos)
 			{

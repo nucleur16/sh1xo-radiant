@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <string>
 
@@ -370,6 +371,49 @@ namespace
 		return 0;
 	}
 
+	// bone name -> part classification, over all models: is the classification a function of the name?
+	int bones(const fs::path& folder, const ClientKey& key, const fs::path& out)
+	{
+		std::map<std::string, std::map<int, int>> counts;
+		std::set<std::string> seen;
+		for (const fs::path& ff : zones_of(folder))
+		{
+			Zone zone;
+			if (!zone.open(ff, key))
+			{
+				continue;
+			}
+			for (const AssetRecord& r : zone.all_assets())
+			{
+				ModelView v;
+				if (r.type != c1::ASSET_TYPE_XMODEL || zone.reference(r.header) || !read_model(zone, r.header, v, false) || v.isReference || !seen.insert(std::string(v.name)).second)
+				{
+					continue;
+				}
+				for (const ModelBone& b : v.bones)
+				{
+					counts[std::string(b.name)][b.partClassification]++;
+				}
+			}
+		}
+		std::FILE* f = std::fopen(out.string().c_str(), "wb");
+		if (!f)
+		{
+			return 1;
+		}
+		for (const auto& [name, classes] : counts)
+		{
+			std::fprintf(f, "%s", name.c_str());
+			for (const auto& [value, count] : classes)
+			{
+				std::fprintf(f, "\t%d:%d", value, count);
+			}
+			std::fprintf(f, "\n");
+		}
+		std::fclose(f);
+		return 0;
+	}
+
 	int iwis(const fs::path& install, const fs::path& exe, const fs::path& out)
 	{
 		namespace r = codol::render;
@@ -439,6 +483,10 @@ int main(const int argc, char** argv)
 	if (command == "materials")
 	{
 		return materials(argv[2], key, argv[4]);
+	}
+	if (command == "bones")
+	{
+		return bones(argv[2], key, argv[4]);
 	}
 	if (command == "surfs")
 	{
