@@ -3574,7 +3574,7 @@ namespace editor::assets
 			files_dropped(files);
 		});
 
-		// asset_dialog <material | model | anim | gdt | close>: the windows of the Materials / Models browsers
+		// asset_dialog <material | model | anim | sounds | fx | gdt | close> [file]: the windows that make assets
 		command::register_command("asset_dialog", [](args_t args)
 		{
 			const std::string which = args.size() > 1 ? args[1] : "";
@@ -3582,6 +3582,8 @@ namespace editor::assets
 			else if (which == "model") { open_model_dialog(); }
 			else if (which == "anim") { open_anim_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
 			else if (which == "gdt") { open_gdt_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
+			else if (which == "sounds") { open_sounds_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
+			else if (which == "fx") { open_fx_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
 			else { close_dialogs(); }
 		});
 

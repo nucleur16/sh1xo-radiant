@@ -220,6 +220,8 @@ namespace editor::assets
 	void open_model_dialog(const std::vector<std::filesystem::path>& lods = {});
 	void open_gdt_dialog(const std::filesystem::path& file = {});
 	void open_anim_dialog(const std::filesystem::path& file = {});
+	void open_sounds_dialog(const std::filesystem::path& file = {});
+	void open_fx_dialog(const std::filesystem::path& file = {});
 	void close_dialogs();
 	void draw_windows();								// asset_windows.cpp
 }
