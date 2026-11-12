@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "assets.hpp"
 
 #include <commdlg.h>
 #include <atomic>
@@ -643,6 +644,16 @@ namespace editor::ui
 			command_line += " --baseline \"" + to_utf8(baseline) + "\"";
 		}
 
+		// the zone of the project's assets: models the map uses and its own zone does not have are taken from it.
+		// What of the project cannot be in the compiled map is said before the compiler runs and again with its report.
+		command_line += assets::compile_arguments();
+		assets::begin_compile();
+
+		for (const auto& line : assets::compile_problems())
+		{
+			game::printf_to_console("^1[CoDOL] compile: %s\n", line.c_str());
+		}
+
 		busy = true;
 		game::printf_to_console("[CoDOL] compiling %s ..\n", map_name.c_str());
 		ImGui::Toast(ImGuiToastType_Info, "Compile", ("Compiling " + map_name + " ..").c_str());
@@ -665,8 +676,12 @@ namespace editor::ui
 				{
 					game::printf_to_console("^1[CoDOL] compile of %s failed ( exit code %d )\n", map_name.c_str(), code);
 					ImGui::Toast(ImGuiToastType_Error, "Compile", ("Compile of " + map_name + " failed, see the console.").c_str(), 8000);
+					assets::compile_finished(false, output);
 					return;
 				}
+
+				// every face and model that will not be in the game, and why ( console + toast + Assets window )
+				assets::compile_finished(true, output);
 
 				game::printf_to_console("[CoDOL] compiled: %s\n[CoDOL] report: %s\n", to_utf8(out).c_str(), to_utf8(report).c_str());
 				game::printf_to_console("[CoDOL] the fastfile is unsigned: a patched client ( Kernel33.dll ) or the dedicated server loads it from the install's zone folder under the map's name. Keep a copy of the original.\n");
@@ -1275,6 +1290,15 @@ namespace editor::ui
 			else { game::printf_to_console("^1%s\n", s.doc.last_error().c_str()); }
 		});
 
+		// ed_model_class <script_model | misc_model>: what ed_place and the Models browser make ( a misc_model is a
+		// static model of the compiled map )
+		command::register_command("ed_model_class", [](args_t args)
+		{
+			auto& s = get_scene();
+			if (args.size() > 1 && (args[1] == "script_model" || args[1] == "misc_model")) { s.model_class = args[1]; }
+			game::printf_to_console("new model entities: %s\n", s.model_class.c_str());
+		});
+
 		// ed_key <key> <value>: on every selected entity
 		command::register_command("ed_key", [](args_t args)
 		{
@@ -1421,7 +1445,7 @@ namespace editor::ui
 			}
 		});
 
-		// ed_windows <letters>: s selection, e entity, l layers, m models, t materials, u surface
+		// ed_windows <letters>: s selection, e entity, l layers, m models, t materials, u surface, a assets
 		command::register_command("ed_windows", [](args_t args)
 		{
 			auto& st = get();
@@ -1432,6 +1456,7 @@ namespace editor::ui
 			st.show_models = which.find('m') != std::string::npos;
 			st.show_materials = which.find('t') != std::string::npos;
 			st.show_surface = which.find('u') != std::string::npos;
+			st.show_assets = which.find('a') != std::string::npos;
 		});
 
 		// ed_focus_window <title>: bring a docked window to the front, eg. ed_focus_window Materials##window
@@ -1560,6 +1585,9 @@ namespace editor::ui
 		{
 			if (args.size() > 1) { ImGui::GetIO().AddInputCharactersUTF8(args[1].c_str()); }
 		});
+
+		// ---- the project's assets: asset_new_material, asset_import_model, asset_gdt, asset_build, asset_list ..
+		assets::register_commands();
 
 		command::register_command("help", [](args_t)
 		{

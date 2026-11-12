@@ -191,6 +191,10 @@ namespace editor
 		object_id create_model_entity(std::string_view model, const edit::vec3& origin, double yaw);
 		object_id create_entity(std::string_view classname, const edit::vec3& origin);
 
+		// The zones the renderer takes materials and models from changed ( the project's assets were built ): every
+		// mesh and placed model is made again, so that it shows what the zones have now.
+		void refresh_assets();
+
 		[[nodiscard]] edit::vec3 selection_pivot() const;
 		[[nodiscard]] double snapped(double v) const { return snap ? edit::snap_value(v, grid) : v; }
 		void set_grid(double g);

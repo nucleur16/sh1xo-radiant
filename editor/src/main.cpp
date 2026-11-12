@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "assets.hpp"
 #include "png_wic.hpp"
 
 // CoDOL Radiant: the standalone host. A plain Win32 window with a Direct3D 9 device and a docking ImGui on it.
@@ -44,6 +45,8 @@ namespace editor
 		bool g_show_about = false;
 		bool g_show_settings = false;
 		std::string g_console_input;
+		std::vector<std::filesystem::path> g_dropped;		// WM_DROPFILES, handled in the next frame
+		std::string g_shot_path;							// ed_shot: the next frame is saved there
 
 		// ---------------------------------------------------------------------------------------------
 
@@ -126,6 +129,25 @@ namespace editor
 				}
 
 				break;
+
+			case WM_DROPFILES:
+			{
+				// files dropped on the window: images make a material, exports a model ( assets.hpp )
+				const auto drop = reinterpret_cast<HDROP>(wparam);
+				const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+
+				for (UINT i = 0; i < count; i++)
+				{
+					wchar_t file[MAX_PATH * 4] = {};
+					if (DragQueryFileW(drop, i, file, static_cast<UINT>(std::size(file))))
+					{
+						g_dropped.emplace_back(file);
+					}
+				}
+
+				DragFinish(drop);
+				return 0;
+			}
 
 			case WM_CLOSE:
 				// asked in the next frame: a map with unsaved changes gets a question first
@@ -340,6 +362,7 @@ namespace editor
 				ImGui::MenuItem("Layers", nullptr, &st.show_layers);
 				ImGui::MenuItem("Models", nullptr, &st.show_models);
 				ImGui::MenuItem("Materials", nullptr, &st.show_materials);
+				ImGui::MenuItem("Assets", nullptr, &st.show_assets);
 				ImGui::MenuItem("Surface inspector", "S", &st.show_surface);
 				ImGui::Separator();
 				item("Maps", GET_GUI(ggui::codol_map_ents_dialog));
@@ -513,6 +536,7 @@ namespace editor
 			ImGui::DockBuilderDockWindow("2D View 3##grid2", grid);
 			ImGui::DockBuilderDockWindow("Models##window", left);
 			ImGui::DockBuilderDockWindow("Materials##window", left);
+			ImGui::DockBuilderDockWindow("Assets##window", left);
 			ImGui::DockBuilderDockWindow("Layers##window", left);
 			ImGui::DockBuilderDockWindow("Maps##window", left);
 			ImGui::DockBuilderDockWindow("Entity##window", right);
@@ -552,6 +576,15 @@ namespace editor
 			{
 				module_->frame();
 			}
+
+			if (!g_dropped.empty())
+			{
+				const auto files = std::move(g_dropped);
+				g_dropped.clear();
+				assets::files_dropped(files);
+			}
+
+			assets::frame();
 
 			ui::draw_grid_views();
 			ui::draw_entity_window();
@@ -594,6 +627,13 @@ namespace editor
 				// the frame dump of CODOL_AUTOSHOT ( reading back and encoding a frame ) is not the editor's work
 				const auto capture_start = std::chrono::steady_clock::now();
 				components::codol_game::dev_capture_frame();
+
+				if (!g_shot_path.empty())
+				{
+					const bool saved = save_backbuffer_png(g_shot_path);
+					log(saved ? "[CoDOL] frame saved: " + g_shot_path : "^1[CoDOL] could not save the frame to " + g_shot_path);
+					g_shot_path.clear();
+				}
 				capture_time = std::chrono::steady_clock::now() - capture_start;
 
 				g_device->EndScene();
@@ -777,6 +817,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int)
 		return 1;
 	}
 
+	DragAcceptFiles(g_hwnd, TRUE);
 	ShowWindow(g_hwnd, GetEnvironmentVariableA("CODOL_WINDOWED", nullptr, 0) ? SW_SHOWNORMAL : SW_SHOWMAXIMIZED);
 	UpdateWindow(g_hwnd);
 
@@ -813,6 +854,13 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int)
 
 		GET_GUI(ggui::codol_viewport_dialog)->open();
 		GET_GUI(ggui::codol_map_ents_dialog)->open();
+
+		// development aid, like CODOL_AUTOSHOT but at a moment a command list picks: ed_shot <file.png>
+		command::register_command("ed_shot", [](const std::vector<std::string>& args)
+		{
+			if (args.size() > 1) { g_shot_path = args[1]; }
+			else { log("usage: ed_shot <file.png>   the frame as it is drawn next"); }
+		});
 
 		while (!g_exit)
 		{

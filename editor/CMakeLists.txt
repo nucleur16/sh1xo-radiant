@@ -20,12 +20,20 @@ set(DEPS ${ROOT}/deps CACHE PATH "folder with imgui, ImGuizmo, rapidjson")
 
 # ---- native libraries
 set(CODOL_ZONE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(CODOL_ZONE_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+# codol_linker ( --verify of a zone the editor built ) comes with the tools
+set(CODOL_ZONE_BUILD_TOOLS ON CACHE BOOL "" FORCE)
 add_subdirectory(${ROOT}/codol_zone ${CMAKE_BINARY_DIR}/codol_zone)
 add_subdirectory(${ROOT}/codol_render ${CMAKE_BINARY_DIR}/codol_render)
 add_subdirectory(${ROOT}/codol_view ${CMAKE_BINARY_DIR}/codol_view)
 set(CODOL_EDIT_RAPIDJSON_INCLUDE ${DEPS}/rapidjson/include CACHE PATH "" FORCE)
 add_subdirectory(${ROOT}/codol_edit ${CMAKE_BINARY_DIR}/codol_edit)
+# the asset compiler: the Assets window links the library; codol_assetc.exe is built next to the editor
+set(CODOL_ASSETS_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+set(CODOL_ASSETS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(${ROOT}/codol_assets ${CMAKE_BINARY_DIR}/codol_assets)
+set_target_properties(codol_assetc PROPERTIES
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
+	RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
 
 # ---- imgui ( docking )
 file(GLOB IMGUI_SRC ${DEPS}/imgui/*.cpp)
@@ -41,6 +49,9 @@ target_compile_definitions(imgui PRIVATE UNICODE _UNICODE $<$<CONFIG:Release>:ND
 add_executable(CoDOLRadiant WIN32
 	src/main.cpp
 	src/actions.cpp
+	src/assets.cpp
+	src/assets.hpp
+	src/asset_windows.cpp
 	src/compat.cpp
 	src/grid_view.cpp
 	src/host.hpp
@@ -81,7 +92,7 @@ target_link_options(CoDOLRadiant PRIVATE $<$<CONFIG:Release>:/DEBUG /OPT:REF /OP
 target_precompile_headers(CoDOLRadiant PRIVATE compat/std_include.hpp)
 set_source_files_properties(${DEPS}/ImGuizmo/ImGuizmo.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON COMPILE_OPTIONS "/W0")
 
-target_link_libraries(CoDOLRadiant PRIVATE imgui codol_edit codol_zone codol_render codol_view
+target_link_libraries(CoDOLRadiant PRIVATE imgui codol_edit codol_zone codol_render codol_view codol_assets
 	d3d9 ws2_32 psapi windowscodecs ole32 shell32 winmm comdlg32)
 
 # ---- the map compiler, next to the editor ( File > Compile map )
@@ -92,4 +103,4 @@ add_subdirectory(${ROOT}/codol_mapc ${CMAKE_BINARY_DIR}/codol_mapc)
 set_target_properties(codol_mapc_tool PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
 	RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
-add_dependencies(CoDOLRadiant codol_mapc_tool)
+add_dependencies(CoDOLRadiant codol_mapc_tool codol_assetc)

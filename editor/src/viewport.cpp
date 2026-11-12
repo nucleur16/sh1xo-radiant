@@ -5,6 +5,7 @@
 #undef max
 
 #include "host.hpp"
+#include "assets.hpp"
 #include "ui.hpp"
 
 #include <ImGuizmo.h>
@@ -1180,6 +1181,24 @@ namespace ggui
 		ImGui::SameLine();
 		ImGui::TextDisabled("%d models. Double click: new entity where the camera looks.", static_cast<int>(names.size()));
 
+		// a model of the map's own project ( assets.hpp ); a row of its own: the window is often narrow
+		if (ImGui::Button("Import model .."))
+		{
+			editor::assets::open_model_dialog();
+		}
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("A model of your own from xmodel_export files ( one per LOD ): it is built into the project's zone and listed here.");
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("Assets"))
+		{
+			st.show_assets = true;
+			ImGui::SetWindowFocus("Assets##window");
+		}
+
 		static std::vector<int> filtered;
 		static std::string filtered_for = "\x01";
 		static std::size_t filtered_count = 0;
@@ -1328,6 +1347,35 @@ namespace ggui
 		if (ImGui::IsItemHovered())
 		{
 			ImGui::SetTooltip("Click: the material of new brushes. Double click: also apply it to the selection.\nW: a world material ( its technique set reads lightmaps: made for brushes and terrain ).");
+		}
+
+		// materials of the map's own project ( assets.hpp ); a row of their own: the window is often narrow
+		if (ImGui::Button("New material .."))
+		{
+			editor::assets::open_material_dialog();
+		}
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("A material of your own from a colour map ( + normal / specular map ): it is built into the project's zone and listed here.\nImage files can also be dropped on the window.");
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("GDT .."))
+		{
+			editor::assets::open_gdt_dialog();
+		}
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("Materials of a CoD4 .gdt: list its material entries and convert the ones you pick.");
+		}
+
+		ImGui::SameLine();
+		if (ImGui::Button("Assets"))
+		{
+			st.show_assets = true;
+			ImGui::SetWindowFocus("Assets##window");
 		}
 
 		if (ImGui::BeginChild("##material_grid", ImVec2(0.0f, 0.0f), true))
