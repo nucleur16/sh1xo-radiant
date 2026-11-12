@@ -24,6 +24,8 @@ namespace
 		"  dump-ents <ff> [--out <f>]   entity string of the map\n"
 		"  dump-rawfile <ff> [<name>] [--out <f>]   one rawfile, inflated ( no name: list them )\n"
 		"  dump-rawfiles <ff> --out <folder>        every rawfile of the zone\n"
+		"  dump-stringtable <ff> [<name>] [--out <f>]   one string table as csv ( what codol_linker --set-stringtable\n"
+		"                               takes; no name: list them )\n"
 		"  model <ff> <name>            bones, lods, surfaces, materials\n"
 		"  models <ff>                  one line per xmodel: bones, lods, lod 0 surfaces / vertices / triangles\n"
 		"  material <ff> <name>         techset, textures, constants, state bits\n"
@@ -604,6 +606,52 @@ namespace
 			return 1;
 		}
 		return write_output(args.out, contents.data(), contents.size()) ? 0 : 1;
+	}
+
+	// A string table as csv, one row per line. A cell with a comma, a quote or a line break in it cannot be written
+	// in the plain form the game's tables have: it is reported and the dump fails.
+	int cmd_dump_stringtable(const Args& args)
+	{
+		Zone zone;
+		if (!open_zone(args, zone))
+		{
+			return 1;
+		}
+		if (args.positional.size() < 2)
+		{
+			for (const AssetRecord& r : zone.all_assets())
+			{
+				StringTableView table;
+				if (r.type == c1::ASSET_TYPE_STRINGTABLE && read_stringtable(zone, r.header, table))
+				{
+					std::printf("%6d rows %4d columns  %s\n", table.raw.rowCount, table.raw.columnCount, sv(table.name).c_str());
+				}
+			}
+			return 0;
+		}
+		StringTableView table;
+		if (!read_stringtable(zone, zone.find_asset(c1::ASSET_TYPE_STRINGTABLE, args.positional[1]), table))
+		{
+			std::fprintf(stderr, "error: no string table '%s' in this zone\n", args.positional[1].c_str());
+			return 1;
+		}
+		std::string text;
+		for (int row = 0; row < table.raw.rowCount; row++)
+		{
+			for (int column = 0; column < table.raw.columnCount; column++)
+			{
+				const std::string_view cell = table.cell(row, column);
+				if (cell.find_first_of(",\"\r\n") != std::string_view::npos)
+				{
+					std::fprintf(stderr, "error: row %d column %d holds a comma, a quote or a line break\n", row, column);
+					return 1;
+				}
+				text += column ? "," : "";
+				text += cell;
+			}
+			text += "\r\n";
+		}
+		return write_output(args.out, reinterpret_cast<const std::uint8_t*>(text.data()), text.size()) ? 0 : 1;
 	}
 
 	int cmd_dump_rawfiles(const Args& args)
@@ -1502,6 +1550,7 @@ int main(const int argc, char** argv)
 		if (args.command == "dump-ents") return cmd_dump_ents(args);
 		if (args.command == "dump-rawfile") return cmd_dump_rawfile(args);
 		if (args.command == "dump-rawfiles") return cmd_dump_rawfiles(args);
+		if (args.command == "dump-stringtable") return cmd_dump_stringtable(args);
 		if (args.command == "peek") return cmd_peek(args);
 		if (args.command == "index") return cmd_index(args);
 		if (args.command == "model") return cmd_model(args);

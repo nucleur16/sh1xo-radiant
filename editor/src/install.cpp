@@ -1056,6 +1056,16 @@ namespace editor::ui
 				else
 				{
 					(changed ? n.written : n.unchanged)++;
+
+					// The lobby emulator ( alpha0022, handoff\map_handoff.py installed_maps ) starts the map of a room
+					// only when <map>.ff is in ITS zone folder - the install's client_shipRetail\chinese, or the one
+					// folder CODOL_ZONE_DIR names; it never looks into usermaps\. Any other map of a room is replaced
+					// by its default map. Read from its sources; said here because the list alone does not start a map.
+					if (lower(to_utf8(zone_dir.lexically_normal())) != lower(to_utf8((game / "client_shipRetail" / "chinese").lexically_normal())))
+					{
+						say("^3", "the lobby only starts a room's map whose zone is in its zone folder ( <game>\\client_shipRetail\\chinese, or CODOL_ZONE_DIR ): " + name
+							+ ".ff went to " + to_utf8(zone_dir) + " - install with zones=<game>\\client_shipRetail\\chinese, or the lobby plays its default map instead");
+					}
 				}
 			}
 		}
