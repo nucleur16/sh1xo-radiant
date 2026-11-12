@@ -180,6 +180,16 @@ model, the entity model and a model the script spawns, the effect the script pla
 sound ( audio session mean 0.20 against 0.02 after `stopLoopSound` ). Animations of a project in an edited shipped
 map were not part of that run.
 
+**A project's animations on the server** ( seventh round; `codol_bsp/tests/harness/round7/mapc_anim.ps1` ): shipped
+mp_rust, unedited, with a project zone of two animations and two models carried in, the project's animlist appended
+( `animlists/mp_rust.animlist`: 43 bytes behind the 0 the zone had ) and `animtrees/mp_c4fx.atr` as a rawfile; the
+shipped level script with `#using_animtree( "mp_c4fx" )`, `precacheMpAnim` and `scriptModelPlayAnim` on two script
+models in front of the server's. The dedicated server: `CoDOL animlists: mp_rust.animlist loaded, 2 entries`, at
+`developer 1` `CoDOL mounted animtree: animtrees/mp_c4fx.atr`, `codol_animmodelprobe`: `10 client trees: ..
+9=mp_c4fx 10=multiplayer`, `getAnimLength` 2 and 1.33 s, no "cannot play animation", no script error. The same
+lines as for a map built from scratch. Not looked at in the client: script model animations do not move there on
+this server, whatever the map ( `codol_bsp/README.md`, "Script model animations" ).
+
 ### Static models
 
 * The XModel of a static model is **nested in the gfx_map asset**: the first instance of a model carries it ( its

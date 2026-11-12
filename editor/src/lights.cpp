@@ -166,7 +166,7 @@ namespace editor::ui
 			if (outer <= 0)
 			{
 				outer = l.primary_omni ? 120.0f : 90.0f;
-				inner = l.primary_omni && inner <= 0 ? 105.0f : inner;		// codol_bsp OMNI_DEFAULT_FOV_INNER
+				inner = l.primary_omni && inner <= 0 ? 60.0f : inner;		// codol_bsp OMNI_DEFAULT_FOV_INNER
 			}
 
 			outer = std::min(outer, 179.0f);

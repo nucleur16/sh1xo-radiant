@@ -1113,8 +1113,9 @@ int main(const int argc, char** argv)
 		{
 			CHECK(omni_light.lights[2].type == 3 && omni_light.lights[2].exponent == 0 && std::fabs(omni_light.lights[2].radius - 600.0f) < 0.01f);
 			CHECK(std::fabs(omni_light.lights[2].cosHalfFovOuter - 0.5f) < 0.001f && omni_light.lights[2].canUseShadowMap == 1);
-			// the cone of an omni light is where what moves throws a shadow: wide by default, full up to 105 degrees
-			CHECK(std::fabs(omni_light.lights[2].cosHalfFovInner - 0.6088f) < 0.001f);
+			// the cone of an omni light is where what moves throws a shadow: 120 / 60 degrees straight down by default,
+			// as most omni lights of the shipped maps
+			CHECK(std::fabs(omni_light.lights[2].cosHalfFovInner - 0.8660f) < 0.001f);
 			CHECK(std::fabs(omni_light.lights[2].dir[2] - 1.0f) < 0.001f);
 		}
 	}
@@ -1261,6 +1262,19 @@ int main(const int argc, char** argv)
 		CHECK(write_light_map(out / "maps", "odd_def", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"spawnflags\" \"1\"\n\"def\" \"light_point_nowhere\"\n}\n"));
 		const compiled odd = compile(out, game, "odd_def");
 		CHECK(odd.ok && std::any_of(odd.rep.warnings.begin(), odd.rep.warnings.end(), [](const std::string& w) { return w.find("'light_point_nowhere' is in no zone") != std::string::npos; }));
+	}
+
+	// ---- light: an omni light with a cone of its own ( "fov_outer" / "fov_inner" ): where players throw full shadows
+	{
+		CHECK(write_light_map(out / "maps", "omni_cone", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"spawnflags\" \"1\"\n\"fov_outer\" \"120\"\n\"fov_inner\" \"105\"\n}\n"));
+		const compiled c = compile(out, game, "omni_cone");
+		const zone_light light(c.file, game);
+		CHECK(c.ok && light.ok && light.lights.size() == 3);
+		if (light.ok && light.lights.size() == 3)
+		{
+			CHECK(light.lights[2].type == 3 && light.lights[2].canUseShadowMap == 1 && std::fabs(light.lights[2].cosHalfFovOuter - 0.5f) < 0.001f
+				&& std::fabs(light.lights[2].cosHalfFovInner - 0.6088f) < 0.001f);
+		}
 	}
 
 	// ---- light: bounced light has the colour of the materials. A closed room, one white light, no other light: what

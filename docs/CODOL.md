@@ -4,7 +4,9 @@ This branch (`codol-1.1.1.13`) turns iw3xo-radiant into a workbench for Call of 
 1.1.1.13 ("C1", an IW4-derived engine, fastfile version 334). It keeps everything upstream does
 and adds a **CoDOL** menu.
 
-- [What works](#what-works)
+- [CoDOL Radiant: the standalone editor](#codol-radiant-the-standalone-editor) - [the tool chain](#the-tool-chain),
+  [a map of your own](#a-map-of-your-own) step by step, [your own assets](#your-own-assets)
+- [What works](#what-works) ( the radiant plugin )
 - [What does not exist yet](#what-does-not-exist-yet)
 - [Setup](#setup)
 - [Script Workbench](#script-workbench)
@@ -42,7 +44,7 @@ needed. What it is made of:
 | CoD4 mod tools | here | what it does today |
 |---|---|---|
 | Radiant | `CoDOLRadiant.exe` | open a map of the install or one of your own, edit entities / models / brushes in 3D and 2D views with undo, light entities with a panel of their own, save as `.map` |
-| `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce, light grid, reflection probes ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
+| `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce in the materials' colours, light grid, reflection probes ), primary lights ( spot, omni, scriptable ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
 | editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes, and the project's assets ( animations, sounds, effects, models ). It patches the shipped zone; no light bake. |
 | Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials, models, animations, sounds and effects: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export`, `xanim_export`, soundalias `.csv` + `.wav`, `.efx` -> native assets in `mod\<map>\<map>_assets.ff`. Materials and models are shown by the editor at once; animations, sounds and effects are for the level script of the built map. See [Your own assets](#your-own-assets). |
 | the zone source `.csv` of a map, `linker_pc` on it | `tools\package_map.ps1` ( part of File > Build map ) | puts the project's assets, animtrees, animlist and scripts into the map zone ( `codol_assetc --carry`, `--rawfile` ), adds the minimap material, builds the load zone and writes the package |
@@ -52,132 +54,125 @@ needed. What it is made of:
 Compiled fastfiles are unsigned ( `IWffu100` ); the signed form needs a key the client does not have. Per the notes
 in the install, the retail client only loads unsigned zones from disk with the `Kernel33.dll` patch; the dedicated
 server reads both. Maps built from scratch and edited shipped maps have both been loaded on the dedicated server and
-in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was checked where and what is still open.
+in the client - on one machine, over loopback, with a test account, the lobby emulator of the install and a
+dedicated server ( `codol_dedrun` ); nobody has played them over a network. `codol_bsp/README.md` and
+`codol_mapc/README.md` list what was checked where, with the pictures, and what is still open.
 
 ### A map of your own
 
-1. **File > New map**, a name like `mp_mymap`. It is saved as `map_source\mp_mymap.map`.
-2. Draw the map: brushes, terrain patches, `misc_model`s, lights, `reflection_probe`s, spawn points
-   ( `mp_dm_spawn`, `mp_tdm_spawn_*` .. ), one `mp_global_intermission`, `node_pathnode`s for bots. The map has to be
-   closed ( no way from an entity to the void ) or stand in a sky box; the build reports a leak with its position.
+From an empty editor to a map you walk around in. Every step is a menu entry and a console command; what was seen
+of each step in the game, and where, is said with it - the details and the pictures are in `codol_bsp/README.md`.
 
-   **The 3D view.** A map of your own has no zone of the game to be drawn in, so the editor draws it in a *stage*:
-   an empty world that `codol_bsp` compiles from the light keys of the map's worldspawn ( a second or two, kept in
-   `compiled\cache\stage\` per set of keys ). Brushes are drawn with their materials, models where their entities
-   stand, lit by the sun, sky and ambient light the map will have. It is not the light bake: lights and shadows of
-   brushes are what File > Build map makes.
+**0. Once: settings.** File > Settings: the CoDOL install folder ( the one with `C1.exe`, `main\` and
+`client_shipRetail\` ) and, for the install step, the dedicated server's script folder. The first build scans the
+install's zones ( about 16 s ) and the first asset build its materials ( 20 s ); both are kept.
 
-   **Light.** A `light` is created with `radius 600`, `intensity 1`, `_color 1 1 1`; it reaches as far as its
-   radius and is down to a quarter at half of it. `spawnflags 2` ( `PRIMARY_SPOT`, with `fov_outer` / `fov_inner` /
-   `exponent` and `angles` or a `target` ) or `1` ( `PRIMARY_OMNI` ) makes it a primary light: the game lights the
-   world and the models with it at run time instead of from the lightmap, and a spot throws the shadows of players
-   and script models ( seen in the client ). Floors and walls are cut where the reach of such lights ends, so two
-   of them can light one floor side by side. `spawnflags 4` keeps the light as an entity a script can change;
-   `def` names its falloff ( `light_point_linear`, `light_point_quadratic` .. - any definition of the install ). The worldspawn takes `sundirection`,
-   `suncolor`, `sunlight`, `ambient` with `_color`, `skylight` with `skycolor`; without them a map has a sun of
-   1.3 from `-50 40 0`, an ambient light of 0.1 and a sky light of 0.4. All keys with their defaults:
-   `codol_bsp/README.md`, "Light keys".
+**1. File > New map**, a name like `mp_mymap` ( `a-z 0-9 _` ). It is saved as `map_source\mp_mymap.map`; its
+asset project is `mod\mp_mymap\` ( [Your own assets](#your-own-assets) ).
 
-   Nobody has to type these keys. With a light selected the **Entity** window has a **Light** section: colour
-   ( a swatch that opens a picker ), intensity, radius, the kind ( baked / primary omni / primary spot ), "no shadow
-   map" ( `spawnflags 8` ), "scriptable" ( `spawnflags 4`, with `maxturn` / `maxmove` ), the falloff ( `def` ), and
-   for a spot the outer and inner angle, the exponent and where it points - pitch and yaw, or a target picked from
-   the targetnames of the map. With nothing selected the window shows **Light of the map**: sun, sun colour and
-   direction ( with a small compass: from above, from the side ), sky light and ambient light of the worldspawn; a
-   field whose key is not set shows the compiler's default and says so, the `x` behind a field takes the key away
-   again. Fields that are dragged change the map while the mouse is down and are one undo step. "Show in 3D"
-   appears when the light keys differ from those the stage was built with, and builds the stage again ( console:
-   `ed_restage`; `ed_key <key> <value>` and `ed_delkey <key>` go to the worldspawn when no entity is selected ).
+**2. Draw the map.** Brushes, terrain patches, `misc_model`s ( static models ), `reflection_probe`s.
 
-   While a light is selected the 3D view and the 2D views draw **where it reaches**: three circles of its radius
-   ( and one at half of it ) for a light that shines all around, the cone of a spot - outer and inner angle, cut
-   off at the radius, with its axis - in the colour of the light. The cone is computed the way `codol_bsp` reads
-   the keys ( a target wins over the angles and gives a cone of 64 units around it unless `fov_outer` is set ), so
-   what is drawn is what the bake uses. The classes `light_spot` and `light_omni` ( the primary lights of the
-   shipped maps ) get the same section.
+* The map has to be **closed** ( no way from an entity to the void ) or stand in a sky box; the build reports a
+  leak with its position.
+* **Players do not collide with static models** ( the engine's rule, bullets do ): put `clip` brushes around models
+  one should not walk through.
+* Doorways and windows between rooms become portals by themselves ( planar openings in a wall ); `portal` brushes
+  of your own switch that search off.
+* *The 3D view* draws a map of your own in a *stage*: an empty world that `codol_bsp` compiles from the light keys
+  of the worldspawn ( a second or two, kept in `compiled\cache\stage\` ). Brushes with their materials, models
+  where their entities stand, lit by the sun, sky and ambient light the map will have. **It is not the light
+  bake**: light entities are drawn as shapes, their light and all shadows of brushes are what File > Build map
+  makes.
 
-   "scriptable" with `maxturn` / `maxmove`, the classes `light_spot` / `light_omni` and falloff definitions other
-   than `light_point_linear` are read by the compiler's light work that was written alongside this panel
-   ( `codol_bsp/README.md`, "Light keys", says what the compiler you have reads; it prints `light keys: ..` with
-   every build ). A compiler that does not know one of them ignores the key - the panel still writes it.
-3. **Edit > Add gameplay entities** adds what the game's scripts ask of every multiplayer map and the map does not
-   have yet: the care package with its collision ( without it `_airdrop.gsc` throws a script error at every map
-   start ) and a helicopter path ( `heli_start`, `heli_loop_start` .. ). The build names what is missing.
-4. **File > Build map** ( or "fast" while you work on the layout ). The result is a package in `compiled\<map>\`:
+**3. Light.** Nobody has to type keys: with nothing selected the **Entity** window shows *Light of the map* ( sun,
+its colour and direction with a small compass, sky light, ambient light; a field whose key is not set shows the
+compiler's default, the `x` behind a field takes the key away ), with a light selected its **Light** section
+( colour, intensity, radius, kind, falloff, cone, "scriptable" ). "Show in 3D" builds the stage again when the
+light keys changed ( `ed_restage` ). While a light is selected the views draw where it reaches: circles of its
+radius, or the cone of a spot as the compiler reads it. Two keys have no field and are typed: `radiosityscale` of
+the worldspawn and the cone of an omni light ( `ed_key <key> <value>`; it goes to the selected entity, or to the
+worldspawn when nothing is selected ).
 
-   | | |
-   |---|---|
-   | `zone\<map>.ff`, `zone\<map>_load.ff` | the map zone ( with the minimap material `compass_map_<map>` ) and its load zone; a picture `map_source\<map>_load.png` becomes the loading screen |
-   | `scripts\maps\mp\<map>.gsc` ( + `_fx`, `createfx` ) | the level script for the dedicated server's script folder: generated, or your own ( below ) |
-   | `main\zz_<project>_sounds.iwd` | only when the project has streamed sounds: their files. The install step writes them into `<install>\main\` as `iw_sound_NN.iwd` ( below ) |
-   | `presence\` | the row, arena entry and name for the create-room list, and `INSTALL.txt`: where every file goes |
-   | `work\<map>.report.txt`, `work\scripts\` | what the compiler did: counts, timings, warnings; the scripts as the compiler generated them |
+| what | keys | in the game |
+|---|---|---|
+| the map's light | worldspawn `sundirection`, `suncolor`, `sunlight`, `ambient` + `_color`, `skylight` + `skycolor`, `radiosityscale`. Without them: a sun of 1.3 from `-50 40 0`, ambient 0.1, sky 0.4, bounce 1 | sun with run time shadows of players and models, sky light, bounced light in the colour of the materials it comes off |
+| a baked light | `light` with `radius` ( 600 ), `intensity` ( 1 ), `_color`; it is down to a quarter at half its radius | in the lightmaps and the light grid; nothing that moves throws a shadow in it |
+| a primary spot | `spawnflags 2`, `fov_outer` / `fov_inner` / `exponent`, `angles` or a `target` | lights world and models at run time; players and script models throw shadows in it ( seen ) |
+| a primary omni light | `spawnflags 1` | lights all around at run time. Players and models throw shadows **only inside its cone** - straight down, 120 degrees, full strength inside 60, as in the game's own maps; `fov_inner` / `fov_outer` / `angles` change the cone ( seen and measured ) |
+| a light a script changes | "scriptable" ( `spawnflags 4` ), a `targetname`; `maxmove` / `maxturn` when the script moves or turns it | the script gets it with `getEnt` and calls `setLightIntensity`, `setLightColor`, `setLightFov`, sets `.origin` ( seen ). What the light could reach within `maxmove` / `maxturn` is lit by it at run time where no other light is |
+| the falloff | `def`: `light_point_linear` ( default ), `light_point_quadratic`, `tungsten_lamp` .. - any definition of the install | three of them seen |
 
-   From the map's asset project ( next section ) the zone gets: the materials and models the map uses ( the
-   compiler takes them ), and after the compile every animation, sound alias ( with its loaded sounds and curves ),
-   effect and model of the project's zone, the animtrees and the animlist of the animations, and the files of the
-   project's `scripts\` folder as rawfiles. See [In the built map](#in-the-built-map).
+Two things a mapper runs into: a surface is lit at run time by **one** primary light - floors and walls are cut
+where the reach of two of them meets, along a grid of 32 units; and on the test server a script moves a light only
+by setting `.origin` ( `moveTo` and `linkTo` on a light are script errors there, though the game's own scripts use
+them ). All keys with their defaults: `codol_bsp/README.md`, "Light keys".
 
-5. **File > Install the built map ..** asks where to: the game folder ( the install of File > Settings is filled
-   in ), the server's script folder, and whether the map goes into the create-room list.
+**4. Your own textures, models, animations, sounds, effects** - optional: [Your own assets](#your-own-assets).
+Import them, press **Build** in the Assets window, use them. A level script of your own
+( Assets > **Level script** ) is where animations, sounds and effects are played from.
 
-   | from `compiled\<map>\` | to |
-   |---|---|
-   | `zone\*.ff` | `<game>\usermaps\<map>\` |
-   | `main\zz_*_sounds.iwd` | `<game>\main\iw_sound_NN.iwd`: written again, encrypted, under the first free number from 23 down |
-   | `scripts\..` | the script folder |
-   | `presence\comaplist_row.csv`, `basemaps_arena_entry.txt`, `localize.txt` | the create-room list of `<game>`, with "Add to the create-room list" |
+**5. What the game's scripts ask of every map.** Spawn points ( `mp_dm_spawn`, `mp_tdm_spawn_*` .. ), one
+`mp_global_intermission`, `node_pathnode`s for bots. **Edit > Add gameplay entities** ( `ed_gameplay` ) adds what
+is missing besides: the care package with its collision ( without it `_airdrop.gsc` throws a script error at every
+map start ) and a helicopter path ( `heli_start`, `heli_loop_start` .. ). The build names what is missing.
 
-   * A file that is in the way and differs is kept once as `<file>.pre-<map>` before it is replaced; a file that
-     is the same already is left alone - installing twice changes nothing ( "unchanged" in the console ).
-   * Everything written is noted in `compiled\<map>\work\installed.txt`. **Uninstall** ( the same window, or
-     `map_uninstall` ) undoes exactly that: files that were new are deleted, replaced files get their backup back,
-     the map comes out of the list, `usermaps\<map>\` goes when it is empty.
-   * **The create-room list** is three things ( the install's `usermaps\build_usermaps_patch.py` describes how the
-     client reads them ): a row of the string table `mp/comaplist.csv` ( the map pool ), an entry of the rawfile
-     `mp/basemaps.arena` ( the lobby scene ) and a localize entry for the name. The client keeps the first asset of
-     a name it links and links the zones of `client_shipRetail\patch\` first, so the list is whichever zone of that
-     folder holds `mp/comaplist.csv` - in the install of this machine `codol_common.ff`. The editor reads that zone
-     with `codol_zone`, adds the row ( NUMBER and SEQUENCE: the next free ones ), the arena entry and the name,
-     writes the zone again, reads it back and only then puts it in place. Without such a zone it makes
-     `usermaps_patch.ff` from the stock list of `client_shipRetail\chinese\( patch_ )code_post_gfx_mp.ff`. A row
-     for the map that the editor did not write is left alone. On uninstall the entries are taken out of the list as
-     it is then; when that leaves what the backup held, the backup itself goes back and the file is byte for byte
-     what it was.
-   * `map_list [game folder]` prints which zone is the list, its last rows and how many arena entries it has.
-   * Without the list a map is played by starting the lobby with `CODOL_FORCE_MAP=<map>`.
-   * **Streamed sounds.** The game opens only archives named like its own ( `iw_sound_NN.iwd`, `iw_NN.iwd` .. with
-     NN up to 23 ), decrypts those with a key that holds the file name, cannot seek in an entry that is stored
-     instead of deflated, and plays a streamed file only out of an archive the *server* has in its `main\` as
-     well ( the server tells the client which archives are "pure" ). So the package's plain archive is written
-     again as one archive of the game; client and server of one install share `main\`, a server elsewhere needs a
-     copy. By hand: `codol_assetc --install <game> --iwd <game>\main\iw_sound_23.iwd --iwd-add zz_<project>_sounds.iwd`.
-   * **The lobby and the zone folder.** The lobby emulator of this install ( alpha0022, `handoff\map_handoff.py` )
-     starts the map of a room only when `<map>.ff` is in *its* zone folder - `<game>\client_shipRetail\chinese`, or
-     the one folder `CODOL_ZONE_DIR` names; it never looks into `usermaps\`. A room with any other map gets its
-     default map. For a map that is to be started from the create-room list, install with
-     `zones=<game>\client_shipRetail\chinese`; the install says so when the zones went elsewhere.
+**6. File > Build map** ( `map_build`; `map_build fast` while you work on the layout ). The compile, the light bake
+and the packaging follow each other; the result is a package in `compiled\<map>\`:
 
-   What was checked, and what was not: on copies of the list zones under `build-editor\installtest\` - the list
-   in `codol_common.ff` ( 96 -> 97 rows, 112 -> 113 arena entries, the name ), a list made from the stock zones
-   ( 60 -> 61 rows ), a folder without either ( refused, with what is missing ); a second install wrote nothing;
-   uninstall gave back files with the hashes they had, `codol_common.ff` included.
+| | |
+|---|---|
+| `zone\<map>.ff`, `zone\<map>_load.ff` | the map zone ( with the minimap material `compass_map_<map>` ) and its load zone; a picture `map_source\<map>_load.png` becomes the loading screen |
+| `scripts\maps\mp\<map>.gsc` ( + `_fx`, `createfx` ) | the level script for the dedicated server's script folder: generated, or your own |
+| `main\zz_<project>_sounds.iwd` | only when the project has streamed sounds: their files, as a plain archive |
+| `presence\` | the row, arena entry and name for the create-room list, and `INSTALL.txt`: where every file goes |
+| `work\<map>.report.txt`, `work\scripts\` | what the compiler did: counts, timings, warnings; the scripts as generated |
 
-   **In the client** ( sixth round; `codol_bsp/README.md` ): the editor built a map ( `mp_c6list` ) and installed it
-   with `list` into the test client - a link based copy of the install whose `codol_common.ff` was made a real
-   file first -, the lobby was started *without* `CODOL_FORCE_MAP`. The client starts and runs its menus with the
-   list zone the editor wrote ( 97 rows, the name `USERMAPS_MP_C6LIST` ). **The list itself was not seen**: the
-   client's *Create Room* is locked with "Unlocks at player level 5", the test account is level 1, and the lobby
-   keeps an account's level only in its own `players\<uid>.json` ( 9000 XP for level 5, earned in finished
-   matches; no switch ) - a file the tests do not write. So whether the row shows with its name and starts the map
-   is still open; it needs an account of level 5. After the test `map_uninstall` gave the zone back byte for byte.
+From the asset project the zone gets the materials and models the map uses, every animation, sound alias, effect
+and model of the project's zone, the animtrees and the animlist, and the files of the project's `scripts\` as
+rawfiles ( [In the built map](#in-the-built-map) ). Read the report's warnings: a leak, a material no zone has
+( its faces are not drawn ), a light definition that was replaced.
 
-   Who makes `codol_common.ff`: nothing in the install or in the lobby's folder does - `1-START-LOBBY.cmd` only
-   starts the lobby, `usermaps\build_usermaps_patch.py` writes `usermaps_patch.ff` ( a different zone, which loses
-   against `codol_common.ff`: the zones of `patch\` are linked in alphabetical order and the first asset of a name
-   wins ). Whatever build makes `codol_common.ff` is outside both; when it runs again the row is gone with the
-   file, and the lasting place for a map is that build's map table, for which `presence\INSTALL.txt` and the three
-   files of `presence\` are the input.
+**7. File > Install the built map ..** ( `map_install` ). It asks for the game folder, the server's script
+folder and whether the map goes into the create-room list. Three things have to end up in the right place:
+
+| from `compiled\<map>\` | to | why there |
+|---|---|---|
+| `zone\<map>.ff`, `<map>_load.ff` | **`<game>\client_shipRetail\chinese\`** - give it as the zone folder: `map_install game=<game> zones=<game>\client_shipRetail\chinese`. Without a zone folder they go to `<game>\usermaps\<map>\` | client and server can read both places, but the **lobby** starts a room's map only when `<map>.ff` is in *its* zone folder - `client_shipRetail\chinese` of the install, or the folder `CODOL_ZONE_DIR` names; it never looks into `usermaps\`. Every run in the game described here had the zones in `client_shipRetail\chinese`. A dedicated server with another base path needs the zone under *its* `client_shipRetail\chinese` too |
+| `scripts\..` | the server's script folder | the dedicated server reads level scripts from its script folder, never from a zone. Without the level script the map still runs, but nothing of your script does |
+| `main\zz_*_sounds.iwd` | `<game>\main\iw_sound_NN.iwd` ( written again: encrypted, every entry deflated, under the first free number from 23 down ) - **in `main\` of the client and of the server** | the game opens only archives named like its own, and plays a streamed file only out of an archive the *server* has as well ( the server tells the client which archives are "pure"; a client with an archive the server lacks ends with "Impure client detected" ). Client and server of one install share `main\`; **a server that runs from another folder needs a copy of the archive in its own `main\`**. By hand: `codol_assetc --install <game> --iwd <game>\main\iw_sound_23.iwd --iwd-add zz_<project>_sounds.iwd` |
+| `presence\comaplist_row.csv`, `basemaps_arena_entry.txt`, `localize.txt` | the create-room list of `<game>`, with "Add to the create-room list" ( `list` ) | below |
+
+* A file that is in the way and differs is kept once as `<file>.pre-<map>` before it is replaced; a file that is
+  the same already is left alone - installing twice changes nothing.
+* Everything written is noted in `compiled\<map>\work\installed.txt`. **Uninstall** ( the same window, or
+  `map_uninstall` ) undoes exactly that: new files are deleted, replaced files get their backup back, the map
+  comes out of the list, `usermaps\<map>\` goes when it is empty.
+* The client has to be started as `codoMP_client_shipRetail.exe` with the install's `Kernel33.dll`: compiled zones
+  are unsigned, and per the install's notes only that start loads unsigned zones from disk. No change to
+  Kernel33, lobby or server is needed for a new map name.
+
+**8. Play.**
+
+* **Without the list**: start the lobby with `CODOL_FORCE_MAP=<map>` ( and `CODOL_FORCE_GAMETYPE` ), then
+  Multiplayer > Start > Search > Ready in the client. This is how every map of these pages was entered.
+* **From the create-room list**: install with "Add to the create-room list". The list is three things ( the
+  install's `usermaps\build_usermaps_patch.py` describes how the client reads them ): a row of the string table
+  `mp/comaplist.csv`, an entry of the rawfile `mp/basemaps.arena` and a localize entry for the name. The client
+  keeps the first asset of a name it links and links the zones of `client_shipRetail\patch\` first, so the list is
+  whichever zone of that folder holds `mp/comaplist.csv` - in the install of this machine `codol_common.ff`. The
+  editor reads that zone, adds the row, the arena entry and the name, writes it again, reads it back and only then
+  puts it in place ( without such a zone it makes `usermaps_patch.ff` from the stock list ). `map_list [game
+  folder]` prints which zone is the list and its last rows. **Written and loaded by the client, not seen**: the
+  client runs its menus with the list zone the editor wrote ( 97 rows ), but its *Create Room* is locked below
+  player level 5 and the test account is level 1, so the row was not looked at and no map was started from it.
+  Whatever build makes `codol_common.ff` is outside the install and the lobby's folder; when it runs again the row
+  is gone with the file - `presence\` is the input for that build's map table.
+
+**What is still open for a map of your own** ( the whole list: [What does not exist yet](#what-does-not-exist-yet) ):
+animations of your own have not been seen *moving* in the game ( the test server does not send script model
+animations to the client, shipped ones included ); the create-room row was not seen; primary lights cut surfaces
+along a coarse grid and an omni light shadows only inside its cone; static models have no player collision; a
+script moves a light only through `.origin` on the test server.
 
 Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`, `map_install [zone folder] [script folder]` ( the
 folders of File > Settings when none is given ), `map_install game=<folder> [scripts=<folder>] [zones=<folder>]
@@ -288,7 +283,11 @@ Loaded ( sixth round, `codol_bsp/README.md` ): shipped mp_rust, opened in the ed
 material, one model, sound aliases, one effect and a level script; the model placed once as a static model and
 once as a `script_model`; File > Compile map. The dedicated server takes the zone and runs the project's level
 script; the client enters the map, draws the three crates ( static, entity, spawned by script ), the effect's
-puffs above them, and plays the project's loop sound.
+puffs above them, and plays the project's loop sound. **Animations** ( seventh round, on the server, with the
+command line: `codol_mapc --assets` with the project's animlist appended and its animtree as a rawfile ): the
+server reads `animlists/mp_rust.animlist` with the project's two entries, mounts `animtrees/<tree>.atr`, gives the
+tree a client id, `getAnimLength` answers and `scriptModelPlayAnim` runs without a script error - the same lines
+as for a map built from scratch. Whether they move in the client is the open question it is everywhere.
 
 * A model of the project that an entity uses - a `misc_model` ( static ) or any other class ( `script_model` .. ) -
   is copied into the map zone with its materials and images ( "entity models / static models: xmodel .. taken from
@@ -395,6 +394,9 @@ not extended: give your animations a tree of their own. An edited shipped map ha
 `compiled\<map>.scripts\` and the sound archive are copied by hand.
 ## What works
 
+This table and the sections below it are about the **radiant plugin** ( `iw3r.dll` inside CoD4 radiant ), the first
+form of this work; what the standalone editor does is above.
+
 | Area | Status |
 |---|---|
 | Script editing | Browse and edit the game's script tree (`.gsc`, animtrees, `mp/playeranim.script`, string tables, ...) inside radiant, with syntax highlighting, find / go to line, GBK and CRLF preserved on save. |
@@ -413,21 +415,30 @@ not extended: give your animations a tree of their own. An edited shipped map ha
 Be aware of these before planning work around this branch:
 
 - **Maps of your own: lighting is simpler than the game's own maps.** Surfaces are cut by the reach of the
-  primary lights along a coarse grid, not as finely as the game's compiler does; bounced light does not take the
-  colour of the materials; a light region has no planes through doorways; under a primary omni light no shadow of
-  a player was made out ( under a spot they are there ). See "Limits" in `codol_bsp/README.md`.
+  primary lights along a grid of 32 units, not as finely as the game's compiler does, and a surface is lit at run
+  time by one primary light. Bounced light has the mean colour of a material, not its pattern. An omni light
+  shadows players and models only inside its cone ( so do the game's own - it is what the shaders read ). A light a
+  script moves keeps the shadows of where it was compiled and lights at run time only what no other light claims.
+  See "Limits" in `codol_bsp/README.md`.
+- **Moving a light by script: `.origin` only, on the test server.** The game's own scripts also use `moveTo` and
+  `linkTo` on lights; `codol_dedrun` answers both with a script error for the classes `light_spot` / `light_omni`.
 - **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
   players do not: put clip brushes around models.
 - **Nobody has seen an animation of your own move in the game.** The editor plays the compiled animation ( the
   Preview window reads it back from the project's zone ), the Assets window builds it and File > Build map puts it
   into the map with its animtree, animlist and your level script; a dedicated server runs a level script that uses
-  it without a script error, and the client loads such a map and draws its effect
-  ( [In the built map](#in-the-built-map) ). But script model animations do not move in the client on the test
-  server - shipped ones do not either; what a map has to bring is there ( `codol_bsp/README.md`, "Script model
-  animations" ). **Sounds**: loaded and streamed sounds of your own play in the client ( measured at its audio
-  session, not listened to ); the editor's Preview window plays the loaded ones.
+  it without a script error - for a map built from scratch and for an edited shipped map -, and the client loads
+  such a map and draws its effect ( [In the built map](#in-the-built-map) ). But script model animations do not
+  move in the client on the test server - shipped ones do not either; what a map has to bring is there
+  ( `codol_bsp/README.md`, "Script model animations" ), the rest is the server's.
+- **Sounds were measured, not heard.** Loaded and streamed sounds of your own play in the client - measured at
+  its audio session on a machine without anybody listening; the editor's Preview window plays the loaded ones.
+- **Nothing was played over a network.** Every run in the game was one client, one dedicated server and the lobby
+  emulator on one machine, with a test account of level 1.
 - **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
-  of deleted brushes and does not re-bake light. For that, build the map from scratch.
+  of deleted brushes and does not re-bake light. For that, build the map from scratch. It has no install step
+  either: its fastfile ( which replaces the shipped one and has to keep its length ), `compiled\<map>.scripts\`
+  and the sound archive are copied by hand.
 - **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;
   terrain, patches and decals of a shipped map exist only as render surfaces and are not in the imported `.map`.
 - **The create-room list: written, loaded by the client, not seen.** File > Install the built map .. adds the map to
@@ -437,6 +448,8 @@ Be aware of these before planning work around this branch:
   without the list.
 - **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
   worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
+- **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
+  the shipped animtrees are not extended ( the list under [In the built map](#in-the-built-map) ).
 - **Entity overrides are mp only.** The server applies `<map>.d3dbsp.ents` in mp matches; co-op and
   zombies compose their own entities.
 - The sections below this one describe the radiant plugin ( `iw3r.dll` in CoD4 radiant ), which the standalone
@@ -509,8 +522,8 @@ The index is rebuilt in the background with **Rescan** and updated for a file wh
 
 ## Map Entities
 
-**CoDOL > Map Entities** (console: `codol_mapents`). This is the way to work on a CoDOL map from
-radiant today.
+**CoDOL > Map Entities** (console: `codol_mapents`). This is the way to work on a CoDOL map from inside
+CoD4 radiant ( the plugin ); the standalone editor opens a shipped map itself and has File > Compile map.
 
 1. **Import** a map: pick a zone of the install or an override that already exists in the script
    folder, or give a file (`.ff`, a decrypted `.zone`, a `.d3dbsp.ents`, plain entity text).
@@ -608,13 +621,15 @@ radiant map, a `.zone` has its `MapEnts` header validated against its entity str
 
 ## Roadmap
 
-In the order that unlocks the most:
+What the chain above still lacks, in the order that would help a mapper most:
 
-1. **Brush texture alignment.** The UVs of brush sides can be recovered from the coincident
-   render surface (in its Cast export); read them and write the texture projection of each side.
-2. **Non-brush geometry.** Terrain, patches and decals from the render world as reference models.
-3. **Map compile.** Get an IW3 to IW4 map converter (iw3x-port) and wire the chain: `cod4map` /
-   `cod4rad`, `linker_pc`, IW3 to IW4, IW4x zonebuilder, AssetExplorer `iw4-port`, install as a
-   usermap, `map <name>` over rcon. This is the step that lets edited geometry reach the game.
-4. **Zone reader in C++** on top of `c1_layouts.hpp`, to drop the dependency on the external asset
-   tool.
+1. **Animations that move in the client.** The map side is complete; the dedicated server has to send script
+   model animations so that the client plays them ( `codol_bsp/README.md`, "Script model animations" ).
+2. **The create-room list seen.** Needs an account of level 5; the editor's part is written and loaded.
+3. **Light closer to the game's compiler**: surfaces cut along the pieces of a BSP instead of a grid, an omni
+   light's cone aimed where the players are, baked shadows of see through brushes, brush models lit where they
+   stand.
+4. **Player collision for static models** ( clip brushes made by the compiler ).
+5. **Editing shipped maps**: new world materials drawn, render surfaces of deleted brushes removed, an install
+   step; brush texture alignment, terrain, patches and decals of a shipped map in the imported `.map`.
+6. **Assets**: delete / rename, a material editor, streamed images.

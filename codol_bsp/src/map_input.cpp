@@ -122,7 +122,7 @@ namespace codol::bsp
 
 		// the inner angle of a primary omni light's cone when the map gives none ( the outer one is 120 ): see where it
 		// is used
-		constexpr float OMNI_DEFAULT_FOV_INNER = 105.0f;
+		constexpr float OMNI_DEFAULT_FOV_INNER = 60.0f;
 
 		// What a surface under the open sky receives of "skycolor" x "skylight": half. Measured on mp_vacant, whose sun lit
 		// surfaces hold ( 0.30 0.60 0.75 ) of light without the sun ( codol_bsp_probe lights: upper layer 118 184 206, lower
@@ -293,8 +293,9 @@ namespace codol::bsp
 						// omni shaders ( lm_hsm_omni_.., read from the byte code ) take `lerp( primary lightmap, shadow map,
 						// cone )` as the light's visibility, with the cone 1 inside the inner angle and 0 outside the outer
 						// one. So what moves throws a shadow only inside the cone, at full strength inside the inner angle
-						// ( seen in the client, seventh round ). The default is the widest cone that still gets a shadow
-						// map, with a short fade: straight down, 120 degrees, full up to 105.
+						// ( seen in the client, seventh round ). The default is the one of the game's compiler: of the 279
+						// omni primary lights of the shipped maps 114 have 120 / 60 degrees, straight down ( the next most
+						// frequent: 90 / 60 ). A mapper who wants full shadows further out sets "fov_inner".
 						outer = primary_omni ? 120.0f : 90.0f;
 						inner = primary_omni && inner <= 0 ? OMNI_DEFAULT_FOV_INNER : inner;
 					}
