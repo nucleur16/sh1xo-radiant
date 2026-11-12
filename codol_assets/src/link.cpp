@@ -2,7 +2,9 @@
 
 #include "codol_assets/link.hpp"
 
+#include <algorithm>
 #include <cstring>
+#include <set>
 
 namespace codol::assets
 {
@@ -218,6 +220,55 @@ namespace codol::assets
 		}
 		const std::vector<ZoneNewPiece> pieces = image_pieces(image);
 		return impl_->editor.add_new_asset(c1::ASSET_TYPE_IMAGE, image.name, pieces);
+	}
+
+	Status AssetLinker::carry(const fs::path& fastfile, const std::span<const std::int32_t> types, Carried& out)
+	{
+		ZoneEditor donor;
+		if (const Status s = donor.open(fastfile, impl_->key); !s)
+		{
+			return Status::error(fastfile.string() + ": " + s.message);
+		}
+		ZoneEditor& editor = impl_->editor;
+		// what the zone had before: an asset that came along with an earlier one is not "kept"
+		std::set<std::pair<std::int32_t, std::string>> before;
+		for (std::size_t k = 0; k < editor.asset_count(); k++)
+		{
+			const zone::EditorAsset a = editor.asset(k);
+			before.emplace(a.type, a.name);
+		}
+		for (std::size_t k = 0; k < donor.asset_count(); k++)
+		{
+			const zone::EditorAsset a = donor.asset(k);
+			if (std::find(types.begin(), types.end(), a.type) == types.end())
+			{
+				continue;
+			}
+			const std::string label = zone::asset_type_name(a.type) + " " + a.name;
+			if (editor.find_asset(a.type, a.name) != ZoneEditor::npos)
+			{
+				if (before.count({ a.type, a.name }))
+				{
+					out.kept.push_back(label);
+				}
+				else
+				{
+					// came with an asset that points at it: it is one of the carried, not a dependency
+					out.copied[a.type]++;
+					out.dependencies -= out.dependencies ? 1 : 0;
+				}
+				continue;
+			}
+			const std::size_t count = editor.asset_count();
+			if (const Status s = editor.add_asset_closure(donor, k); !s)
+			{
+				out.failed.push_back(label + ": " + s.message);
+				continue;
+			}
+			out.copied[a.type]++;
+			out.dependencies += static_cast<std::uint32_t>(editor.asset_count() - count - 1);
+		}
+		return {};
 	}
 
 	Status AssetLinker::add_rawfile(const std::string_view name, const std::span<const std::uint8_t> contents)

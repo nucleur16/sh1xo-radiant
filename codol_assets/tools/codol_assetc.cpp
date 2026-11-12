@@ -26,6 +26,10 @@
 //                                    <name>.efx files of the same fx folder
 //     --fx-atlas <file>              texture atlas table of the shipped materials ( default <out dir>/codol_fxatlas.txt; made
 //                                    on first use, half a minute )
+//     --carry <zone.ff>[,<type> ..]  take assets of another fast file as they are, each with what it points at: by default
+//                                    its animations, sounds ( alias lists, loaded sounds, curves ) and effects; types as
+//                                    --verify prints them ( xanim, sound, sndcurve, loaded_sound, fx, xmodel, material ..,
+//                                    all ). What the zone already has is kept. A project zone -> the zone of a map
 //
 //   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
 //     loads the file with the game's loaders, writes it again ( must be identical ), lists what is in it
@@ -338,6 +342,7 @@ int main(const int argc, char** argv)
 	fs::path soundRoot;
 	std::vector<std::string> effects;
 	fs::path fxAtlasFile;
+	std::vector<std::string> carried;
 	bool nameGiven = false;
 	for (int k = 1; k < argc; k++)
 	{
@@ -363,6 +368,7 @@ int main(const int argc, char** argv)
 		else if (a == "--sound-root") soundRoot = value();
 		else if (a == "--fx") effects.push_back(value());
 		else if (a == "--fx-atlas") fxAtlasFile = value();
+		else if (a == "--carry") carried.push_back(value());
 		else if (a == "--verify") verifyFile = value();
 		else return fail("unknown option " + a + " ( usage: see the head of codol_assetc.cpp or the README )");
 	}
@@ -391,6 +397,54 @@ int main(const int argc, char** argv)
 	if (const Status s = linker.begin(link); !s)
 	{
 		return fail(s.message);
+	}
+
+	// ---- assets of other zones, as they are
+	for (const std::string& spec : carried)
+	{
+		const std::vector<std::string> parts = split(spec, ',');
+		std::vector<std::int32_t> types;
+		for (std::size_t k = 1; k < parts.size(); k++)
+		{
+			if (parts[k] == "all")
+			{
+				for (std::int32_t t = 0; t < c1::ASSET_TYPE_COUNT; t++)
+				{
+					types.push_back(t);
+				}
+				continue;
+			}
+			const std::int32_t type = z::asset_type_from_name(parts[k]);
+			if (type < 0)
+			{
+				return fail("--carry: unknown asset type '" + parts[k] + "'");
+			}
+			types.push_back(type);
+		}
+		if (types.empty())
+		{
+			types = { c1::ASSET_TYPE_XANIMPARTS, c1::ASSET_TYPE_SOUND_CURVE, c1::ASSET_TYPE_LOADED_SOUND, c1::ASSET_TYPE_SOUND, c1::ASSET_TYPE_FX };
+		}
+		AssetLinker::Carried result;
+		if (const Status s = linker.carry(parts[0], types, result); !s)
+		{
+			return fail(s.message);
+		}
+		std::string counts;
+		for (const auto& [type, count] : result.copied)
+		{
+			counts += (counts.empty() ? "" : ", ") + std::to_string(count) + " " + z::asset_type_name(type);
+		}
+		std::printf("carried from %s: %s%s\n", fs::path(parts[0]).filename().string().c_str(), counts.empty() ? "nothing" : counts.c_str(),
+			result.dependencies ? ( " ( and " + std::to_string(result.dependencies) + " assets they point at )" ).c_str() : "");
+		for (const std::string& line : result.kept)
+		{
+			std::printf("  %s: the zone has it already, kept\n", line.c_str());
+		}
+		for (const std::string& line : result.failed)
+		{
+			std::printf("warning: not carried: %s\n", line.c_str());
+		}
 	}
 
 	// ---- sounds: loaded sounds and curves, then the alias lists that name them

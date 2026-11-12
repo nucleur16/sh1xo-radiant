@@ -8,6 +8,7 @@
 #include "ui.hpp"
 #include "assets.hpp"
 
+#include "codol_assets/fx.hpp"
 #include "codol_assets/link.hpp"
 #include "codol_render/texture.hpp"
 
@@ -257,6 +258,98 @@ namespace editor::assets
 			return out + "}\n";
 		}
 
+		// an animation of the project: anims\<name>.anim, or an .xanim_export alone ( no options )
+		struct anim_def
+		{
+			std::string name;
+			fs::path file;					// the xanim_export, relative to the anims folder, or absolute
+			std::string model;				// the skeleton: a model of the project, or an .xmodel_export file; empty: none
+			std::string type = "relative";	// relative | delta | delta3d
+			bool loop = false;
+			std::string tree;				// the animtree; empty: the project's
+		};
+
+		bool parse_anim_file(const fs::path& file, anim_def& out, std::string& error)
+		{
+			std::string text;
+			if (!read_text(file, text))
+			{
+				error = "cannot read " + to_utf8(file);
+				return false;
+			}
+
+			const auto words = tokenize(text);
+
+			if (words.size() < 4 || words[0] != "anim" || words[2] != "{")
+			{
+				error = "expected: anim \"name\" { .. }";
+				return false;
+			}
+
+			out = {};
+			out.name = clean_name(words[1]);
+			std::size_t k = 3;
+
+			while (k < words.size() && words[k] != "}")
+			{
+				const std::string& key = words[k++];
+
+				if (key == "file" && k < words.size())
+				{
+					out.file = fs::u8path(words[k++]);
+				}
+				else if (key == "model" && k < words.size())
+				{
+					out.model = words[k++];
+				}
+				else if (key == "type" && k < words.size())
+				{
+					out.type = lower(words[k++]);
+
+					if (out.type != "relative" && out.type != "delta" && out.type != "delta3d")
+					{
+						error = "type is relative, delta or delta3d";
+						return false;
+					}
+				}
+				else if (key == "loop")
+				{
+					out.loop = true;
+				}
+				else if (key == "tree" && k < words.size())
+				{
+					out.tree = clean_name(words[k++]);
+				}
+				else
+				{
+					error = "unknown key '" + key + "' ( file, model, type, loop, tree )";
+					return false;
+				}
+			}
+
+			if (out.file.empty())
+			{
+				error = "an animation needs a file line ( the .xanim_export )";
+				return false;
+			}
+
+			return true;
+		}
+
+		std::string write_anim_text(const anim_def& def)
+		{
+			std::string out = "// an animation of the project: the xanim_export, the model it is for ( a model of the project or an\n"
+				"// .xmodel_export file: the bone hierarchy ), type relative | delta | delta3d, loop, the animtree a script names\n";
+			out += "anim \"" + def.name + "\"\n{\n\tfile \"" + to_utf8(def.file) + "\"\n";
+
+			if (!def.model.empty()) { out += "\tmodel \"" + def.model + "\"\n"; }
+			if (def.type != "relative") { out += "\ttype " + def.type + "\n"; }
+			if (def.loop) { out += "\tloop\n"; }
+			if (!def.tree.empty()) { out += "\ttree \"" + def.tree + "\"\n"; }
+
+			return out + "}\n";
+		}
+
 		// everything the project folder holds, read without compiling anything
 		struct source_set
 		{
@@ -264,7 +357,67 @@ namespace editor::assets
 			std::map<std::string, ca::MaterialDef> materials;	// by material name
 			std::map<std::string, model_def> models;			// by model name
 			std::map<std::string, fs::path> images;				// image name -> file
+			std::map<std::string, anim_def> anims;				// by animation name
+			std::map<std::string, fs::path> sounds;				// soundaliases file name ( no extension ) -> the .csv
+			std::map<std::string, fs::path> effects;			// effect name ( "misc/x" ) -> the .efx
+			std::map<std::string, fs::path> scripts;			// "maps/mp/x.gsc" -> the file in the scripts folder
 		};
+
+		// the file of an animation's skeleton; empty when `model` names nothing that exists
+		fs::path skeleton_file(const fs::path& dir, const source_set& sources, const std::string& model)
+		{
+			std::error_code ec;
+
+			if (const auto known = sources.models.find(clean_name(model)); known != sources.models.end() && !known->second.lods.empty())
+			{
+				const fs::path& lod = known->second.lods[0].file;
+				return lod.is_absolute() ? lod : dir / "models" / lod;
+			}
+
+			const fs::path given = fs::u8path(model);
+
+			for (const fs::path& candidate : { given, dir / "anims" / given, dir / "models" / given })
+			{
+				if ((candidate.is_absolute() || candidate != given) && fs::is_regular_file(candidate, ec))
+				{
+					return candidate;
+				}
+			}
+
+			return {};
+		}
+
+		// regular files below a folder, with their path relative to it ( '/' ), sorted
+		std::vector<std::pair<std::string, fs::path>> files_below(const fs::path& dir)
+		{
+			std::vector<std::pair<std::string, fs::path>> out;
+			std::error_code ec;
+
+			for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+			{
+				if (it->is_regular_file(ec))
+				{
+					std::string name = to_utf8(fs::relative(it->path(), dir, ec));
+					std::replace(name.begin(), name.end(), '\\', '/');
+					out.emplace_back(std::move(name), it->path());
+				}
+			}
+
+			std::sort(out.begin(), out.end());
+			return out;
+		}
+
+		// one word for the state of many files: changes when one of them does
+		std::string tree_signature(const std::vector<std::pair<std::string, fs::path>>& files)
+		{
+			std::string all;
+			for (const auto& [name, file] : files)
+			{
+				all += name + "=" + file_signature(file) + ";";
+			}
+
+			return std::to_string(files.size()) + "f" + std::to_string(std::hash<std::string>{}(all));
+		}
 
 		std::vector<fs::path> files_of(const fs::path& dir)
 		{
@@ -469,6 +622,158 @@ namespace editor::assets
 
 				add_model(def, lods.begin()->second, {});
 			}
+
+			// ---- animations: .anim files, then the export files none of them names
+			const fs::path anim_dir = dir / "anims";
+			const auto anim_files = files_of(anim_dir);
+			std::unordered_set<std::string> named_anims;
+
+			const auto add_anim = [&](const anim_def& def, const fs::path& file, const std::string& error)
+			{
+				item entry;
+				entry.type = kind::anim;
+				entry.name = def.name;
+				entry.file = file;
+				entry.signature = file_signature(file);
+
+				if (error.empty())
+				{
+					entry.signature += "|" + file_signature(def.file.is_absolute() ? def.file : anim_dir / def.file) + "|" + def.model;
+
+					if (const fs::path skeleton = def.model.empty() ? fs::path() : skeleton_file(dir, out, def.model); !skeleton.empty())
+					{
+						entry.signature += "|" + file_signature(skeleton);
+					}
+				}
+
+				if (!error.empty())
+				{
+					entry.state = status::failed;
+					entry.message = error;
+				}
+				else if (out.anims.count(def.name))
+				{
+					entry.state = status::failed;
+					entry.message = "an animation of this name is defined twice";
+					entry.name += " ( again )";
+				}
+				else
+				{
+					out.anims.emplace(def.name, def);
+				}
+
+				out.items.push_back(std::move(entry));
+			};
+
+			for (const auto& file : anim_files)
+			{
+				if (lower(file.extension().string()) != ".anim")
+				{
+					continue;
+				}
+
+				anim_def def;
+				std::string error;
+
+				if (!parse_anim_file(file, def, error))
+				{
+					def.name = "( " + to_utf8(file.filename()) + " )";
+				}
+				else
+				{
+					named_anims.insert(lower(to_utf8(def.file.filename())));
+				}
+
+				add_anim(def, file, error);
+			}
+
+			for (const auto& file : anim_files)
+			{
+				if (lower(file.extension().string()) != ".xanim_export" || named_anims.count(lower(to_utf8(file.filename()))))
+				{
+					continue;
+				}
+
+				anim_def def;
+				def.name = clean_name(file.stem().string());
+				def.file = file.filename();
+				add_anim(def, file, {});
+			}
+
+			// ---- sounds: every soundaliases\*.csv with the tree it reads from ( sound\, curves, speaker maps )
+			{
+				const auto alias_files = files_of(dir / "soundaliases");
+				std::vector<std::pair<std::string, fs::path>> tree = files_below(dir / "sound");
+
+				for (const auto& file : alias_files)
+				{
+					const std::string ext = lower(file.extension().string());
+					if (ext == ".vfcurve" || ext == ".spkrmap") { tree.emplace_back("soundaliases/" + to_utf8(file.filename()), file); }
+				}
+
+				const std::string tree_state = tree_signature(tree);
+
+				for (const auto& file : alias_files)
+				{
+					if (lower(file.extension().string()) != ".csv")
+					{
+						continue;
+					}
+
+					item entry;
+					entry.type = kind::sound;
+					entry.name = clean_name(file.stem().string());
+					entry.file = file;
+					entry.signature = file_signature(file) + "|" + tree_state;
+
+					if (!out.sounds.emplace(entry.name, file).second)
+					{
+						entry.state = status::failed;
+						entry.message = "two alias files of this name";
+						entry.name += " ( again )";
+					}
+
+					out.items.push_back(std::move(entry));
+				}
+			}
+
+			// ---- effects: fx\<folder>\<name>.efx is the effect <folder>/<name>
+			for (const auto& [relative, file] : files_below(dir / "fx"))
+			{
+				if (relative.size() < 5 || lower(relative.substr(relative.size() - 4)) != ".efx")
+				{
+					continue;
+				}
+
+				item entry;
+				entry.type = kind::fx;
+				entry.name = lower(relative.substr(0, relative.size() - 4));
+				entry.file = file;
+				entry.signature = file_signature(file);
+
+				if (!out.effects.emplace(entry.name, file).second)
+				{
+					entry.state = status::failed;
+					entry.message = "two effects of this name";
+					entry.name += " ( again )";
+				}
+
+				out.items.push_back(std::move(entry));
+			}
+
+			// ---- scripts: not compiled; the built map takes them in front of what the compiler generates
+			for (const auto& [relative, file] : files_below(dir / "scripts"))
+			{
+				item entry;
+				entry.type = kind::script;
+				entry.name = relative;
+				entry.file = file;
+				entry.signature = file_signature(file);
+				entry.state = status::raw;
+				entry.detail = "not compiled: File > Build map puts it into the map zone ( rawfile " + relative + " ) and into the package's scripts, in front of a generated file of that name";
+				out.scripts.emplace(lower(relative), file);
+				out.items.push_back(std::move(entry));
+			}
 		}
 
 		// ---- state -----------------------------------------------------------------------------------------
@@ -516,13 +821,23 @@ namespace editor::assets
 			case status::changed: return "changed";
 			case status::built: return "built";
 			case status::failed: return "failed";
+			case status::raw: return "as is";
 			default: return "unused";
 			}
 		}
 
 		const char* kind_word(const kind k)
 		{
-			return k == kind::image ? "image" : k == kind::material ? "material" : "model";
+			switch (k)
+			{
+			case kind::image: return "image";
+			case kind::material: return "material";
+			case kind::model: return "model";
+			case kind::anim: return "anim";
+			case kind::sound: return "sound";
+			case kind::fx: return "fx";
+			default: return "script";
+			}
 		}
 
 		std::string one_line(std::string text)
@@ -591,7 +906,7 @@ namespace editor::assets
 
 			for (auto& entry : items)
 			{
-				if (entry.state == status::unused || entry.state == status::failed)
+				if (entry.state == status::unused || entry.state == status::failed || entry.state == status::raw)
 				{
 					continue;		// failed here: the source could not even be read
 				}
@@ -717,8 +1032,8 @@ namespace editor::assets
 
 		struct build_job
 		{
-			fs::path dir, install, exe, matlib, out;
-			std::string zone;
+			fs::path dir, install, exe, matlib, fxatlas, out;
+			std::string zone, project;
 			bool have_shipped = false;
 			std::unordered_set<std::string> shipped_materials;		// of the zones of the open map, without the project's
 		};
@@ -1045,9 +1360,287 @@ namespace editor::assets
 				say("model " + name + ": " + text);
 			}
 
+			// ---- animations
+			std::map<std::string, std::vector<std::string>> trees;		// animtree -> its animations of the project
+
+			for (const auto& [name, def] : sources.anims)
+			{
+				item* entry = item_of(kind::anim, name);
+				if (!entry || entry->state == status::failed)
+				{
+					continue;
+				}
+
+				set_step("animation " + name + " ..");
+
+				ca::ExportAnim source;
+				ca::ExportModel skeleton;
+				ca::AnimOptions options;
+				options.name = name;
+				options.looping = def.loop;
+				options.type = def.type == "delta" ? ca::AnimType::delta : def.type == "delta3d" ? ca::AnimType::delta3d : ca::AnimType::relative;
+				std::string problem;
+				std::vector<std::string> notes;
+
+				if (const ca::Status s = ca::load_xanim_export(def.file.is_absolute() ? def.file : job.dir / "anims" / def.file, source); !s)
+				{
+					problem = s.message;
+				}
+				else if (!def.model.empty())
+				{
+					const fs::path file = skeleton_file(job.dir, sources, def.model);
+
+					if (file.empty())
+					{
+						problem = "its model '" + def.model + "' is neither a model of the project nor an .xmodel_export file in anims\\ or models\\";
+					}
+					else if (const ca::Status loaded = ca::load_xmodel_export(file, skeleton); !loaded)
+					{
+						problem = loaded.message;
+					}
+					else
+					{
+						options.skeleton = &skeleton;
+					}
+				}
+
+				ca::CompiledAnim compiled;
+
+				if (problem.empty())
+				{
+					if (const ca::Status s = ca::compile_anim(source, options, compiled); !s)
+					{
+						problem = s.message;
+					}
+					else if (const ca::Status added = linker.add_anim(compiled); !added)
+					{
+						problem = added.message;
+					}
+				}
+
+				if (!problem.empty())
+				{
+					fail_item(*entry, problem);
+					continue;
+				}
+
+				const std::string tree = def.tree.empty() ? job.project : def.tree;
+				trees[tree].push_back(name);
+				notes.insert(notes.end(), compiled.notes.begin(), compiled.notes.end());
+
+				// an animtree of the modder's own is used instead of the generated one: it has to name the animation
+				if (std::string own; read_text(job.dir / "scripts" / "animtrees" / (tree + ".atr"), own))
+				{
+					const auto lines = tokenize(own);
+					if (std::find(lines.begin(), lines.end(), name) == lines.end())
+					{
+						notes.push_back("scripts\\animtrees\\" + tree + ".atr of the project is used for the animtree and does not list " + name + ": add a line with the name");
+					}
+				}
+
+				const auto& h = compiled.raw.header;
+				char text[240];
+				std::snprintf(text, sizeof(text), "%u parts, %u frames at %g / s%s%s, %u notifies, animtree %s", static_cast<unsigned>(h.boneCount[9]), h.numframes + 1u, h.framerate,
+					(h.flags & ca::ANIM_FLAG_LOOP) ? ", looping" : "", (h.flags & ca::ANIM_FLAG_DELTA) ? ", delta" : (h.flags & ca::ANIM_FLAG_DELTA_3D) ? ", delta 3d" : "",
+					static_cast<unsigned>(h.notifyCount), tree.c_str());
+				entry->state = status::built;
+				entry->detail = text;
+				entry->message.clear();
+				entry->notes = notes;
+				result.assets++;
+				say("anim " + name + ": " + text);
+			}
+
+			// what a map needs besides the animations ( codol_assets README ): the animtree a script is compiled
+			// against and the map's animlist. Written as files; the map package makes rawfiles of them.
+			{
+				const fs::path generated = job.dir / "generated";
+
+				for (const auto& old : files_of(generated / "animtrees"))
+				{
+					if (lower(old.extension().string()) == ".atr") { fs::remove(old, ec); }
+				}
+
+				fs::remove(generated / "animlists" / "map.animlist", ec);
+				std::string list;
+
+				for (const auto& [tree, names] : trees)
+				{
+					std::string text;
+					list += "=" + tree + "\n";
+
+					for (const auto& name : names)
+					{
+						text += name + "\n";
+						list += name + "\n";
+					}
+
+					write_text(generated / "animtrees" / (tree + ".atr"), text);
+					say("animtree " + tree + ": " + std::to_string(names.size()) + " animation(s), generated\\animtrees\\" + tree + ".atr ( #using_animtree( \"" + tree + "\" ) )");
+				}
+
+				if (!list.empty())
+				{
+					write_text(generated / "animlists" / "map.animlist", list);
+				}
+			}
+
+			// ---- sounds: every alias file with the loaded sounds and curves it names
+			std::vector<std::pair<std::string, std::vector<std::uint8_t>>> streamed;
+
+			for (const auto& [name, file] : sources.sounds)
+			{
+				item* entry = item_of(kind::sound, name);
+				if (!entry || entry->state == status::failed)
+				{
+					continue;
+				}
+
+				set_step("sounds " + name + " ..");
+				ca::SoundBuild sounds;
+
+				if (const ca::Status s = ca::build_sound_aliases(file, job.dir, linker.editor(), sounds); !s)
+				{
+					fail_item(*entry, s.message);
+					continue;
+				}
+
+				std::vector<std::string> notes;
+
+				for (const auto& line : sounds.log)
+				{
+					say("  " + line);
+
+					// what was assumed, not what was made
+					if (line.rfind("loaded sound ", 0) != 0 && line.rfind("sound curve ", 0) != 0)
+					{
+						notes.push_back(line);
+					}
+				}
+
+				for (auto& packed : sounds.streamedFiles)
+				{
+					if (std::none_of(streamed.begin(), streamed.end(), [&](const auto& other) { return other.first == packed.first; }))
+					{
+						streamed.push_back(std::move(packed));
+					}
+				}
+
+				char text[200];
+				std::snprintf(text, sizeof(text), "%u alias lists ( %u aliases ), %u loaded sounds, %u curves, %zu streamed files", sounds.lists, sounds.aliases, sounds.loadedSounds,
+					sounds.curves, sounds.streamedFiles.size());
+
+				if (!sounds.streamedFiles.empty())
+				{
+					notes.push_back("streamed files are not in the zone: they go into zz_" + job.project + "_sounds.iwd, which belongs into the game's main folder");
+				}
+
+				entry->state = status::built;
+				entry->detail = text;
+				entry->message.clear();
+				entry->notes = notes;
+				result.assets += static_cast<int>(sounds.lists + sounds.loadedSounds + sounds.curves);
+				say("sound " + name + ": " + text);
+			}
+
+			// ---- effects: after the materials and models they draw
+			{
+				ca::FxAtlasLibrary atlas;
+				bool atlas_open = false;
+				std::string atlas_problem;
+
+				for (const auto& [name, file] : sources.effects)
+				{
+					item* entry = item_of(kind::fx, name);
+					if (!entry || entry->state == status::failed)
+					{
+						continue;
+					}
+
+					if (!atlas_open && atlas_problem.empty())
+					{
+						if (!fs::exists(job.fxatlas, ec))
+						{
+							set_step("reading the texture atlases of the install ( once, about 30 s ) ..");
+							say("effect atlas table: scanning the install ( once )");
+						}
+
+						if (const ca::Status s = atlas.open(job.install, linker.key(), job.fxatlas); !s)
+						{
+							atlas_problem = "the atlas table of the install: " + s.message;
+						}
+
+						atlas_open = atlas_problem.empty();
+					}
+
+					if (!atlas_open)
+					{
+						fail_item(*entry, atlas_problem);
+						continue;
+					}
+
+					set_step("effect " + name + " ..");
+
+					ca::EditorEffect effect;
+					ca::CompiledFx fx;
+					std::string problem;
+					std::vector<std::string> notes;
+
+					if (const ca::Status s = ca::load_efx(file, effect); !s)
+					{
+						problem = s.message;
+					}
+					else if (const ca::Status compiled = ca::compile_fx(name, effect, fx, ca::fx_compile_options(linker.editor(), atlas, job.dir / "fx")); !compiled)
+					{
+						problem = compiled.message;
+					}
+					else
+					{
+						notes = fx.notes;
+
+						if (const ca::Status linked = ca::link_fx(linker.editor(), fx, &notes); !linked)
+						{
+							problem = linked.message;
+						}
+					}
+
+					if (!problem.empty())
+					{
+						fail_item(*entry, problem);
+						continue;
+					}
+
+					char text[200];
+					std::snprintf(text, sizeof(text), "%zu elements ( %d looping, %d one shot, %d emission ), %d bytes", fx.elems.size(), fx.countLooping, fx.countOneShot,
+						fx.countEmission, fx.totalSize);
+					entry->state = status::built;
+					entry->detail = text;
+					entry->message.clear();
+					entry->notes = notes;
+					result.assets++;
+					say("fx " + name + ": " + text);
+				}
+			}
+
 			for (const auto& line : linker.log())
 			{
 				say("  " + line);
+			}
+
+			// the streamed sound files: an archive next to the zone, or none
+			const fs::path sound_archive = job.dir / ("zz_" + job.project + "_sounds.iwd");
+
+			if (streamed.empty())
+			{
+				fs::remove(sound_archive, ec);
+			}
+			else if (const ca::Status s = ca::write_iwd(sound_archive, streamed); !s)
+			{
+				say("sound archive: FAILED: " + s.message);
+			}
+			else
+			{
+				say("wrote " + to_utf8(sound_archive.filename()) + ": " + std::to_string(streamed.size()) + " streamed sound file(s)");
 			}
 
 			if (!result.assets)
@@ -1118,7 +1711,7 @@ namespace editor::assets
 				// every source that was to be built failed with the zone
 				for (auto& entry : result.items)
 				{
-					if (entry.state != status::unused && entry.state != status::failed)
+					if (entry.state != status::unused && entry.state != status::failed && entry.state != status::raw)
 					{
 						entry.state = status::failed;
 						entry.detail.clear();
@@ -1665,6 +2258,336 @@ namespace editor::assets
 		return true;
 	}
 
+	// ---- animations, sounds, effects, scripts ---------------------------------------------------------------------
+
+	namespace
+	{
+		// copies a file into the project; an existing other file of that name stays unless `overwrite`
+		bool take_file(const fs::path& source, const fs::path& target, const bool overwrite, std::string& error)
+		{
+			std::error_code ec;
+
+			if (!fs::is_regular_file(source, ec))
+			{
+				error = "no such file: " + to_utf8(source);
+				return false;
+			}
+
+			if (fs::equivalent(source, target, ec))
+			{
+				return true;
+			}
+
+			if (fs::exists(target, ec) && !overwrite && !same_file_contents(source, target))
+			{
+				error = "the project already has another " + to_utf8(target.filename()) + " ( overwrite, or pick another name )";
+				return false;
+			}
+
+			fs::create_directories(target.parent_path(), ec);
+			ec.clear();
+			fs::copy_file(source, target, fs::copy_options::overwrite_existing, ec);
+
+			if (ec)
+			{
+				error = "cannot copy " + to_utf8(source) + ": " + ec.message();
+				return false;
+			}
+
+			return true;
+		}
+
+		void build_after_import()
+		{
+			rescan();
+
+			std::string build_error;
+			if (!build(build_error))
+			{
+				// while a build runs this is no failure: the next one takes the new source
+				game::printf_to_console("%s[assets] %s\n", g.busy ? "" : "^1", build_error.c_str());
+			}
+		}
+	}
+
+	std::string default_anim_tree() { return g.project; }
+
+	std::vector<std::string> project_models()
+	{
+		std::vector<std::string> out;
+		for (const auto& [name, def] : g.sources.models) { out.push_back(name); }
+		return out;
+	}
+
+	bool import_anim(const anim_request& request, std::string& error)
+	{
+		if (g.project.empty())
+		{
+			error = "open a map first: the project is named after it";
+			return false;
+		}
+
+		const std::string name = clean_name(request.name.empty() ? request.file.stem().string() : request.name);
+
+		if (name.empty())
+		{
+			error = "the animation needs a name";
+			return false;
+		}
+
+		const std::string type = lower(request.type.empty() ? std::string("relative") : request.type);
+
+		if (type != "relative" && type != "delta" && type != "delta3d")
+		{
+			error = "type is relative, delta or delta3d";
+			return false;
+		}
+
+		const fs::path dir = project_dir() / "anims";
+		const fs::path file = dir / (name + ".anim");
+		std::error_code ec;
+
+		if (!request.overwrite && (fs::exists(file, ec) || g.sources.anims.count(name)))
+		{
+			error = "the project already has an animation " + name + " ( overwrite, or pick another name )";
+			return false;
+		}
+
+		// it has to read before anything is copied
+		ca::ExportAnim source;
+		if (const ca::Status s = ca::load_xanim_export(request.file, source); !s)
+		{
+			error = s.message;
+			return false;
+		}
+
+		anim_def def;
+		def.name = name;
+		def.file = fs::u8path(name + ".xanim_export");
+		def.type = type;
+		def.loop = request.loop;
+		def.tree = clean_name(request.tree);
+
+		if (def.tree == g.project) { def.tree.clear(); }
+
+		// the skeleton: a model of the project by its name, a file of the project by its path, any other file is copied
+		if (!request.model.empty())
+		{
+			const fs::path given = fs::u8path(request.model);
+
+			if (g.sources.models.count(clean_name(request.model)) && !fs::is_regular_file(given, ec))
+			{
+				def.model = clean_name(request.model);
+			}
+			else
+			{
+				ca::ExportModel skeleton;
+				if (const ca::Status s = ca::load_xmodel_export(given, skeleton); !s)
+				{
+					error = "the model of the animation: " + s.message;
+					return false;
+				}
+
+				const fs::path copy = dir / (name + "_skeleton.xmodel_export");
+				if (!take_file(given, copy, true, error))
+				{
+					return false;
+				}
+
+				def.model = to_utf8(copy.filename());
+			}
+		}
+
+		if (!take_file(request.file, dir / def.file, true, error))
+		{
+			return false;
+		}
+
+		if (!write_text(file, write_anim_text(def)))
+		{
+			error = "cannot write " + to_utf8(file);
+			return false;
+		}
+
+		game::printf_to_console("[assets] anim %s: %s ( %zu parts, %zu frames, %s%s, animtree %s, %s )\n", name.c_str(), to_utf8(file).c_str(), source.parts.size(), source.frames.size(),
+			type.c_str(), def.loop ? ", looping" : "", def.tree.empty() ? g.project.c_str() : def.tree.c_str(), def.model.empty() ? "no model: every part is a root" : ("model " + def.model).c_str());
+
+		build_after_import();
+		return true;
+	}
+
+	bool import_sounds(const fs::path& csv, const fs::path& root, const bool overwrite, std::string& error)
+	{
+		if (g.project.empty())
+		{
+			error = "open a map first: the project is named after it";
+			return false;
+		}
+
+		std::string text;
+		if (!read_text(csv, text))
+		{
+			error = "cannot read " + to_utf8(csv);
+			return false;
+		}
+
+		std::vector<ca::SoundAliasDef> rows;
+		if (const ca::Status s = ca::parse_sound_aliases(text, rows); !s)
+		{
+			error = to_utf8(csv.filename()) + ": " + s.message;
+			return false;
+		}
+
+		if (rows.empty())
+		{
+			error = to_utf8(csv.filename()) + " has no alias";
+			return false;
+		}
+
+		const fs::path from = root.empty() ? ca::sound_source_root(csv) : root;
+		const fs::path dir = project_dir();
+		std::error_code ec;
+
+		// what the rows name: sound files, curves, speaker maps. A file that is not there is not an error - the
+		// alias then names a sound, curve or map of the game.
+		std::map<fs::path, fs::path> copies;		// source -> target
+		std::unordered_set<std::string> missing;
+
+		for (const auto& row : rows)
+		{
+			if (!row.file.empty())
+			{
+				const std::string name = ca::sound_file_name(row.file);
+				if (const fs::path source = from / "sound" / fs::u8path(name); fs::is_regular_file(source, ec)) { copies[source] = dir / "sound" / fs::u8path(name); }
+				else { missing.insert(name); }
+			}
+
+			for (const auto& [word, ext] : { std::pair<const std::string&, const char*>{ row.volumeFalloffCurve, ".vfcurve" }, { row.speakerMap, ".spkrmap" } })
+			{
+				if (word.empty()) { continue; }
+				if (const fs::path source = from / "soundaliases" / fs::u8path(word + ext); fs::is_regular_file(source, ec)) { copies[source] = dir / "soundaliases" / source.filename(); }
+			}
+		}
+
+		if (!take_file(csv, dir / "soundaliases" / csv.filename(), overwrite, error))
+		{
+			return false;
+		}
+
+		for (const auto& [source, target] : copies)
+		{
+			if (!take_file(source, target, overwrite, error))
+			{
+				return false;
+			}
+		}
+
+		game::printf_to_console("[assets] sounds %s: %zu rows, %zu files copied from %s%s\n", to_utf8(csv.filename()).c_str(), rows.size(), copies.size(), to_utf8(from).c_str(),
+			missing.empty() ? "" : ( ", " + std::to_string(missing.size()) + " sound file(s) not found there: named only ( sounds of the game )" ).c_str());
+
+		build_after_import();
+		return true;
+	}
+
+	bool import_fx(const fs::path& file, const std::string& wanted, const bool overwrite, std::string& error)
+	{
+		if (g.project.empty())
+		{
+			error = "open a map first: the project is named after it";
+			return false;
+		}
+
+		ca::EditorEffect effect;
+		if (const ca::Status s = ca::load_efx(file, effect); !s)
+		{
+			error = s.message;
+			return false;
+		}
+
+		// the name loadfx takes: what follows the fx folder in the path of the file
+		std::string name = clean_name(wanted, true);
+
+		if (name.empty())
+		{
+			std::vector<std::string> parts;
+			for (const auto& part : file.parent_path()) { parts.push_back(lower(to_utf8(part))); }
+
+			const auto fx = std::find(parts.rbegin(), parts.rend(), "fx");
+			std::string folder;
+
+			for (auto it = fx == parts.rend() ? parts.end() : fx.base(); it != parts.end(); ++it)
+			{
+				folder += clean_name(*it) + "/";
+			}
+
+			name = (folder.empty() ? g.project + "/" : folder) + clean_name(file.stem().string());
+		}
+
+		while (!name.empty() && name.front() == '/') { name.erase(name.begin()); }
+
+		if (name.empty() || name.back() == '/')
+		{
+			error = "the effect needs a name ( folder/name, as loadfx takes it )";
+			return false;
+		}
+
+		const fs::path target = (project_dir() / "fx" / fs::u8path(name + ".efx")).make_preferred();
+		std::error_code ec;
+
+		if (!overwrite && (g.sources.effects.count(name) || fs::exists(target, ec)) && !same_file_contents(file, target))
+		{
+			error = "the project already has an effect " + name + " ( overwrite, or pick another name )";
+			return false;
+		}
+
+		if (!take_file(file, target, true, error))
+		{
+			return false;
+		}
+
+		game::printf_to_console("[assets] fx %s: %s ( loadfx( \"%s\" ); effects it emits are read from fx\\<name>.efx of the project )\n", name.c_str(), to_utf8(target).c_str(), name.c_str());
+
+		build_after_import();
+		return true;
+	}
+
+	bool level_script(fs::path& file, std::string& error)
+	{
+		auto& s = get_scene();
+
+		if (g.project.empty() || !s.open)
+		{
+			error = "open a map first: the level script is maps\\mp\\<map>.gsc";
+			return false;
+		}
+
+		const std::string map = s.map_file.empty() ? s.map_name : to_utf8(s.map_file.stem());
+		file = project_dir() / "scripts" / "maps" / "mp" / fs::u8path(map + ".gsc");
+		std::error_code ec;
+
+		if (fs::exists(file, ec))
+		{
+			return true;
+		}
+
+		// what codol_bsp generates ( compile.cpp write_scripts ), to start from
+		const std::string text = "// the level script of " + map + ". File > Build map takes this file in front of the one the compiler generates\n"
+			"// ( mod\\" + g.project + "\\scripts\\ is laid over the generated scripts; the two effect scripts stay generated ).\n"
+			"// Animations of the project: #using_animtree( \"" + g.project + "\" ); in front of main(), then %<animation>.\n"
+			"#include maps\\mp\\_utility;\n\nmain()\n{\n\tmaps\\mp\\" + map + "_fx::main();\n\n\tmaps\\mp\\_load::main();\n\n"
+			"\tmaps\\mp\\_compass::setupMiniMap( \"compass_map_" + map + "\" );\n\n\tgame[ \"attackers\" ] = \"allies\";\n\tgame[ \"defenders\" ] = \"axis\";\n}\n";
+
+		if (!write_text(file, text))
+		{
+			error = "cannot write " + to_utf8(file);
+			return false;
+		}
+
+		game::printf_to_console("[assets] level script: %s\n", to_utf8(file).c_str());
+		rescan();
+		return true;
+	}
+
 	// ---- GDT -------------------------------------------------------------------------------------------------
 
 	bool read_gdt(const fs::path& gdt, const fs::path& root, std::vector<gdt_entry>& out, std::string& error)
@@ -1864,12 +2787,12 @@ namespace editor::assets
 		bool anything = false;
 		for (const auto& entry : g.items)
 		{
-			anything |= entry.type != kind::image;
+			anything |= entry.type != kind::image && entry.type != kind::script;
 		}
 
 		if (!anything)
 		{
-			error = "the project has no material and no model yet";
+			error = "the project has nothing to build yet ( no material, model, animation, sound alias file or effect )";
 			return false;
 		}
 
@@ -1878,8 +2801,10 @@ namespace editor::assets
 		job.install = fs::u8path(install);
 		job.exe = job.install / "C1.exe";
 		job.matlib = mod_dir() / "codol_matlib.txt";
+		job.fxatlas = mod_dir() / "codol_fxatlas.txt";
 		job.out = zone_file();
 		job.zone = zone_name();
+		job.project = g.project;
 
 		std::error_code ec;
 		if (!fs::is_regular_file(job.exe, ec))
@@ -1968,6 +2893,19 @@ namespace editor::assets
 			{
 				open_gdt_dialog(file);
 			}
+			else if (ext == ".xanim_export")
+			{
+				open_anim_dialog(file);
+			}
+			else if (ext == ".csv" || ext == ".efx")
+			{
+				std::string error;
+				if (!(ext == ".csv" ? import_sounds(file, {}, false, error) : import_fx(file, {}, false, error)))
+				{
+					game::printf_to_console("^1[assets] %s: %s\n", to_utf8(file.filename()).c_str(), error.c_str());
+					ImGui::Toast(ImGuiToastType_Error, "Assets", error.c_str(), 8000);
+				}
+			}
 			else if (ext == ".mtl" && !g.project.empty())
 			{
 				std::error_code ec;
@@ -1985,7 +2923,8 @@ namespace editor::assets
 			}
 			else
 			{
-				game::printf_to_console("[assets] %s: not an image ( png, tga, dds ), .xmodel_export, .gdt or .mtl\n", to_utf8(file.filename()).c_str());
+				game::printf_to_console("[assets] %s: not an image ( png, tga, dds ), .xmodel_export, .xanim_export, soundaliases .csv, .efx, .gdt or .mtl\n",
+					to_utf8(file.filename()).c_str());
 			}
 		}
 
@@ -2017,6 +2956,54 @@ namespace editor::assets
 		}
 
 		return !world_materials().count(material);
+	}
+
+	std::string package_arguments()
+	{
+		std::error_code ec;
+		return !g.project.empty() && fs::is_directory(project_dir(), ec) ? " -Project \"" + to_utf8(project_dir()) + "\"" : std::string();
+	}
+
+	std::vector<std::string> package_problems()
+	{
+		std::vector<std::string> lines;
+
+		if (g.project.empty())
+		{
+			return lines;
+		}
+
+		if (!g.busy)
+		{
+			rescan();
+		}
+
+		int waiting = 0, failed = 0;
+		std::string first;
+
+		for (const auto& entry : g.items)
+		{
+			const bool late = entry.state == status::fresh || entry.state == status::changed;
+
+			if (late || entry.state == status::failed)
+			{
+				(late ? waiting : failed)++;
+				if (first.empty()) { first = std::string(kind_word(entry.type)) + " " + entry.name + " ( " + status_word(entry.state) + " )"; }
+			}
+		}
+
+		if (g.busy)
+		{
+			lines.push_back("the assets of " + g.project + " are being built right now: the map takes the zone as it is on disk");
+		}
+
+		if (waiting || failed)
+		{
+			lines.push_back(std::to_string(waiting + failed) + " source(s) of the asset project " + g.project + " are not in its zone ( " + std::to_string(waiting) + " new or changed, "
+				+ std::to_string(failed) + " failed; first: " + first + " ): the map gets what the last asset build made - Assets > Build first");
+		}
+
+		return lines;
 	}
 
 	std::string compile_arguments()
@@ -2395,6 +3382,81 @@ namespace editor::assets
 			if (!import_model(request, error)) { game::printf_to_console("^1[assets] %s\n", error.c_str()); }
 		});
 
+		// asset_import_anim <file.xanim_export> [name=<name>] [model=<project model | file.xmodel_export>] [type=relative|delta|delta3d] [loop] [tree=<animtree>] [overwrite]
+		command::register_command("asset_import_anim", [option, flag](args_t args)
+		{
+			if (args.size() < 2)
+			{
+				game::printf_to_console("usage: asset_import_anim <file.xanim_export> [name=<name>] [model=<model of the project | file.xmodel_export>] [type=relative|delta|delta3d] [loop] [tree=<animtree>] [overwrite]\n");
+				return;
+			}
+
+			anim_request request;
+			request.file = fs::u8path(args[1]);
+			option(args, "name", request.name);
+			option(args, "model", request.model);
+			option(args, "type", request.type);
+			option(args, "tree", request.tree);
+			request.loop = flag(args, "loop");
+			request.overwrite = flag(args, "overwrite");
+
+			std::string error;
+			if (!import_anim(request, error)) { game::printf_to_console("^1[assets] %s\n", error.c_str()); }
+		});
+
+		// asset_import_sounds <file.csv> [root=<folder with sound\ and soundaliases\>] [overwrite]
+		command::register_command("asset_import_sounds", [option, flag](args_t args)
+		{
+			if (args.size() < 2)
+			{
+				game::printf_to_console("usage: asset_import_sounds <soundaliases file.csv> [root=<folder that holds sound\\ and soundaliases\\>] [overwrite]\n");
+				return;
+			}
+
+			std::string root, error;
+			option(args, "root", root);
+			if (!import_sounds(fs::u8path(args[1]), fs::u8path(root), flag(args, "overwrite"), error)) { game::printf_to_console("^1[assets] %s\n", error.c_str()); }
+		});
+
+		// asset_import_fx <file.efx> [name=<folder/name>] [overwrite]
+		command::register_command("asset_import_fx", [option, flag](args_t args)
+		{
+			if (args.size() < 2)
+			{
+				game::printf_to_console("usage: asset_import_fx <file.efx> [name=<folder/name as loadfx takes it>] [overwrite]\n");
+				return;
+			}
+
+			std::string name, error;
+			option(args, "name", name);
+			if (!import_fx(fs::u8path(args[1]), name, flag(args, "overwrite"), error)) { game::printf_to_console("^1[assets] %s\n", error.c_str()); }
+		});
+
+		// asset_level_script [<file.gsc>]: scripts\maps\mp\<map>.gsc of the project - a copy of the file, or a start
+		command::register_command("asset_level_script", [](args_t args)
+		{
+			fs::path file;
+			std::string error;
+			bool ok = true;
+
+			if (args.size() > 1)
+			{
+				auto& s = get_scene();
+				if (g.project.empty() || !s.open) { game::printf_to_console("^1no map is open\n"); return; }
+
+				file = project_dir() / "scripts" / "maps" / "mp" / fs::u8path((s.map_file.empty() ? s.map_name : to_utf8(s.map_file.stem())) + ".gsc");
+				ok = take_file(fs::u8path(args[1]), file, true, error);
+				rescan();
+			}
+			else
+			{
+				ok = level_script(file, error);
+			}
+
+			if (!ok) { game::printf_to_console("^1[assets] %s\n", error.c_str()); return; }
+			game::printf_to_console("level script: %s ( File > Build map takes it in front of the generated one )\n", to_utf8(file).c_str());
+		});
+
 		// asset_gdt <file.gdt> [root=<folder of the image paths>] [overwrite] [<entry> .. | all]: without entries: the list
 		command::register_command("asset_gdt", [option, flag](args_t args)
 		{
@@ -2466,12 +3528,13 @@ namespace editor::assets
 			files_dropped(files);
 		});
 
-		// asset_dialog <material | model | gdt | close>: the windows of the Materials / Models browsers
+		// asset_dialog <material | model | anim | gdt | close>: the windows of the Materials / Models browsers
 		command::register_command("asset_dialog", [](args_t args)
 		{
 			const std::string which = args.size() > 1 ? args[1] : "";
 			if (which == "material") { open_material_dialog(); }
 			else if (which == "model") { open_model_dialog(); }
+			else if (which == "anim") { open_anim_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
 			else if (which == "gdt") { open_gdt_dialog(args.size() > 2 ? fs::u8path(args[2]) : fs::path()); }
 			else { close_dialogs(); }
 		});

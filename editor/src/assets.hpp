@@ -7,6 +7,16 @@
 //       materials\*.mtl                           material definitions ( codol_assets README, ".mtl" )
 //       models\<name>.model                       a model: its LOD files, collision LOD, material names
 //       models\*.xmodel_export                    LOD files; one that no .model names is a model of one LOD
+//       anims\<name>.anim                         an animation: its xanim_export, the model it is for, type, animtree
+//       anims\*.xanim_export                      one that no .anim names is an animation of that name, without options
+//       soundaliases\*.csv                        sound aliases; sound\<file> is what their file column names,
+//                                                 soundaliases\*.vfcurve | *.spkrmap curves and speaker maps
+//       fx\<folder>\<name>.efx                    an effect, named as loadfx takes it: <folder>/<name>
+//       scripts\..                                files the built map takes as they are, in front of the generated ones:
+//                                                 maps\mp\<map>.gsc ( the level script ), animtrees\<tree>.atr ..
+//       generated\animtrees\<tree>.atr            written by the build: the animtree of every tree the animations name,
+//       generated\animlists\map.animlist          and what becomes animlists/<map>.animlist of the map zone
+//       zz_<project>_sounds.iwd                   written by the build: the streamed sound files ( for <game>\main )
 //       <project>_assets.ff                       the zone built from all of it ( codol_assets, AssetLinker )
 //       build_state.txt                           what the last build made of each source
 //   <editor>\mod\codol_matlib.txt                 the material library: one scan of the install, shared by all projects
@@ -14,6 +24,10 @@
 // Building runs on a worker thread and compiles everything again into a new zone; the renderer then takes the
 // zone as an extra zone without loading the map again ( map_renderer::register_zone ), so a new material is in
 // the Materials browser and on brushes at once, a new model in the Models browser.
+//
+// Animations, sounds and effects are not shown by the editor. File > Build map carries them from the project's
+// zone into the map zone ( tools\package_map.ps1, codol_assetc --carry ), with the animtrees, the animlist and the
+// files of scripts\, so that the level script can use them.
 //
 // Every action is a function here; the windows ( asset_windows.cpp ) and the console commands call the same ones.
 
@@ -29,6 +43,10 @@ namespace editor::assets
 		image,
 		material,
 		model,
+		anim,
+		sound,		// a soundaliases .csv with everything it names
+		fx,
+		script,		// a file of scripts\: not compiled, the built map takes it as it is
 	};
 
 	enum class status : int
@@ -38,6 +56,7 @@ namespace editor::assets
 		built,
 		failed,
 		unused,		// an image no material of the project names: not part of the zone
+		raw,		// a script file: nothing to build
 	};
 
 	struct item
@@ -89,6 +108,17 @@ namespace editor::assets
 		bool overwrite = false;
 	};
 
+	struct anim_request
+	{
+		std::string name;					// empty: the name of the file
+		std::filesystem::path file;			// .xanim_export
+		std::string model;					// the skeleton: a model of the project, or an .xmodel_export file; empty: none
+		std::string type = "relative";		// relative | delta | delta3d
+		bool loop = false;
+		std::string tree;					// the animtree a script names; empty: the project's ( default_anim_tree )
+		bool overwrite = false;
+	};
+
 	// one material entry of a CoD4 .gdt
 	struct gdt_entry
 	{
@@ -124,6 +154,19 @@ namespace editor::assets
 	std::string default_material_for(const std::string& export_name);
 	bool material_exists(const std::string& name);		// in the project or in the zones of the open map
 
+	// copies the xanim_export ( and a skeleton file from outside the project ), writes the .anim and starts a build
+	bool import_anim(const anim_request& request, std::string& error);
+	std::string default_anim_tree();					// the animtree of animations that name none: the project's name
+	std::vector<std::string> project_models();			// names, for the skeleton of an animation
+	// copies a soundaliases .csv and what it names - sound files, curves, speaker maps - from the tree around it
+	// ( `root`: the folder that holds sound\ and soundaliases\; empty: above the csv's soundaliases\ ) and builds
+	bool import_sounds(const std::filesystem::path& csv, const std::filesystem::path& root, bool overwrite, std::string& error);
+	// copies an .efx to fx\<name>.efx and builds; `name` as loadfx takes it ( "misc/my_effect" ), empty: what follows
+	// "fx\" in the path of the file, else <project>/<file name>
+	bool import_fx(const std::filesystem::path& file, const std::string& name, bool overwrite, std::string& error);
+	// scripts\maps\mp\<map>.gsc: made with what the map compiler would generate when it is not there; the path
+	bool level_script(std::filesystem::path& file, std::string& error);
+
 	// `root`: where the image files are looked for; empty: the folder of the .gdt and the folders above it
 	bool read_gdt(const std::filesystem::path& file, const std::filesystem::path& root, std::vector<gdt_entry>& out, std::string& error);
 	// writes the .mtl of each entry and copies its images; returns how many were converted, `log` says what happened
@@ -136,10 +179,17 @@ namespace editor::assets
 	const std::vector<std::string>& build_log();		// lines of the last build
 
 	// files dropped on the window ( or named by asset_drop ): images open "New material", exports "Import model",
-	// a .gdt the GDT window, a .mtl is copied into the project
+	// a .gdt the GDT window, a .mtl is copied into the project; an .xanim_export opens "Import animation", a
+	// soundaliases .csv and an .efx are imported as they are
 	void files_dropped(const std::vector<std::filesystem::path>& files);
 
 	// ---- the map compile -------------------------------------------------------------------------------------
+	// what File > Build map hands to tools\package_map.ps1 besides the zone: " -Project <folder>" ( scripts, the
+	// generated animtrees / animlist, the sound archive ); empty without a project folder
+	std::string package_arguments();
+	// what the built map will not get as the project folder has it now: sources that are new, changed or failed
+	// since the zone was built. Lines for the user, said before the build; they do not stop it.
+	std::vector<std::string> package_problems();
 	// " --donor <zone>" for codol_mapc when the project has a zone
 	std::string compile_arguments();
 	// What of the project will not be in the compiled map, before the compiler runs: lines for the user.
@@ -157,6 +207,7 @@ namespace editor::assets
 	void open_material_dialog(const std::vector<std::filesystem::path>& images = {});
 	void open_model_dialog(const std::vector<std::filesystem::path>& lods = {});
 	void open_gdt_dialog(const std::filesystem::path& file = {});
+	void open_anim_dialog(const std::filesystem::path& file = {});
 	void close_dialogs();
 	void draw_windows();								// asset_windows.cpp
 }

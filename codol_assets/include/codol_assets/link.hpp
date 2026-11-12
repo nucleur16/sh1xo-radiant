@@ -25,6 +25,9 @@
 #include "codol_assets/model.hpp"
 #include "codol_assets/sound.hpp"
 
+#include <map>
+#include <span>
+
 namespace codol::assets
 {
 	struct LinkOptions
@@ -59,6 +62,19 @@ namespace codol::assets
 		Status add_loaded_sound(const CompiledLoadedSound& sound);
 		Status add_snd_curve(const SndCurveDef& curve);
 		Status add_sound_aliases(const CompiledAliasList& list);
+
+		// Carries assets of another fast file into the zone: every top level asset of one of `types` ( asset type
+		// numbers ) with the assets it points at ( ZoneEditor::add_asset_closure ), in the order of that file. An
+		// asset whose type and name the zone already has stays as it is. One that cannot be copied is named in
+		// `failed` and the others still go in. How the assets of a project zone get into a map zone.
+		struct Carried
+		{
+			std::map<std::int32_t, std::uint32_t> copied;	// type -> assets of that type taken ( dependencies not counted )
+			std::uint32_t dependencies = 0;					// further assets that came with them
+			std::vector<std::string> kept;					// "<type> <name>": the zone had it already
+			std::vector<std::string> failed;				// "<type> <name>: why"
+		};
+		Status carry(const std::filesystem::path& fastfile, std::span<const std::int32_t> types, Carried& out);
 
 		// what was assumed and done, one line each
 		const std::vector<std::string>& log() const;
