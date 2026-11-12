@@ -175,11 +175,13 @@ if ($mine.Count) {
 }
 if ($archives.Count) {
   $projectNote += "`r`n2a. streamed sounds`r`n"
-  $projectNote += (($archives | ForEach-Object { "     main\$($_.Name)" }) -join "`r`n") + "  ->  <game>\main\`r`n"
-  $projectNote += "   The streamed sound files ( sound\<file> ) of the map's sound aliases: a plain archive next to the game's own.`r`n"
-  $projectNote += "   Without it the aliases exist and play nothing.`r`n"
-  $projectNote += "   NOTE ( codol_bsp/README.md, fifth round ): the client was seen NOT to open a plain archive, and to end when a`r`n"
-  $projectNote += "   streamed alias plays from an archive it does open ( iw_sound_NN.iwd ). Streamed sounds do not work yet: use loaded sounds.`r`n"
+  $projectNote += (($archives | ForEach-Object { "     main\$($_.Name)" }) -join "`r`n") + "  ->  <game>\main\iw_sound_NN.iwd  ( NOT a plain copy )`r`n"
+  $projectNote += "   The streamed sound files ( sound\<file> ) of the map's sound aliases. The game only opens archives named like`r`n"
+  $projectNote += "   its own ( iw_sound_NN.iwd, NN up to 23; 00 .. 03 are the game's ), decrypts those - the name is part of the key -`r`n"
+  $projectNote += "   and plays a streamed file only out of an archive the SERVER has in its main\ too ( else: `"Impure client`" ).`r`n"
+  $projectNote += "   So the plain archive is written again under a free name, for client and server:`r`n"
+  $projectNote += "     codol_assetc --install <game> --iwd <game>\main\iw_sound_23.iwd" + (($archives | ForEach-Object { " --iwd-add main\$($_.Name)" }) -join '') + "`r`n"
+  $projectNote += "   Without it the aliases exist and play nothing. The editor's install does this by itself.`r`n"
 }
 Set-Content "$presence\INSTALL.txt" -Encoding ASCII -Value @"
 $Name - where the files go ( <game> = the Call of Duty Online 1.1.1.13 folder, <server> = CoD4x_Server )

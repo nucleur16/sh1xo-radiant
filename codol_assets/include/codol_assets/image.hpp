@@ -91,7 +91,8 @@ namespace codol::assets
 	// The GfxImage as the game's loaders read it: header, name, GfxImageLoadDef ( and the pixels when inline ).
 	std::vector<zone::ZoneNewPiece> image_pieces(const CompiledImage& image);
 
-	// A ( stored ) zip with the given files. Without a key a plain one: the game only decrypts archives whose name
+	// A zip with the given files, every entry deflated ( the game cannot seek in a stored entry: a streamed sound
+	// in one ends the client ). Without a key a plain one: the game only decrypts archives whose name
 	// contains iw_image, iw_model, iw_config, iw_sound, iw_ui_image or iw_adlc - a plain archive needs any other name.
 	// With `key` ( codol::render::derive_iwd_key, 24 bytes ) the entry names and the file data are encrypted the way
 	// the game's own archives are ( AES-192 in counter mode, seeded with the CRC of the archive's FILE NAME, which
@@ -99,6 +100,13 @@ namespace codol::assets
 	Status write_iwd(const std::filesystem::path& path, std::span<const std::pair<std::string, std::vector<std::uint8_t>>> files,
 		const std::array<std::uint8_t, 24>* key = nullptr);
 	bool iwd_needs_key(const std::filesystem::path& path);
+	// Whether the game opens an archive of that name in main\ at all ( C1.exe 0x6166E0 ): iw_ + nothing or one of
+	// imagestripped_ / image_ / sound_ / model_ / config_ + two digits up to 23 + .iwd. Anything else in main\ is
+	// never looked at ( localized_<language>_iw_.. follow the same rule with a limit per language: not judged here ).
+	bool game_mounts_iwd(const std::filesystem::path& path);
+	// The first free name iw_sound_NN.iwd of a main\ folder, from 23 down to 4 ( 00 .. 03 are the game's ); empty
+	// when all are taken.
+	std::filesystem::path free_sound_iwd(const std::filesystem::path& main_folder);
 
 	// An IWI file read back through codol_render ( the reader of the renderer ): every surface as RGBA.
 	struct IwiLevels

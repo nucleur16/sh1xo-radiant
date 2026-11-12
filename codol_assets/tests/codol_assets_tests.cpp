@@ -203,6 +203,9 @@ namespace
 		CHECK(archive && archive->entries().size() == 2);
 		if (archive)
 		{
+			// every entry deflated, also the five bytes that get longer by it: the game cannot seek in a stored entry
+			CHECK(archive->entries()[0].method == 8 && archive->entries()[1].method == 8);
+			CHECK(archive->entries()[0].uncompressed_size == 5 && archive->entries()[1].uncompressed_size == 70000 && archive->entries()[1].compressed_size < 1000);
 			std::vector<std::uint8_t> data;
 			const auto* entry = archive->find("images/b.iwi");
 			CHECK(entry && archive->read(*entry, data, &error) && data == files[1].second);
@@ -212,6 +215,19 @@ namespace
 		// an archive with one of the game's names is encrypted: the same bytes come back through the reader with the key,
 		// the names are not readable without it, and a plain name needs no key
 		CHECK(!iwd_needs_key(file) && iwd_needs_key(scratch / "iw_sound_90.iwd") && iwd_needs_key(scratch / "localized_x_iw_image_01.iwd"));
+		// the names the game opens in main\ ( C1.exe 0x6166E0 )
+		CHECK(game_mounts_iwd("iw_sound_04.iwd") && game_mounts_iwd("x/IW_Sound_23.iwd") && game_mounts_iwd("iw_07.iwd") && game_mounts_iwd("iw_imagestripped_00.iwd"));
+		CHECK(!game_mounts_iwd("zz_mymap_sounds.iwd") && !game_mounts_iwd("iw_sound_24.iwd") && !game_mounts_iwd("iw_c4fx_00.iwd") && !game_mounts_iwd("iw_sound_4.iwd")
+			&& !game_mounts_iwd("iw_sound_04.zip") && !game_mounts_iwd("iw_sound_04x.iwd"));
+		{
+			const fs::path main_folder = scratch / "codol_assets_main";
+			fs::create_directories(main_folder);
+			CHECK(free_sound_iwd(main_folder).filename() == "iw_sound_23.iwd");
+			CHECK(codol::zone::write_file(main_folder / "iw_sound_23.iwd", std::vector<std::uint8_t>{ 0 }));
+			CHECK(free_sound_iwd(main_folder).filename() == "iw_sound_22.iwd");
+			std::error_code gone;
+			fs::remove_all(main_folder, gone);
+		}
 		std::array<std::uint8_t, 24> key{};
 		for (std::size_t k = 0; k < key.size(); k++)
 		{

@@ -385,6 +385,47 @@ int main(const int argc, char** argv)
 	{
 		return verify(verifyFile, link.install, link.exe);
 	}
+	if (out.empty() && !iwd.empty() && !iwdAdd.empty())
+	{
+		// only an archive: the files of plain archives under a name the game mounts ( iw_sound_NN.iwd ), no zone
+		std::vector<std::pair<std::string, std::vector<std::uint8_t>>> files;
+		for (const fs::path& from : iwdAdd)
+		{
+			std::string why;
+			const auto archive = codol::render::iwd_archive::open(from, nullptr, &why);
+			if (!archive)
+			{
+				return fail("--iwd-add " + from.string() + ": " + why);
+			}
+			for (const codol::render::iwd_entry& entry : archive->entries())
+			{
+				std::vector<std::uint8_t> bytes;
+				if (!archive->read(entry, bytes, &why))
+				{
+					return fail("--iwd-add " + from.string() + ": " + why);
+				}
+				files.emplace_back(entry.name, std::move(bytes));
+			}
+		}
+		codol::render::iwd_key key{};
+		const bool encrypted = iwd_needs_key(iwd);
+		std::string why;
+		if (encrypted && !codol::render::derive_iwd_key(link.exe.empty() ? link.install / "C1.exe" : link.exe, key, &why))
+		{
+			return fail("--iwd " + iwd.filename().string() + " has a name the game decrypts, and the key could not be read from the client: " + why);
+		}
+		if (!game_mounts_iwd(iwd))
+		{
+			std::printf("warning: the game does not open an archive named %s: it takes iw_NN.iwd and iw_sound_NN / iw_image_NN / iw_imagestripped_NN / iw_model_NN / "
+				"iw_config_NN.iwd with NN from 00 to 23\n", iwd.filename().string().c_str());
+		}
+		if (const Status s = write_iwd(iwd, files, encrypted ? &key : nullptr); !s)
+		{
+			return fail(s.message);
+		}
+		std::printf("wrote %s%s: %zu files of other archives\n", iwd.string().c_str(), encrypted ? " ( encrypted like the game's archives )" : "", files.size());
+		return 0;
+	}
 	if (out.empty())
 	{
 		return fail("--out <zone.ff> is needed");

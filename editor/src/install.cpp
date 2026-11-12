@@ -9,6 +9,8 @@
 
 #include <codol_zone/zone_editor.hpp>
 #include <codol_zone/assets.hpp>
+#include <codol_assets/image.hpp>
+#include <codol_render/iwd.hpp>
 
 #include <set>
 
@@ -16,7 +18,7 @@
 // comes out again.
 //
 //   zone\*.ff                    -> <game>\usermaps\<map>\             ( or a zone folder given by hand )
-//   main\zz_*_sounds.iwd         -> <game>\main\
+//   main\zz_*_sounds.iwd         -> <game>\main\iw_sound_NN.iwd        ( written again under a name the game opens )
 //   scripts\..                   -> the server's script folder
 //   presence\ ( the row, the arena entry, the name )
 //                                -> the create-room list of <game>: only when asked for
@@ -843,6 +845,107 @@ namespace editor::ui
 		{
 			return fs::u8path(utils::fs::get_basepath()) / "compiled" / name;
 		}
+
+		// The streamed sound files of a package ( main\zz_*_sounds.iwd, plain archives ) as ONE archive of the game:
+		// <game>\main\iw_sound_NN.iwd. The game only opens archives named like its own ( iw_sound_NN, NN up to 23 ),
+		// decrypts those, and plays a streamed file only out of an archive the server has as well - the same main\
+		// folder where client and server run from one install. The number is the one an earlier install of this map
+		// took, else the first free one from 23 down; the name is part of the encryption, so the archive is written
+		// for it ( into work\ ) and then put in place like every other file.
+		void install_sound_archive(const std::vector<fs::path>& archives, const fs::path& game, const std::string& name, const fs::path& package, manifest& m, counts& n)
+		{
+			namespace ca = codol::assets;
+			namespace cr = codol::render;
+			std::error_code ec;
+			std::vector<std::pair<std::string, std::vector<std::uint8_t>>> files;
+
+			for (const auto& from : archives)
+			{
+				std::string why;
+				const auto archive = cr::iwd_archive::open(from, nullptr, &why);
+
+				if (!archive)
+				{
+					n.failed++;
+					say("^1", to_utf8(from) + ": " + why);
+					return;
+				}
+
+				for (const auto& entry : archive->entries())
+				{
+					std::vector<std::uint8_t> bytes;
+
+					if (!archive->read(entry, bytes, &why))
+					{
+						n.failed++;
+						say("^1", to_utf8(from) + ": " + entry.name + ": " + why);
+						return;
+					}
+
+					files.emplace_back(entry.name, std::move(bytes));
+				}
+			}
+
+			if (files.empty())
+			{
+				return;
+			}
+
+			fs::path target;
+
+			for (const auto& r : m.records)
+			{
+				const fs::path known = fs::u8path(r.path);
+
+				if ((r.kind == "new" || r.kind == "replaced") && lower(to_utf8(known.parent_path())) == lower(to_utf8(game / "main")) && lower(to_utf8(known.filename())).rfind("iw_sound_", 0) == 0)
+				{
+					target = known;
+				}
+			}
+
+			if (target.empty())
+			{
+				target = ca::free_sound_iwd(game / "main");
+			}
+
+			if (target.empty())
+			{
+				n.failed++;
+				say("^1", "streamed sounds: " + to_utf8(game / "main") + " has no free iw_sound_NN.iwd ( 04 .. 23 are taken )");
+				return;
+			}
+
+			cr::iwd_key key{};
+			std::string why;
+			bool have_key = false;
+
+			for (const fs::path& exe : { game / "C1.exe", fs::u8path(components::codol_game::install_path()) / "C1.exe" })
+			{
+				if (!have_key && fs::is_regular_file(exe, ec) && cr::derive_iwd_key(exe, key, &why))
+				{
+					have_key = true;
+				}
+			}
+
+			if (!have_key)
+			{
+				n.failed++;
+				say("^1", "streamed sounds: the archive key could not be read from C1.exe of " + to_utf8(game) + " ( " + why + " )");
+				return;
+			}
+
+			const fs::path made = package / "work" / target.filename();
+
+			if (const auto status = ca::write_iwd(made, files, &key); !status)
+			{
+				n.failed++;
+				say("^1", "streamed sounds: " + status.message);
+				return;
+			}
+
+			say("", "streamed sounds: " + std::to_string(files.size()) + " file( s ) as " + to_utf8(target.filename()) + " ( the server needs the same archive in its main\\ )");
+			put(made, target, name, m, n);
+		}
 	}
 
 	// Install: the package of the last build goes where the game reads it. `request.game` gives the usermaps folder,
@@ -889,22 +992,28 @@ namespace editor::ui
 			}
 		}
 
-		// the streamed sounds of the project: next to the game's archives. A zone folder given by hand says nothing
-		// about where main\ is
-		for (const auto& entry : fs::directory_iterator(package / "main", ec))
+		// the streamed sounds of the project: next to the game's archives, under a name the game opens. A zone
+		// folder given by hand says nothing about where main\ is
 		{
-			if (!entry.is_regular_file() || entry.path().extension() != ".iwd")
+			std::vector<fs::path> archives;
+
+			for (const auto& entry : fs::directory_iterator(package / "main", ec))
 			{
-				continue;
+				if (entry.is_regular_file() && entry.path().extension() == ".iwd")
+				{
+					archives.push_back(entry.path());
+				}
 			}
 
-			if (!request.game.empty())
+			std::sort(archives.begin(), archives.end());
+
+			if (!archives.empty() && request.game.empty())
 			{
-				put(entry.path(), game / "main" / entry.path().filename(), name, m, n);
+				say("^3", "compiled\\" + name + "\\main\\ ( streamed sounds ) belongs into the game's main folder: not installed, no game folder was given");
 			}
-			else
+			else if (!archives.empty())
 			{
-				say("^3", "compiled\\" + name + "\\main\\" + to_utf8(entry.path().filename()) + " ( streamed sounds ) belongs into the game's main folder: not copied, no game folder was given");
+				install_sound_archive(archives, game, name, package, m, n);
 			}
 		}
 
@@ -1244,7 +1353,7 @@ namespace editor::ui
 			ImGui::Checkbox("Add to the create-room list", &w.list);
 
 			ImGui::PushTextWrapPos(660.0f);
-			ImGui::TextDisabled("compiled\\%s\\zone\\*.ff go to <game>\\usermaps\\%s\\, the sound archive to <game>\\main\\, scripts\\ to the script folder. "
+			ImGui::TextDisabled("compiled\\%s\\zone\\*.ff go to <game>\\usermaps\\%s\\, streamed sounds to <game>\\main\\ as a free iw_sound_NN.iwd, scripts\\ to the script folder. "
 				"The create-room list is the zone of <game>\\client_shipRetail\\patch\\ that holds mp/comaplist.csv: the map's row, its arena entry and its name are added to it. "
 				"A file that is replaced is kept as <file>.pre-%s; Uninstall puts everything back. Without the list a map is played with CODOL_FORCE_MAP=%s on the lobby.",
 				name.empty() ? "<map>" : name.c_str(), name.empty() ? "<map>" : name.c_str(), name.empty() ? "<map>" : name.c_str(), name.empty() ? "<map>" : name.c_str());

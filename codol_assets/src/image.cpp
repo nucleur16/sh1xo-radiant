@@ -851,6 +851,49 @@ namespace codol::assets
 		return false;
 	}
 
+	bool game_mounts_iwd(const std::filesystem::path& path)
+	{
+		std::string name = path.filename().string();
+		for (char& c : name)
+		{
+			c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+		}
+		if (name.rfind("iw_", 0) != 0)
+		{
+			return false;
+		}
+		std::size_t at = 3;
+		for (const char* kind : { "imagestripped_", "image_", "sound_", "model_", "config_" })
+		{
+			if (name.compare(at, std::strlen(kind), kind) == 0)
+			{
+				at += std::strlen(kind);
+				break;
+			}
+		}
+		if (name.size() != at + 6 || !std::isdigit(static_cast<unsigned char>(name[at])) || !std::isdigit(static_cast<unsigned char>(name[at + 1]))
+			|| name.compare(at + 2, 4, ".iwd") != 0)
+		{
+			return false;
+		}
+		return (name[at] - '0') * 10 + (name[at + 1] - '0') <= 23;
+	}
+
+	std::filesystem::path free_sound_iwd(const std::filesystem::path& main_folder)
+	{
+		for (int number = 23; number >= 4; number--)
+		{
+			char name[32];
+			std::snprintf(name, sizeof(name), "iw_sound_%02d.iwd", number);
+			std::error_code ec;
+			if (!std::filesystem::exists(main_folder / name, ec))
+			{
+				return main_folder / name;
+			}
+		}
+		return {};
+	}
+
 	Status write_iwd(const std::filesystem::path& path, const std::span<const std::pair<std::string, std::vector<std::uint8_t>>> files,
 		const std::array<std::uint8_t, 24>* key)
 	try
@@ -884,14 +927,32 @@ namespace codol::assets
 				return Status::error("iwd: entry '" + name + "' cannot be stored");
 			}
 			const std::uint32_t crc = r::crc32(data), offset = static_cast<std::uint32_t>(out.size()), size = static_cast<std::uint32_t>(data.size());
+			// Every entry is deflated, also one that does not get smaller: the game seeks in a streamed sound by
+			// opening the entry again and reading up to the position into no buffer at all ( C1.exe 0x615220 ->
+			// 0x6495D0 with a null pointer ). Its inflate leaves the output out then; the copy loop of a stored
+			// entry writes to address 0 ( the access violation at 0x649719 ). All entries of the game's own
+			// archives are deflated.
+			std::vector<std::uint8_t> packed;
+			if (const Status s = zone::zlib_deflate(data, packed, 6); !s)
+			{
+				return Status::error("iwd: entry '" + name + "': " + s.message);
+			}
+			if (packed.size() < 6 || packed.size() - 6 > 0x7FFFFFFFu)
+			{
+				return Status::error("iwd: entry '" + name + "' cannot be deflated");
+			}
+			// zip holds the raw deflate stream: without the two bytes of zlib header and the Adler-32 at the end
+			packed.erase(packed.begin(), packed.begin() + 2);
+			packed.resize(packed.size() - 4);
+			const std::uint32_t packed_size = static_cast<std::uint32_t>(packed.size());
 			u32(out, 0x04034B50);
 			u16(out, 20);
 			u16(out, 0);
-			u16(out, 0);			// stored
+			u16(out, 8);			// deflated
 			u16(out, 0);
 			u16(out, 0x21);			// 1980-01-01
 			u32(out, crc);
-			u32(out, size);
+			u32(out, packed_size);
 			u32(out, size);
 			u16(out, static_cast<std::uint32_t>(name.size()));
 			u16(out, 0);
@@ -908,12 +969,12 @@ namespace codol::assets
 			}
 			out.insert(out.end(), stored_name.begin(), stored_name.end());
 			const std::size_t data_at = out.size();
-			out.insert(out.end(), data.begin(), data.end());
-			for (std::size_t k = 0; key && k < data.size(); k += 0x4000)
+			out.insert(out.end(), packed.begin(), packed.end());
+			for (std::size_t k = 0; key && k < packed.size(); k += 0x4000)
 			{
 				std::uint8_t iv[16];
 				counter(iv, static_cast<std::uint32_t>(data_at + k), name_hash, 0x01010101u, 0x01010101u);
-				if (!r::aes_ctr_transform(*key, iv, out.data() + data_at + k, std::min<std::size_t>(0x4000, data.size() - k), &cipher_error))
+				if (!r::aes_ctr_transform(*key, iv, out.data() + data_at + k, std::min<std::size_t>(0x4000, packed.size() - k), &cipher_error))
 				{
 					return Status::error("iwd: " + cipher_error);
 				}
@@ -924,11 +985,11 @@ namespace codol::assets
 			u16(directory, 20);
 			u16(directory, 20);
 			u16(directory, 0);
-			u16(directory, 0);
+			u16(directory, 8);
 			u16(directory, 0);
 			u16(directory, 0x21);
 			u32(directory, crc);
-			u32(directory, size);
+			u32(directory, packed_size);
 			u32(directory, size);
 			u16(directory, static_cast<std::uint32_t>(name.size()));
 			u16(directory, 0);
