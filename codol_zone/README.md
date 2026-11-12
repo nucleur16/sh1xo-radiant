@@ -202,6 +202,13 @@ Rules of the edits:
 * **`remove_asset`** fails when another asset points into the removed one. This is common: the zone linker stores
   a nested asset ( a material inside an xmodel ) and every shared string once, at its first use, and later users
   point there.
+* **`add_asset_closure`** is `add_asset` with dependencies for assets that share data with other top level assets of
+  their zone: every asset of the donor that the copied one points *into* comes along, in front of it ( the technique
+  sets of a map zone share techniques, passes and shaders; `codol_assets` copies them this way ).
+* **`add_new_asset`** adds an asset that exists nowhere yet, given as the pieces of stream data the loaders read for
+  it, in their order ( header first ), with its pointers ( to another piece, or to the header slot of a top level
+  asset of the zone ) and its script string fields. Nothing is checked at that point; `write()` runs the loaders over
+  it. `codol_assets` builds images, materials and models this way.
 * **`add_asset` / `replace_asset`** copy a unit. Pointers that leave it are re-targeted: at the same asset ( type +
   name ) of the receiving zone when they lead to a top level asset's header slot ( `withDependencies` copies such
   assets when they are missing ), at an equal string when they lead to a string. Script string indices are
