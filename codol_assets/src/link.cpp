@@ -185,6 +185,26 @@ namespace codol::assets
 			}
 			index = editor.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, name);
 			log.push_back("techset " + name + ": copied from " + t->donorZone + " ( " + std::to_string(editor.asset_count() - before) + " assets with what it shares )");
+			// "<..>_sm_<..>" has a sibling "<..>_hsm_<..>" wherever it is defined: the set the game draws with when it
+			// shadows with hardware shadow maps, found by name. Without it the material gets no dynamic sun shadow.
+			if (const std::size_t at = name.find("_sm_"); at != std::string::npos && index != ZoneEditor::npos)
+			{
+				std::string sibling = name;
+				sibling.replace(at, 4, "_hsm_");
+				if (editor.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, sibling) == ZoneEditor::npos)
+				{
+					const std::size_t theirs = from->find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, sibling);
+					if (theirs != ZoneEditor::npos && editor.add_asset_closure(*from, theirs))
+					{
+						log.push_back("techset " + sibling + ": copied with it ( hardware shadow maps )");
+					}
+					else
+					{
+						log.push_back("techset " + sibling + ": not a top level asset of " + t->donorZone + "; materials with " + name + " get no dynamic sun shadow from this zone alone");
+					}
+					index = editor.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, name);
+				}
+			}
 			return index == ZoneEditor::npos ? Status::error("technique set '" + name + "' did not arrive") : Status{};
 		}
 	};
@@ -480,7 +500,41 @@ namespace codol::assets
 				pieces.add_array(s.vertices);
 				if (!s.rigid.empty())
 				{
-					pieces.add_array(s.rigid);
+					std::vector<c1::XRigidVertList> lists = s.rigid;
+					for (std::size_t k = 0; k < lists.size(); k++)
+					{
+						lists[k].collisionTree = k < s.trees.size() && !s.trees[k].nodes.empty() ? c1::ZPTR_INLINE : 0;
+					}
+					pieces.add_array(lists);
+					// per list with a tree: header, nodes, leafs ( the order the game's loader reads them in )
+					for (std::size_t k = 0; k < lists.size(); k++)
+					{
+						if (!lists[k].collisionTree)
+						{
+							continue;
+						}
+						const CompiledCollisionTree& tree = s.trees[k];
+						struct TreeHeader
+						{
+							float trans[3], scale[3];
+							std::uint32_t nodeCount, nodes, leafCount, leafs;
+						};
+						static_assert(sizeof(TreeHeader) == 40);
+						TreeHeader th{};
+						std::memcpy(th.trans, tree.trans, sizeof(th.trans));
+						std::memcpy(th.scale, tree.scale, sizeof(th.scale));
+						th.nodeCount = static_cast<std::uint32_t>(tree.nodes.size());
+						th.nodes = c1::ZPTR_INLINE;
+						th.leafCount = static_cast<std::uint32_t>(tree.leafs.size());
+						th.leafs = tree.leafs.empty() ? 0 : c1::ZPTR_INLINE;
+						pieces.add(th);
+						pieces.add_array(tree.nodes);
+						if (!tree.leafs.empty())
+						{
+							pieces.add_array(tree.leafs);
+						}
+						memory += static_cast<std::uint32_t>(sizeof(th) + tree.nodes.size() * 16 + tree.leafs.size() * 2);
+					}
 				}
 				pieces.add_array(s.indices);
 				memory += static_cast<std::uint32_t>(s.vertices.size() * 32 + s.indices.size() * 2 + s.blend.size() * 2 + s.rigid.size() * 12 + sizeof(c1::XSurface));

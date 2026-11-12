@@ -143,6 +143,39 @@ namespace
 
 		zone::ClientKey key;
 		CHECK(static_cast<bool>(key.load_from_exe(game / "C1.exe")));
+		{
+			// every lit technique set of the zone ( "_sm_" ) has its hardware shadow map sibling ( "_hsm_" ) in the zone, or
+			// the compiler said that no donor has one: without it the game draws the material without the sun's shadow map
+			zone::ZoneEditor editor;
+			CHECK(static_cast<bool>(editor.open(c.file, key)));
+			std::set<std::string> sets;
+			for (std::size_t a = 0; a < editor.asset_count(); a++)
+			{
+				// ( a set of two stream pieces is a header and a name: the stand in for a set of a zone that is loaded already )
+				if (editor.asset(a).type == c1::ASSET_TYPE_TECHNIQUE_SET && editor.asset(a).chunks > 2)
+				{
+					sets.insert(editor.asset(a).name);
+				}
+			}
+			std::size_t lit = 0, with_sibling = 0, told = 0;
+			for (const std::string& name : sets)
+			{
+				const std::size_t at = name.find("_sm_");
+				if (at == std::string::npos || name[0] == ',')
+				{
+					continue;
+				}
+				lit++;
+				std::string sibling = name;
+				sibling.replace(at, 4, "_hsm_");
+				with_sibling += sets.count(sibling);
+				for (const std::string& warning : c.rep.warnings)
+				{
+					told += warning.find("technique set " + name + " has no hardware shadow map sibling") != std::string::npos;
+				}
+			}
+			CHECK(lit > 0 && with_sibling + told == lit && with_sibling > 0);
+		}
 		std::vector<std::uint8_t> bytes;
 		CHECK(static_cast<bool>(zone::read_fastfile(c.file, key, bytes)));
 
@@ -304,7 +337,10 @@ int main(const int argc, char** argv)
 	{
 		const compiled c = compile(out, game, "two_rooms");
 		check_zone(c, game, out / "maps" / "two_rooms.map");
-		CHECK(c.rep.cells == 5 && c.rep.portals == 8 && !c.rep.leaked);
+		// room, corridor, room: one portal ( two GfxPortals ) per doorway. The corridor has the doorways' cross section,
+		// so a slice through it is no opening; the doorway's cross section in the other face of its wall is the same opening
+		CHECK(c.rep.cells == 3 && c.rep.portals == 4 && !c.rep.leaked);
+		CHECK(has_note(c.rep, "2 openings found"));
 		CHECK(c.rep.faces_culled > 60);
 		const compiled leak = compile(out, game, "two_rooms_leak");
 		CHECK(leak.ok && leak.rep.leaked && leak.rep.cells == 1);
@@ -478,7 +514,9 @@ int main(const int argc, char** argv)
 		// the yard: everything in one map
 		const compiled yard = compile(out, game, "yard", true, true);
 		check_zone(yard, game, out / "maps" / "yard.map");
-		CHECK(!yard.rep.leaked && yard.rep.cells >= 3 && yard.rep.static_models == 9 && yard.rep.patches == 2);
+		CHECK(!yard.rep.leaked && yard.rep.static_models == 9 && yard.rep.patches == 2);
+		// the yard and the two buildings; a portal in each of the ten doors and windows, none inside a room or in the open
+		CHECK(yard.rep.cells == 3 && yard.rep.portals == 20);
 		CHECK(has_note(yard.rep, "scripts: 2 effects ( 2 kinds ), 1 sounds"));
 		std::printf("yard: %zu brushes, %zu surfaces, %zu cells, %zu portals, %zu lightmaps, %.1f s\n", yard.rep.clip_brushes, yard.rep.surfaces, yard.rep.cells,
 			yard.rep.portals, yard.rep.lightmaps, yard.rep.seconds);
@@ -492,7 +530,9 @@ int main(const int argc, char** argv)
 	{
 		const compiled c = compile(out, game, "big");
 		check_zone(c, game, out / "maps" / "big.map");
-		CHECK(c.rep.clip_brushes > 1000 && c.rep.cells > 20 && !c.rep.leaked);
+		CHECK(c.rep.clip_brushes > 1000 && !c.rep.leaked);
+		// 12 x 12 rooms, 2 x 12 x 11 doorways: every room is a cell, every doorway has one portal
+		CHECK(c.rep.cells == 144 && c.rep.portals == 2 * 264);
 		std::printf("big: %zu brushes, %zu surfaces, %zu cells, %zu portals, %.1f s\n", c.rep.clip_brushes, c.rep.surfaces, c.rep.cells, c.rep.portals, c.rep.seconds);
 	}
 

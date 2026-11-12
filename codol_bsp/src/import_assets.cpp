@@ -40,6 +40,9 @@ namespace codol::bsp
 
 		std::map<std::string, material_desc, std::less<>> described;
 		std::map<std::pair<int, std::string>, zone_ref> by_name;		// ( type, name ) -> asset of the output zone
+		std::map<const Zone*, std::map<std::string, zaddr>> techsets_of;	// per donor: the technique sets it defines, by name
+		std::set<std::string> siblings_tried;							// "_hsm_" names looked for
+		std::vector<std::string> siblings_missing;						// "_sm_" technique sets written without their "_hsm_" set
 		std::map<std::pair<const Zone*, zaddr>, zone_ref> by_address;	// techniques, declarations, shaders of a donor
 
 		state(ZoneEditor& o, const zone::ClientKey& k, std::filesystem::path i, std::vector<std::filesystem::path> d, const catalog& c)
@@ -163,6 +166,76 @@ namespace codol::bsp
 			ref.chunk = pass_chunk;
 			ref.offset = field;
 			pending.emplace_back(key_address, ref);
+		}
+
+		// the technique set `name` a donor zone defines ( top level or nested, not a reference by name ); 0: none
+		zaddr find_techset(const Zone& donor, const std::string& name)
+		{
+			auto [it, fresh] = techsets_of.try_emplace(&donor);
+			if (fresh)
+			{
+				for (const zone::AssetRecord& r : donor.all_assets())
+				{
+					if (r.type == c1::ASSET_TYPE_TECHNIQUE_SET && !donor.reference(r.header))
+					{
+						it->second.emplace(std::string(donor.c_string(donor.get<c1::MaterialTechniqueSet>(r.header).name)), r.header);
+					}
+				}
+			}
+			const auto found = it->second.find(name);
+			return found == it->second.end() ? 0 : found->second;
+		}
+
+		// A lit technique set "<..>_sm_<..>" has a sibling "<..>_hsm_<..>" in every zone that has it: the same set for
+		// hardware shadow maps, which the game looks up by name and draws with when it shadows with depth textures.
+		// Without it the material is drawn without the sun's shadow map: no shadow of a player or a model on it ( seen
+		// in the client: the first compiled maps had no dynamic shadows at all ). So the sibling comes along.
+		void shadow_sibling(const Zone& donor, const ZoneEditor* donor_editor, const std::string& name)
+		{
+			const std::size_t at = name.find("_sm_");
+			if (at == std::string::npos || name[0] == ',')		// ",name": the set of a zone that is loaded already, sibling included
+			{
+				return;
+			}
+			std::string sibling = name;
+			sibling.replace(at, 4, "_hsm_");
+			if (!siblings_tried.insert(sibling).second || by_name.count({ static_cast<int>(c1::ASSET_TYPE_TECHNIQUE_SET), sibling })
+				|| out.find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, sibling) != ZoneEditor::npos)
+			{
+				return;
+			}
+			if (const std::size_t top = donor_editor ? donor_editor->find_asset(c1::ASSET_TYPE_TECHNIQUE_SET, sibling) : ZoneEditor::npos; top != ZoneEditor::npos)
+			{
+				if (out.add_asset_closure(*donor_editor, top))
+				{
+					return;
+				}
+			}
+			if (const zaddr header = find_techset(donor, sibling))
+			{
+				techset_from(donor, header);
+				return;
+			}
+			siblings_missing.push_back(name);
+		}
+
+		// after assets were copied whole ( add_asset_closure ): the siblings of the technique sets that came with them
+		void shadow_siblings_of_copies(const ZoneEditor& donor_editor)
+		{
+			std::vector<std::string> names;
+			for (std::size_t a = 0; a < out.asset_count(); a++)
+			{
+				const zone::EditorAsset asset = out.asset(a);
+				// ( ",name": a set of a zone that is loaded already, which has its sibling there )
+				if (asset.type == c1::ASSET_TYPE_TECHNIQUE_SET && asset.name.find("_sm_") != std::string::npos && asset.name[0] != ',')
+				{
+					names.push_back(asset.name);
+				}
+			}
+			for (const std::string& name : names)
+			{
+				shadow_sibling(donor_editor.zone(), &donor_editor, name);
+			}
 		}
 
 		zone_ref techset_from(const Zone& donor, const zaddr header)
@@ -291,6 +364,7 @@ namespace codol::bsp
 			{
 				by_address[k] = r;
 			}
+			shadow_sibling(donor, nullptr, name);
 			return ref;
 		}
 
@@ -803,6 +877,11 @@ namespace codol::bsp
 		}
 	}
 
+	const std::vector<std::string>& asset_importer::technique_sets_without_shadow_sibling() const
+	{
+		return s->siblings_missing;
+	}
+
 	zone_ref asset_importer::model(const std::string_view name, std::string* why, model_desc* desc)
 	{
 		// An xmodel that is a top level asset of its zone - a model of the common zones, of a ported map, one compiled by
@@ -854,6 +933,7 @@ namespace codol::bsp
 				}
 				return {};
 			}
+			s->shadow_siblings_of_copies(donor);
 			zone_ref ref;
 			ref.slot = true;
 			ref.asset = s->out.find_asset(c1::ASSET_TYPE_XMODEL, name);

@@ -258,6 +258,22 @@ compiler makes of it, each rule read off the shipped models ( 13024 models, 2850
 * Collision ( `collision=<lod>` ): one `XModelCollSurf` per surface of that LOD and bone, in model space, with the
   48 byte triangle records: plane ( outward normal, distance ), and the two vectors with `dot( svec.xyz, p ) - svec.w`
   running 0 .. 1 along the triangle's edges. Surface flags: the material's surface type number << 20.
+* Collision trees ( `XSurfaceCollisionTree` ): every rigid list of LOD 0 of a model with collision gets one - the
+  triangles of the list in a tree of boxes, through which the game projects a bullet mark onto the model. In the
+  shipped zones every model with collision surfaces has a tree on every rigid list of LOD 0 and nowhere else
+  ( `codol_asset_probe trees <zone> <exe> *`: mp_rust 143 trees, mp_highrise 482, common_mp 61, no exception ), and
+  without them the client crashes when a bullet hits the model ( seen with the test crate on a `codol_bsp` map:
+  access violation near 0x642E59 right at the shot ). The rules, read off the shipped trees with the same probe and
+  kept by every one of them: tree space is `( position + trans ) * scale` = 0 .. 65535 over the box of the list's
+  triangles; a node whose child count has bit 15 is a leaf node, child begin its first entry in the leaf table and
+  the low bits the number of entries ( 1 .. 16 ); an entry is a triangle of the surface ( counted from the surface's
+  first, not the list's ), with bit 15 that one and the next; any other node has 2 .. 9 children that lie together
+  behind it; node boxes hold their triangles. `build_collision_tree` halves a node of more than 16 triangles along
+  the longest axis of their centres ( two children, one triangle per entry ). With it the crate takes bullets in the
+  client: wood splinters and marks.
+* Technique sets: a lit set `<..>_sm_<..>` copied from the install brings its sibling `<..>_hsm_<..>` ( the set the
+  game draws with when it shadows with hardware shadow maps, found by name ); without it a material gets no
+  dynamic sun shadow ( `codol_bsp/README.md`, Materials ).
 
 ## Animations
 
@@ -1135,8 +1151,9 @@ link_fx(linker.editor(), fx);
   as a cube ( flags `0x10340` ); not compared with a shipped cube map, not linked into a material.
 * Material states no shipped material of the technique set has are derived, with a 14 % hit rate on the shipped
   cases. Water materials are not compiled. Sort names are not read, only numbers.
-* Models: no `XSurfaceCollisionTree` in the rigid lists ( 44 % of the shipped static surfaces have one; it is what
-  decals are projected with ), no physics preset / collision map reference, `tileMode` 0 ( shipped: 0, 1, 2; rule
+* Models: collision trees have two children per node and one triangle per leaf entry ( shipped: up to 9 and
+  pairs ); a rigid list that reaches beyond triangle 32768 of its surface gets none. No physics preset / collision
+  map reference, `tileMode` 0 ( shipped: 0, 1, 2; rule
   unknown ), `lodRampType` 0, static model cache bytes of the LOD info 0, `memUsage` an estimate. Per collision
   surface contents other than the model's ( glass .. ) only through `ModelOptions::collisionContentsByMaterial`.
   `XBoneInfo` of skinned characters differs from shipped ( above ).

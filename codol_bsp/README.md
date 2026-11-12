@@ -19,9 +19,11 @@ map's `gfx_map`, and models compiled by `codol_assets` ), a modder's own materia
 the clip map's terrain; the light bake has bounced light, several lightmap pages, a directional light grid and
 rendered reflection probes; the compiler renders a minimap picture and writes the map's scripts
 ( `tools/package_map.ps1` puts a whole map together ). Everything was verified with `codol_viewtool` ( which runs the
-game's shaders ) and on the dedicated server ( probes, bullet traces, bots ). **Nothing of this second round was seen
-in the game client**: every capture of the client's window is black on this machine ( no monitor attached ), so the
-only client evidence is behavioural and from the first round. What is approximate or missing is listed under
+game's shaders ), on the dedicated server ( probes, bullet traces, bots ) and - the third round - **in the game
+client, with pictures** ( [Third round](#third-round-the-client-with-pictures) ): the yard loads with its own loading
+picture and minimap, sky, baked and bounced light, models, a modder's materials, terrain one walks over; what the
+client showed wrong was fixed ( cells that hid everything behind them, no dynamic sun shadows, a crash on shooting a
+`codol_assets` model, a block of shadow under a fence ). What is approximate or missing is listed under
 [Limits](#limits-and-what-is-not-done).
 
 ## Build
@@ -72,9 +74,10 @@ codol_bsp --check <map.ff> --exe <C1.exe>
 > codol_bsp --map two_rooms.map --exe C1.exe --install "D:\..\Call of Duty Online 1.1.1.13" --out out/mp_tworooms.ff
 map mp_tworooms: 22 brushes ( 18 structural, 3 detail ), 0 patches, 106 entities, 0 lights, 0 static models
 collision: 22 brushes, 0 sides, 15 planes, 7 materials, 2 nodes, 3 leafs, 4 leaf brush nodes, 2 sub models
-render: 25 surfaces, 168 vertices, 84 triangles, 5 materials, 5 cells, 8 portals, 88 faces removed
+render: 19 surfaces, 160 vertices, 80 triangles, 5 materials, 3 cells, 4 portals, 88 faces removed
 light: 1 lightmaps, 10296 light grid points, 2 primary lights, 2 reflection probes
-  vis: 55 tree nodes, 56 leafs ( 19 solid, 5 open, 32 void ), 268 leaf portals; 5 cells, 8 portals; 88 faces hidden
+  vis: no portal brushes in the map; 2 openings found and given a portal ( .. )
+  vis: 55 tree nodes, 56 leafs ( 19 solid, 5 open, 32 void ), 268 leaf portals; 3 cells, 4 portals; 88 faces hidden
   validated: server collision ok: .. ; render ok: ..
 wrote out/mp_tworooms.ff ( IWffu100 )
 ```
@@ -154,6 +157,14 @@ properties of the material, and no other place has them.
 A material no zone has is reported and its faces are not drawn ( they still collide ). Materials with water maps are
 refused.
 
+**Hardware shadow map technique sets.** Every shipped zone holds each lit technique set twice: `<..>_sm_<..>` and
+`<..>_hsm_<..>` ( mp_rust: 323 and 308 names ). A material names the first; the game finds the second by name and
+draws with it when it shadows with depth textures - which it does. A zone that only has the `_sm_` set draws its
+materials without the sun's shadow map: no shadow of a player or a model on them, and the sun's shadow edges are the
+stair steps of the primary lightmap ( seen in the client on the first compiled maps ). So the importer writes the
+`_hsm_` sibling of every lit set it writes or copies, from the same donor; where no donor has one the report warns.
+The report counts them ( `materials: 17 technique sets for hardware shadow maps ..` ).
+
 **A modder's own materials** come from a `codol_assets` project zone ( `codol_assetc --image .. --material x.mtl` )
 given with `--assets <zone.ff>`: it is searched ahead of the install, and the material, its images ( inline pixels )
 and its `wc_*` technique set with what that shares are written into the map zone like any other, so the map does not
@@ -186,9 +197,17 @@ the surface types brick and metal and pass through the decal.
    point entities - reaching the outside is a **leak**, reported as the list of points from the entity through the
    leaf centres and portals to the hole. Unreached leafs are void. **Hidden faces**: a face is cut by the tree and kept
    when a piece borders a reached leaf ( a kept face is kept whole ); faces of solid brushes that are covered by
-   another solid brush ( crate on crate ) go too. **Cells**: with portal faces in the map, the leaf portals inside them
-   are the boundaries; without, the *closed openings* are - leaf portals in one plane that touch, form a convex patch
-   of at most 72000 square units and are surrounded by solid ( the cross section of a door or window ). Cells are the
+   another solid brush ( crate on crate ) go too. **Cells**: the leaf portals inside the map's portal faces are the
+   boundaries. A map without portal brushes gets its portal faces from the compiler, which looks for the *openings* a
+   mapper would put one in and then starts over with them: a cross section of the open space in the plane of a brush
+   face ( the leafs cut by the plane - the tree rarely splits a doorway along the face of its wall - and the leaf
+   portals in it ) that is one convex piece of at most 72000 square units, has something solid just beyond every edge
+   on at least one side of the plane, and on at least half of that outline on one side only: it lies in the face of
+   a wall, where the space widens. A slice through a room or a corridor has solid on both sides all around and is no
+   opening. Of the cross sections of one opening ( both faces of the wall .. ) one is kept. `CODOL_BSP_VIS_DEBUG=1`
+   prints every cross section and what became of it. ( Until the third round every small convex group of leaf portals
+   was a boundary: the tree's splits cut a room into a dozen cells, and a group that lay between several pairs of
+   cells got portals for one pair only - in the client everything beyond the next cell was black. ) Cells are the
    connected reached leafs; a boundary with the same cell on both sides is dropped. Each boundary becomes two
    `GfxPortal`s ( normal into the other cell, corners clockwise seen from there, plane as `n . x + w = 0`, hull axes
    up / `n x up` - measured on the shipped portals with `codol_bsp_probe portals` ). The **node stream**
@@ -225,7 +244,10 @@ surfaces, a clip map entry with a two level `smodelNodes` tree.
   the wrong way round. Shown with `bulletTrace` from a level script ( `tests/harness/trace_probe.ps1` ): a ray along
   the model's forward axis hits a crate yawed 30 degrees with the normal ( -0.866, -0.5, 0 ), a ray through a
   `codol_assets` crate yawed 45 degrees at ( -467.06, -207.06 ) with the normal ( -0.707, -0.707, 0 ), 24 units from
-  its centre.
+  its centre. In the client a bullet on a model also leaves an impact effect ( by the surface type of the collision
+  surface ) and a mark, which the game projects through the collision tree of the model's surface: a model without
+  those trees crashes the client at the first bullet. Models of shipped zones have them; `codol_assets` writes
+  them since the third round ( its README ).
 * **Cull distance**: the draw distance of the model's last LOD times the instance's scale, 0 ( never culled ) when
   that is more than 65535 - 9539 of the 9542 instances with LODs in mp_rust, mp_highrise and mp_shipment_long are
   exactly that, the other 3 differ by the rounding of the scale ( `codol_bsp_probe smodels <zone> <exe> csv` ).
@@ -292,7 +314,9 @@ for was not established ); alpha has no effect. Lightmap coordinates 0 .. 1 span
   falloff to `radius`, `n . l`, spot cone from `fov_outer` / `fov_inner` / `angles`, shadow ray ). Per primary texel
   ( 2 x 2 per luxel ) one ray towards the sun; a 3 x 3 box filter per chart softens the edge.
 * **Occluders**: the solid world brushes ( a BVH ) and triangles ( a second BVH ): the tessellation of the patches
-  and LOD 0 of the static models.
+  and LOD 0 of the static models. A brush with an alpha tested or decal face ( a fence, a grate ) lets the light
+  through: the bake does not read the material's picture, and the solid block of shadow the yard's chain link fence
+  threw in the client was the worse mistake. Such a brush gets its shadow from the game's sun shadow map.
 * **Bounced light**: every luxel sends 24 cosine weighted rays ( 12 / 48 ) over its side and takes what the luxels
   they end on throw back - half of what arrives there ( direct light and the sun's share; the images of the materials
   are not read: a grey world with a reflectivity of 0.5 ). One bounce, two at `--quality 2`. Shadowed faces are no
@@ -312,8 +336,14 @@ for was not established ); alpha has no effect. Lightmap coordinates 0 .. 1 span
   sky's colour or what the lightmap luxel it ends on throws back ( the lit scene without its textures ), with mip
   levels. Faces + x - x + y - y + z - z with the texel directions of a Direct3D cube map in world axes: that the game
   reads the cube in world axes is assumed, not shown.
-* Sun shadows at run time: every surface has the flag the shipped surfaces have ( 1 ), the sun is the primary light of
-  a surface it reaches; the shadow geometry lists per light are empty ( as for the suns of the shipped maps ).
+* **Sun shadows at run time** ( the game's shadow map: players, models, the world near the camera ) work on a
+  compiled map since the technique sets for hardware shadow maps come along ( [Materials](#materials) ): seen in the
+  client. What the GfxWorld carries for them, as the shipped maps ( `codol_bsp_probe sun <zone> <exe>` prints it for
+  any map ): every lightmapped surface has flag 1, the sun is the primary light of a surface it reaches, the sun's
+  shadow geometry list names static models and no surfaces, the light grid header says `hasLightRegions`, the sun
+  block ( flare ) ends with the direction towards the sun, the sun lit cell bits ( header + 420 ) are null. The last
+  three were changed to what the shipped maps have while looking for the missing shadows and made no difference in
+  the client; shipped mp_rust patched the other way ( `codol_bsp_probe patchworld` ) kept its shadows.
 
 ### Minimap, scripts, the files around a map
 
@@ -348,21 +378,24 @@ Every compile ends with `validate_zone` and writes nothing when it fails:
   are inside their arrays; `sortedSurfIndex` is a permutation; every cell's AABB tree ( runs of a node = runs of its
   children, boxes hold children and surfaces, every static surface in exactly one leaf ); portals lead to another cell
   and lie on their plane; cells list a probe other than 0; the light grid's rows, entries and colours fit together;
-  lightmap images have pixels; brush model ranges; ComWorld ( light 0 none, light 1 a sun with a unit direction );
+  lightmap images have pixels; brush model ranges; the sun lit cell bits are null; ComWorld ( light 0 none, light 1 a
+  sun with a unit direction );
   GameWorldMp glass data present; MapEnts starts with the worldspawn and has `mp_global_intermission`; the animation
   list exists.
 * The stages check themselves: leaf centres against their portals, lightmap charts do not overlap.
 
-`codol_bsp_tests` ( 160 checks, 202 with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
+`codol_bsp_tests` ( 223 checks with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
 per map: validation, the zone read by `codol_zone` and written again is byte identical, tree walk == brute force on
 3000 random segments ( `clip_trace` ), `codol_edit::import_fastfile` of the compiled zone gives back the map's brushes;
-box room: traces hit floor, wall, ceiling, crate, stacked crates where the map has them; two rooms: 5 cells, 8
+box room: traces hit floor, wall, ceiling, crate, stacked crates where the map has them; two rooms: 3 cells, 4
 portals, more than 60 hidden faces; the same map with a gap in a wall: leak with a path that starts inside and ends
 outside; content map: brush models, portal brush ( 2 cells, 2 portals ), patch, the static model's draw instance
 ( cull distance ) and clip entry ( inverse matrix ); a model nested in mp_rust's `gfx_map` placed in the box room; the
 terrain map: 144 triangles that lie on the ramp and face up, 4 borders, the server check's terrain counts, the
 minimap picture and the generated scripts; the light bake's notes; a 144 room map: more than 1000 brushes and 20
-cells. With `--assets <project zones>` ( the two test zones ) also the modder material map and the yard: 202 checks.
+cells. With `--assets <project zones>` ( the two test zones ) also the modder material map and the yard. Since the third
+round: the openings found ( two rooms 2, the yard 10 - 3 cells, 20 portals -, the 144 rooms 264 - every room a cell ),
+and per zone that every lit technique set has its hardware shadow map sibling or a warning.
 
 `codol_mapc` `check_server_collision` reads the terrain as the server's decoder does ( partition ranges, vertex
 blocks, border runs, AABB tree nodes ); the shipped maps pass it.
@@ -402,7 +435,7 @@ called in by a bot runs into script errors ( seen on the yard without them: 12 "
 | box room, server, 8 bots, 100 s | all 8 play, 104 kills; the only new error lines: two path nodes of the test map inside crates |
 | box room, client ( name `mp_boxroom` ) | Multiplayer -> Start -> Search -> Ready enters the map; spawned; walking into the -x wall stops at x -497; dropped onto the crate: z 64; onto the stacked crates: z 128; shots fired at a crate ( impact effect ) |
 | content map, client ( name `mp_content`; baked light, 2 cells with a portal brush, patch, door, trigger, script_model ) | enters the map and stays connected; dropped onto the patch platform: z 24; walking into the door ( brush model ) stops at x 43 ( face at 28 + 15 ); walking through the doorway ( the portal ) reaches room 1. **No picture**: every capture of the game window was black during this run ( also of the menus; the cause - probably the display being off - was not established ), so how the baked light and the sky look in the client is not known |
-| two rooms, client ( `devmap mp_tworooms` over rcon while connected ) | the client follows the map change; walking from room A through the corridor into room B ( x -500 -> 651 ) crosses all five cells, the wall beside the doorway stops the player at x -271. No picture ( as above ) |
+| two rooms, client ( `devmap mp_tworooms` over rcon while connected ) | the client follows the map change; walking from room A through the corridor into room B ( x -500 -> 651 ) crosses all five cells ( three since the third round ), the wall beside the doorway stops the player at x -271. No picture ( as above ) |
 | mp_rust's collision brushes as a map ( 3226 brushes ), server, 8 bots | collision installed, 747 leaves; bots play ( 30 kills in 100 s; the map has no terrain, so some path nodes are unconnected ) |
 | 144 rooms ( 1421 brushes, 106 cells ), server, 8 bots, 100 s | collision installed, 309 leaves; all 8 play, 109 kills; new error lines: path nodes of the test map ( 6 in crates, 1 unconnected ) |
 
@@ -416,6 +449,39 @@ called in by a bot runs into script errors ( seen on the yard without them: 12 "
 | terrain ( `mp_s3terrain` ) | `png\s3_terrain.png`; the probes listed under [Terrain](#terrain); with and without borders the same numbers |
 | 144 rooms at `--quality 2` ( `mp_s4big` ) | 7 lightmap pages, `png\s4_big_pages.png` |
 | the yard ( `mp_yard`, packaged by `tools/package_map.ps1`: 89 assets, minimap material, own loading picture, level script in the server's overlay ) | `png\yard_overview.png`, `png\yard_inside_west.png`, `png\yard_minimap.png`; server, 8 bots, 6.2 minutes: collision installed ( 18 leaves ), 259 path nodes, 0 in solid; 185 kills, every bot 20 to 31; the match ended once and the map restarted ( 2 `InitGame` ); 0 script runtime errors, no error line that a stock map does not also give ( `steam_api.dll`, empty `sv_mapRotation` ) |
+
+### Third round: the client, with pictures
+
+Pictures of the game are taken with a `d3d9.dll` of the harness in the test client's folder
+( `tests/harness/d3d9_shot` ): it hands everything on to the system's and writes the back buffer of a frame when
+asked through a file. On this machine the display is off, Windows then drops the frames of a windowed Direct3D 9
+program, and a screen copy of the game window is black - while the game renders. `start_client.ps1` puts the dll
+there, `shot.ps1` asks for a frame, `stop_all.ps1` takes it away; `join_match.ps1` goes Multiplayer -> Start ->
+Search -> Ready, `devmap`, class, spawn; `client_views.ps1` places the player ( `setviewpos` over rcon ) and renders
+the same views with `codol_viewtool`. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), viewtool
+renders `build-editor\bsptest\png\<name>_view.png`.
+
+| what | the client showed | pictures |
+|---|---|---|
+| loading | the yard's own loading picture with the map name | `cv_load1` |
+| the yard from outside | sky, palms, both buildings, crates, fence, mound, the smoke and fire effects of the generated `_fx` script; baked shadows of buildings, brush crates and models, bounced light in the shade; the view model brighter in the sun than in the shade ( light grid ), warm in the west building and cold in the east one ( the two `light` entities ) | `cv_load5`, `cv1_overview`, `cv1_mound`, `cv5_roofedge`, `cv5_sky`, `cv1_inwest`, `cv1_ineast` |
+| against `codol_viewtool` | the same geometry, lightmaps and shadows; the client is brighter and warmer ( its tone curve and glow ) - also on shipped mp_killhouse_sh ( `ref_a` against `png\ref_a_view` ), where sun lit concrete is as close to white as in the yard ( `ref_d` ) | `cv1_overview` / `png\cv1_overview_view`, `cv1_westdoor` / `png\cv1_westdoor_view` |
+| **cells** | from inside the west building doors and windows were black: only the cell next to the room was drawn ( `cv1_inwest`, the same in `png\cv1_inwest_view` ). After the fix ( openings found in the open space, 3 cells / 20 portals ) the yard is seen through every opening | `cv2_inwest`, `join_5_spawned` |
+| minimap | the rendered picture on the HUD compass and in the class menu, the player's arrow where he stands, north up | `cv_esc`, `cv_spawn`, any later picture |
+| static models | plastic case, barrier, gas pump, palms ( models nested in a shipped `gfx_map` ) and the `codol_assets` crate at 1 x and 2 x: placed, scaled, lit, with baked shadows; bullets on the barrier give the concrete puff and marks ( `cv3_barrier_fire`, `cv3_barrier_after` ) | `cv1_mound`, `cv2_crate2`, `cv5_moundtop` |
+| **shooting the `codol_assets` crate** | first nothing ( the test zone was older than the surface types ), then, with the surface type wood: the client crashed ( access violation near 0x642E59, twice, right at the shot ). `codol_assets` wrote no collision trees for the surfaces ( see its README ); with them: wood splinters and bullet marks | `cv3_modelcrate_after` ( nothing ), `cv4_modelcrate_fire`, `cv4_modelcrate_after` |
+| modder materials | brick wall with normal and specular map, the alpha tested fence ( see through, stops the player ), the blended decal on the ground | `cv5_wallgraze`, `cv1_fence`, `cv6_walk2`, `cv5_decal` |
+| the fence's shadow | a solid block of baked shadow under the chain link fence ( `cv1_mound` ); after the fix none ( `cv2_fenceshadow` ) |  |
+| terrain | drawn; walking ( W held ) from x -330 up the mound: z 62.6 at x -52, on over the top and down to the fence at x 179 | `cv6_walk1`, `cv6_walk2` |
+| **dynamic sun shadows** | none: bots and bodies without a shadow, the shadow edges the stair steps of the lightmap ( `cv7_bot2`, `cv8_bot4_crop` ), while shipped mp_rust in the same client has shadow map edges ( `ref2_bot2`, `rx0_2` ). After the fix ( `_hsm_` technique sets ): smooth edges, the player's shadow on the ground | `ex_h_1`, `cv9_3`, `cv10_3` ( killcam ) |
+| `light` entities | they light players and models through the light grid ( warm / cold view model ); they are no primary lights, nothing dynamic casts a shadow in them | `cv1_inwest`, `cv1_ineast` |
+| reflections | nothing black or mirrored on the metal walls and the weapon; the probes are pictures of the lit scene without textures, so there is little to judge | `cv9_3`, `cv5_wallgraze` |
+| the editor's room ( `mp_edroom`, built by the editor before these fixes: 5 cells in one room ) | loads, spawn, the room is drawn and lit by its one light - dark: a `light` without keys reaches 300 units; recompiled with this compiler ( 1 cell ) it looks the same | `ed1_a`, `ed1_c`, `ed2_a` |
+| T-junctions | no crack or sparkle found along the joints of the yard's wall pieces at four times zoom ( 8 x anti-aliasing ) | `cv9_3_crop` |
+
+Also seen: `Error: Missing soundalias` for a `script_sound` whose alias no loaded zone has ( the test map now names
+one of common_mp ); `vision/<map>.vision` is asked for and not there ( no vision file is written ); the client once
+crashed in its own in-game menu code while nothing of the map was involved.
 
 ## Scale
 
@@ -443,12 +509,6 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
 
 ## Limits and what is not done
 
-* **Client pictures** do not exist: on this machine every capture of the game's window is black while no physical
-  monitor is attached ( the window's title bar and the rest of the desktop capture normally, the Direct3D area is 0 -
-  also for a freshly started client at its menu; checked again at the start of the second round ).
-  `tests/harness/client_views.ps1` takes the pictures and the matching `codol_viewtool` renders once a monitor is on.
-  Everything of the second round - static models, a modder's materials, terrain, the new light bake, minimap,
-  loading picture, effects - is therefore **not shown in the client**, only in `codol_viewtool` and on the server.
 * **Static models**: players do not collide with them ( the engine's rule, see above ): a mapper adds clip brushes;
   the compiler does not make them. Physics presets of nested models are dropped. `flags` of the draw instance are 0
   ( shipped: 0 for 80 %; 0x20 with ground lighting for foliage, 1, 0x10: not written ), `groundLighting` 0.
@@ -462,27 +522,31 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
   does not collide ) - contents other than "solid" ( bullets pass, see through for AI .. ) are not derived. Water
   materials are refused.
 * **Leaf brush trees** are one list per leaf ( the BSP keeps leafs small ); no split nodes are written.
-* **No T-junction repair**, no merging of coplanar faces; a face that is partly hidden is drawn whole ( not done in
-  the second round either ).
-* **Automatic portals** only find planar, convex openings up to 72000 square units; open terrain is one cell. A face
-  seen from several cells is drawn once per cell ( and has a lightmap chart per cell ).
+* **No T-junction repair**, no merging of coplanar faces; a face that is partly hidden is drawn whole. No crack
+  was found in the client's pictures of the yard.
+* **Automatic portals** only find planar, convex openings up to 72000 square units in the face of something solid
+  ( the report says how many cross sections were left out and why ); open terrain is one cell; a mapper's portal
+  brushes switch the search off. A face seen from several cells is drawn once per cell ( and has a lightmap chart
+  per cell ).
 * **Light**: the world is grey for bounced light ( reflectivity 0.5, the materials' images are not read ); the lower
   secondary layer is black; **light entities are not dynamic primary lights** ( baked only; only `light_point_linear`
-  falloff ), so players cast no shadow in them; the **sun's shadow geometry lists are empty** as in the shipped maps -
-  whether players and models cast dynamic sun shadows onto compiled geometry was not seen ( no client picture );
+  falloff ), so players cast no shadow in them ( they are lit by them, through the light grid ); a `light` without
+  a `radius` reaches 300 units - the editor's first room is dark; a see through brush ( fence ) casts no baked shadow;
   reflection probes show the scene without textures and their cube orientation is assumed; no sun flare; the outdoor
   image ( weather occlusion ) is empty; light regions are empty; the light grid's 56 directions are taken from
   `codol_view`'s port of the model lighting lookup, not measured in the game.
 * **Brush models** are drawn and collide, but are in no cell ( the engine places dynamic models itself ) and are lit
   by the lightmap of the place they were compiled at.
 * **Sky**: faces with a sky material become the sky surfaces of `skies[0]` with the material's cube map when its header
-  is in a zone; not seen in the client yet.
+  is in a zone ( seen in the client ). No sun flare: the sun block only carries the direction.
 * **Effects and sounds**: `script_fx` / `script_sound` only write script lines; effect and sound assets are not
-  copied into the map zone ( they have to be in a zone that is loaded ), and that the client runs the generated
-  `_fx` rawfiles was not seen. On the server the generated level script compiles and runs ( no script errors ).
+  copied into the map zone ( they have to be in a zone that is loaded: a sound alias that is not gives `Missing
+  soundalias` lines in the client ). The client runs the generated `_fx` rawfiles ( fire and smoke in the yard ); on
+  the server the generated level script compiles and runs ( no script errors ).
 * **Minimap**: the picture is the lightmapped scene from above, roofs included; the material is made by
-  `codol_assetc` ( `package_map.ps1` ), the compiler itself only writes the picture. Not seen on the client's compass.
-* No vision file, no `MapTriggers` ( trigger entities are brush models `*N` ), no glass, no dynEnts, no path data
+  `codol_assetc` ( `package_map.ps1` ), the compiler itself only writes the picture. A room with a ceiling has a
+  dark minimap.
+* No vision file ( the client asks for `vision/<map>.vision` ), no `MapTriggers` ( trigger entities are brush models `*N` ), no glass, no dynEnts, no path data
   ( GameWorldMp has none in this game ), no sound aliases.
 * Unsigned container only ( `codol_zone` ).
 * `codol_mapc` ( the importing compiler ) had the same clip entry mistake for *added* / moved static models

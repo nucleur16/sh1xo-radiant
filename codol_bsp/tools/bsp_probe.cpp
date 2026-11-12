@@ -4,6 +4,9 @@
 //   codol_bsp_probe dump <zone.ff> <C1.exe> <asset type name> [first piece] [piece count] [max bytes per piece]
 //   codol_bsp_probe pieces <zone.ff> <C1.exe> <asset type name>          one line per piece: size, string, pointer count
 //   codol_bsp_probe check <zone.ff> <C1.exe>                             the offline validators of codol_bsp on any map zone
+//   codol_bsp_probe portals|cells|terrain|smodels <zone.ff> <C1.exe>     how a map's portals, cells, terrain, static models are stored
+//   codol_bsp_probe sun <zone.ff> <C1.exe>                               what the sun and its shadows hang on ( header fields, lights, ranges )
+//   codol_bsp_probe patchworld <zone.ff> <C1.exe> <out.ff> <size> <offset>=<hex> ..   a copy with GfxWorld header bytes changed ( experiments )
 
 #include "codol_bsp/bsp.hpp"
 #include "codol_zone/assets.hpp"
@@ -94,6 +97,258 @@ int main(int argc, char** argv)
 						v.size() >= 3 ? plane[0] * v[0] + plane[1] * v[1] + plane[2] * v[2] - plane[3] : 0.0f, p.vertexCount,
 						facing > 0 ? "ccw seen from the normal's side" : "cw seen from the normal's side", axis[0], axis[1], axis[2], axis[3], axis[4], axis[5]);
 				}
+			}
+		}
+		return 0;
+	}
+	if (mode == "patchworld" && argc >= 6)
+	{
+		// codol_bsp_probe patchworld <zone.ff> <C1.exe> <out.ff> <file size, 0: any> <offset>=<hex bytes> ..
+		// An experiment aid: a copy of a map zone with bytes of its GfxWorld header overwritten ( no pointer fields ), to
+		// find out in the game which field a behaviour hangs on - e.g. a shipped map made like a compiled one field by
+		// field until its sun shadows go. The output goes into a test client's folder, never into the install.
+		zone::ZoneEditor editor;
+		if (const zone::Status s = editor.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		std::size_t world = SIZE_MAX;
+		for (std::size_t a = 0; a < editor.asset_count(); a++)
+		{
+			if (editor.asset(a).type == c1::ASSET_TYPE_GFXWORLD)
+			{
+				world = a;
+			}
+		}
+		if (world == SIZE_MAX)
+		{
+			std::puts("no GfxWorld");
+			return 1;
+		}
+		const zone::ZoneDataId header = editor.asset_data(world, 0);
+		for (int k = 6; k < argc; k++)
+		{
+			const std::string arg = argv[k];
+			const std::size_t eq = arg.find('=');
+			if (eq == std::string::npos)
+			{
+				continue;
+			}
+			const std::uint32_t offset = static_cast<std::uint32_t>(std::strtoul(arg.substr(0, eq).c_str(), nullptr, 0));
+			std::vector<std::uint8_t> bytes;
+			for (std::size_t c = eq + 1; c + 1 < arg.size(); c += 2)
+			{
+				bytes.push_back(static_cast<std::uint8_t>(std::strtoul(arg.substr(c, 2).c_str(), nullptr, 16)));
+			}
+			if (const zone::Status s = editor.patch_data(header, offset, bytes); !s)
+			{
+				// a pointer field: make it plain bytes
+				std::uint32_t plain = 0;
+				std::memcpy(&plain, bytes.data(), std::min<std::size_t>(4, bytes.size()));
+				if (bytes.size() != 4 || !editor.set_pointer(header, offset, zone::ZoneTarget{}, plain))
+				{
+					std::printf("offset %u: %s\n", offset, s.message.c_str());
+					return 1;
+				}
+			}
+			std::printf("offset %u: %zu bytes\n", offset, bytes.size());
+		}
+		std::vector<std::uint8_t> bytes;
+		if (const zone::Status s = editor.write(bytes); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::FastFileWriteOptions options;
+		options.exactFileSize = std::strtoull(argv[5], nullptr, 0);
+		if (const zone::Status s = zone::write_fastfile(argv[4], bytes, key, options); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		std::printf("wrote %s\n", argv[4]);
+		return 0;
+	}
+	if (mode == "sun")
+	{
+		// what the sun and its shadows hang on: the header's light and surface range fields, the sun flare block, how
+		// surfaces and static models name their primary light, the shadow geometry lists, the primary lights
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		const c1::GfxWorld& h = world.raw;
+		const auto hex = [](const std::uint8_t* p, const std::size_t n)
+		{
+			std::string out;
+			char t[4];
+			for (std::size_t k = 0; k < n; k++)
+			{
+				std::snprintf(t, sizeof(t), "%02X", p[k]);
+				out += t;
+				out += k % 4 == 3 ? " " : "";
+			}
+			return out;
+		};
+		std::printf("lastSunPrimaryLightIndex %u, primaryLightCount %u, skies %d, cells %d, surfaces %u, models %d\n", h.lastSunPrimaryLightIndex, h.primaryLightCount, h.skyCount,
+			h.cellCount, h.surfaceCount, h.modelCount);
+		std::printf("header 36..52 ( sort keys ): %s\nheader 56..76: %s\n", hex(h._unk36, 16).c_str(), hex(h._unk56, 20).c_str());
+		std::printf("sun flare block: %s\n", hex(h.sun, 96).c_str());
+		std::printf("header 416..456: %s\n", hex(h._unk416, 40).c_str());
+		std::printf("light grid header: %s\n", hex(h.lightGrid, 56).c_str());
+		std::printf("draw block: %s\n", hex(reinterpret_cast<const std::uint8_t*>(&h.draw), sizeof(h.draw)).c_str());
+		{
+			// the light grid's entries by primary light and the needsTrace byte
+			std::uint32_t entry_count = 0, entries_at = 0;
+			std::memcpy(&entry_count, h.lightGrid + 40, 4);
+			std::memcpy(&entries_at, h.lightGrid + 44, 4);
+			std::map<std::pair<int, int>, int> by_light;
+			if (entries_at)
+			{
+				for (const std::uint32_t e : z.get_array<std::uint32_t>(entries_at, entry_count))
+				{
+					by_light[{ static_cast<int>((e >> 16) & 0xFF), static_cast<int>(e >> 24) }]++;
+				}
+			}
+			for (const auto& [k, n] : by_light)
+			{
+				std::printf("%8d  light grid entries: primary light %d, needsTrace %d\n", n, k.first, k.second);
+			}
+		}
+		std::printf("dpvs: %u static models, %u static surfaces ( %u without decals ); lit opaque %u..%u, lit transparent %u..%u, shadow casters %u..%u, emissive %u..%u; tail %s\n",
+			h.dpvs.smodelCount, h.dpvs.staticSurfaceCount, h.dpvs.staticSurfaceCountNoDecal, h.dpvs.litOpaqueSurfsBegin, h.dpvs.litOpaqueSurfsEnd, h.dpvs.litTransSurfsBegin,
+			h.dpvs.litTransSurfsEnd, h.dpvs.shadowCasterSurfsBegin, h.dpvs.shadowCasterSurfsEnd, h.dpvs.emissiveSurfsBegin, h.dpvs.emissiveSurfsEnd, hex(h.dpvs._unk104, 4).c_str());
+		std::printf("dpvsDyn: %s\nhero only lights %u, header 624: %s\n", hex(h.dpvsDyn, 52).c_str(), h.heroOnlyLightCount, hex(h._unk624, 4).c_str());
+		std::map<std::string, int> counts;
+		for (std::size_t s = 0; s < world.surfaces.size(); s++)
+		{
+			const c1::GfxSurface& surf = world.surfaces[s].raw;
+			const char* range = s < h.dpvs.litOpaqueSurfsEnd ? "lit opaque" : s < h.dpvs.litTransSurfsEnd ? "lit transparent" : s < h.dpvs.shadowCasterSurfsEnd ? "shadow caster"
+				: s < h.dpvs.emissiveSurfsEnd ? "emissive" : "brush model";
+			char line[160];
+			std::snprintf(line, sizeof(line), "surfaces, %s: primary light %u flags 0x%02X lightmap %s", range, surf.primaryLightIndex, surf.flags, surf.lightmapIndex == 31 ? "none" : "yes");
+			counts[line]++;
+			if (s >= h.dpvs.litTransSurfsEnd && s < h.dpvs.shadowCasterSurfsEnd)
+			{
+				counts["shadow caster material " + std::string(world.surfaces[s].materialName)]++;
+				if (s < h.dpvs.litTransSurfsEnd + 3)
+				{
+					// the first few: how large, and where
+					const std::vector<c1::GfxWorldVertex> verts = world.vertices();
+					float lo[3] = { 1e9f, 1e9f, 1e9f }, hi[3] = { -1e9f, -1e9f, -1e9f };
+					for (std::uint32_t v = surf.firstVertex; v < surf.firstVertex + surf.vertexCount && v < verts.size(); v++)
+					{
+						for (int a = 0; a < 3; a++)
+						{
+							lo[a] = std::min(lo[a], verts[v].xyz[a]);
+							hi[a] = std::max(hi[a], verts[v].xyz[a]);
+						}
+					}
+					std::printf("shadow caster surface %zu: %u triangles, %u vertices, ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ), lightmap %u probe %u\n", s, surf.triCount,
+						surf.vertexCount, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], surf.lightmapIndex, surf.reflectionProbeIndex);
+				}
+			}
+		}
+		for (const zone::WorldStaticModel& m : world.staticModels)
+		{
+			char line[160];
+			std::snprintf(line, sizeof(line), "static models: primary light %u flags 0x%02X", m.raw.primaryLightIndex, m.raw.flags);
+			counts[line]++;
+		}
+		for (const auto& [what, count] : counts)
+		{
+			std::printf("%6d  %s\n", count, what.c_str());
+		}
+		// shadow geometry and light regions: one entry per primary light
+		struct shadow_geometry
+		{
+			std::uint16_t surfaceCount, smodelCount;
+			std::uint32_t sortedSurfIndex, smodelIndex;
+		};
+		struct light_region
+		{
+			std::uint32_t hullCount, hulls;
+		};
+		std::uint32_t geometry_at = 0, region_at = 0;
+		std::memcpy(&geometry_at, h._unk416 + 32, 4);
+		std::memcpy(&region_at, h._unk416 + 36, 4);
+		if (geometry_at && region_at)
+		{
+			const std::vector<shadow_geometry> geometry = z.get_array<shadow_geometry>(geometry_at, h.primaryLightCount);
+			const std::vector<light_region> regions = z.get_array<light_region>(region_at, h.primaryLightCount);
+			for (std::uint32_t l = 0; l < h.primaryLightCount && l < 12; l++)
+			{
+				std::printf("light %u: shadow geometry %u surfaces, %u static models; region %u hulls\n", l, geometry[l].surfaceCount, geometry[l].smodelCount, regions[l].hullCount);
+			}
+		}
+		// the primary lights of the ComWorld
+		struct com_world
+		{
+			std::uint32_t name;
+			std::int32_t isInUse;
+			std::uint32_t count, lights;
+		};
+		struct com_light
+		{
+			std::uint8_t type, canUseShadowMap, exponent, unused;
+			float color[3], dir[3], origin[3], radius, cosHalfFovOuter, cosHalfFovInner, cosHalfFovExpanded, rotationLimit, translationLimit;
+			std::uint32_t defName;
+		};
+		if (const zone::zaddr at = zone::first_asset(z, c1::ASSET_TYPE_COMWORLD))
+		{
+			const com_world com = z.get<com_world>(at);
+			const std::vector<com_light> lights = z.get_array<com_light>(com.lights, com.count);
+			std::printf("ComWorld: isInUse %d, %u lights\n", com.isInUse, com.count);
+			for (std::size_t l = 0; l < lights.size() && l < 12; l++)
+			{
+				const com_light& c = lights[l];
+				std::printf("  light %zu: type %u canUseShadowMap %u exponent %u unused %u colour ( %.3f %.3f %.3f ) dir ( %.3f %.3f %.3f ) origin ( %.0f %.0f %.0f ) radius %.0f cos %.3f %.3f %.3f limits %.2f %.2f def %s\n",
+					l, c.type, c.canUseShadowMap, c.exponent, c.unused, c.color[0], c.color[1], c.color[2], c.dir[0], c.dir[1], c.dir[2], c.origin[0], c.origin[1], c.origin[2], c.radius,
+					c.cosHalfFovOuter, c.cosHalfFovInner, c.cosHalfFovExpanded, c.rotationLimit, c.translationLimit, c.defName ? std::string(z.c_string(c.defName)).c_str() : "-");
+			}
+		}
+		return 0;
+	}
+	if (mode == "cells")
+	{
+		// every cell with its box, and every portal with its target and the box of its corners
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		for (std::size_t c = 0; c < world.cells.size(); c++)
+		{
+			const c1::Bounds& b = world.cells[c].raw.bounds;
+			std::printf("cell %zu: ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ), %zu portals\n", c, b.midPoint[0] - b.halfSize[0], b.midPoint[1] - b.halfSize[1],
+				b.midPoint[2] - b.halfSize[2], b.midPoint[0] + b.halfSize[0], b.midPoint[1] + b.halfSize[1], b.midPoint[2] + b.halfSize[2], world.cells[c].portals.size());
+			for (const c1::GfxPortal& p : world.cells[c].portals)
+			{
+				float plane[4];
+				std::memcpy(plane, p._unk0 + 12, 16);
+				const std::vector<float> v = z.get_array<float>(p.vertices, 3u * p.vertexCount);
+				float lo[3] = { 1e9f, 1e9f, 1e9f }, hi[3] = { -1e9f, -1e9f, -1e9f };
+				for (std::size_t k = 0; k < v.size(); k++)
+				{
+					lo[k % 3] = std::min(lo[k % 3], v[k]);
+					hi[k % 3] = std::max(hi[k % 3], v[k]);
+				}
+				std::printf("  -> %u: normal %.0f %.0f %.0f, ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ), %u corners\n", p.cellIndex, plane[0], plane[1], plane[2], lo[0], lo[1], lo[2], hi[0],
+					hi[1], hi[2], p.vertexCount);
 			}
 		}
 		return 0;

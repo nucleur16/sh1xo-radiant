@@ -306,14 +306,15 @@ namespace codol::bsp
 			mb.opaque = mb.model == 0 && !mb.detail && (contents & 1) != 0;
 			// a brush that can be seen through ( an alpha tested or blended material on a face ) hides nothing and
 			// splits no cell, whatever its flags
-			for (std::size_t f = 0; f < mb.faces.size() && mb.opaque; f++)
+			for (std::size_t f = 0; f < mb.faces.size() && !mb.see_through; f++)
 			{
 				if (!is_tool_material(mb.faces[f].material))
 				{
 					const material_desc& desc = ctx.importer.describe("wc/" + mb.faces[f].material);
-					mb.opaque = !(desc.ref.valid() && desc.see_through);
+					mb.see_through = desc.ref.valid() && desc.see_through;
 				}
 			}
+			mb.opaque = mb.opaque && !mb.see_through;
 			if (!mb.collides || contents == 0)
 			{
 				mb.collides = false;

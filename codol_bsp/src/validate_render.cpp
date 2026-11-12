@@ -144,6 +144,13 @@ namespace codol::bsp
 		c.expect(probe_count >= 2, "GfxWorld: fewer than two reflection probes ( probe 0 is the default, a cell needs another )");
 		c.expect(g.primaryLightCount >= 2 && g.lastSunPrimaryLightIndex >= 1 && g.lastSunPrimaryLightIndex < g.primaryLightCount,
 			"GfxWorld: primary lights need 'none' and a sun, and the last sun index inside the list");
+		{
+			// offset 420, the bits that say which cells have sun lit surfaces: null in every shipped map. A pointer makes the
+			// loader allocate an array of zeros, which no shipped map gives the game
+			std::uint32_t sun_lit_cells = 0;
+			std::memcpy(&sun_lit_cells, g._unk416 + 4, sizeof(sun_lit_cells));
+			c.expect(sun_lit_cells == 0, "GfxWorld: the sun lit cell bits ( offset 420 ) are set; they are null in every shipped map");
+		}
 		c.expect(view.surfaces.size() == surface_count && indices.size() == index_count, "GfxWorld: surface / index arrays are not what the counts say");
 		std::size_t triangles = 0;
 		for (std::size_t s = 0; s < view.surfaces.size(); s++)

@@ -18,8 +18,10 @@
 //   * per bone bounds ( XBoneInfo: centre, half size, squared radius of the vertices that follow the bone ), model
 //     bounds and radius;
 //   * LOD distances, the collision LOD with its collision surfaces ( 48 byte triangle records ), contents.
-// Not written: XSurfaceCollisionTree of the rigid lists ( 44 % of the shipped static surfaces have one; it serves
-// decal projection ), physics preset / collision map.
+//   * XSurfaceCollisionTree of every rigid list of LOD 0 when the model has collision: every shipped model with
+//     collision surfaces has them there and nowhere else ( codol_asset_probe trees ), and the client crashes without
+//     when a bullet hits the model ( it projects the mark through the tree ).
+// Not written: physics preset / collision map.
 
 #include "codol_assets/bitmap.hpp"
 #include "codol_zone/assets.hpp"
@@ -106,6 +108,24 @@ namespace codol::assets
 		int reverseWinding = -1;
 	};
 
+	// XSurfaceCollisionTree of a rigid list: the triangles of the list in a tree of boxes, which the game finds the
+	// triangles under a decal with ( bullet marks ). Tree space is ( position + trans ) * scale = 0 .. 65535 over the
+	// box of the list's triangles. A node whose childCount has bit 15 is a leaf node: childBegin is its first entry
+	// in `leafs`, the low bits the number of entries ( up to 16 ); an entry is a triangle of the surface, with bit 15
+	// that triangle and the next one. Any other node has childCount children from node childBegin on ( behind it ).
+	struct CompiledCollisionTree
+	{
+		struct Node
+		{
+			std::uint16_t mins[3], maxs[3];
+			std::uint16_t childBegin, childCount;
+		};
+		float trans[3] = {}, scale[3] = {};
+		std::vector<Node> nodes;
+		std::vector<std::uint16_t> leafs;
+	};
+	static_assert(sizeof(CompiledCollisionTree::Node) == 16);
+
 	struct CompiledSurface
 	{
 		std::string material;
@@ -113,8 +133,13 @@ namespace codol::assets
 		std::vector<c1::GfxPackedVertex> vertices;
 		std::vector<std::uint16_t> indices;
 		std::vector<c1::XRigidVertList> rigid;
+		std::vector<CompiledCollisionTree> trees;	// one per rigid list ( LOD 0 of a model with collision ), or none
 		std::vector<std::uint16_t> blend;			// vertsBlend stream
 	};
+
+	// the collision tree of triangles [ first, first + count ) of a surface; no nodes when it cannot be built ( no
+	// triangles, a triangle index beyond 15 bits )
+	CompiledCollisionTree build_collision_tree(std::span<const c1::GfxPackedVertex> vertices, std::span<const std::uint16_t> indices, std::uint32_t first, std::uint32_t count);
 
 	struct CompiledLod
 	{

@@ -313,6 +313,97 @@ namespace
 		{
 			CHECK(std::fabs(t[3] - 16.0f) < 1e-3f);
 		}
+		// the collision tree of the rigid list ( LOD 0 of a model with collision ): the rules read off the shipped trees
+		// with codol_asset_probe trees - every triangle in exactly one leaf entry, a leaf node holds up to 16 entries and
+		// its box holds their triangles, children lie behind their parent and inside its box, the root spans tree space
+		const auto check_tree = [&](const CompiledSurface& s, const std::size_t list)
+		{
+			CHECK(s.trees.size() == s.rigid.size());
+			if (s.trees.size() != s.rigid.size())
+			{
+				return;
+			}
+			const CompiledCollisionTree& tree = s.trees[list];
+			const c1::XRigidVertList& rigid = s.rigid[list];
+			CHECK(!tree.nodes.empty() && tree.nodes[0].mins[0] == 0 && tree.nodes[0].maxs[0] == 65535 && tree.nodes[0].maxs[2] == 65535);
+			std::vector<int> covered(rigid.triCount, 0), parents(tree.nodes.size(), 0);
+			bool boxes = true, order = true, leaf_size = true;
+			std::size_t entries = 0;
+			for (std::size_t n = 0; n < tree.nodes.size(); n++)
+			{
+				const CompiledCollisionTree::Node& node = tree.nodes[n];
+				if (!(node.childCount & 0x8000))
+				{
+					order = order && node.childBegin > n && node.childCount >= 2 && node.childBegin + node.childCount <= tree.nodes.size();
+					for (std::size_t c = node.childBegin; c < static_cast<std::size_t>(node.childBegin) + node.childCount && c < tree.nodes.size(); c++)
+					{
+						parents[c]++;
+						for (int a = 0; a < 3; a++)
+						{
+							boxes = boxes && tree.nodes[c].mins[a] >= node.mins[a] && tree.nodes[c].maxs[a] <= node.maxs[a];
+						}
+					}
+					continue;
+				}
+				const std::size_t count = node.childCount & 0x7FFFu;
+				leaf_size = leaf_size && count >= 1 && count <= 16 && node.childBegin + count <= tree.leafs.size();
+				entries += count;
+				for (std::size_t e = node.childBegin; e < node.childBegin + count && e < tree.leafs.size(); e++)
+				{
+					const std::uint32_t at = tree.leafs[e] & 0x7FFFu;
+					for (std::uint32_t t = at; t < at + (tree.leafs[e] & 0x8000 ? 2u : 1u); t++)
+					{
+						if (t < rigid.triOffset || t >= static_cast<std::uint32_t>(rigid.triOffset) + rigid.triCount)
+						{
+							leaf_size = false;
+							continue;
+						}
+						covered[t - rigid.triOffset]++;
+						for (int c = 0; c < 3; c++)
+						{
+							const float* p = s.vertices[s.indices[t * 3 + static_cast<std::uint32_t>(c)]].xyz;
+							for (int a = 0; a < 3; a++)
+							{
+								const float unit = (p[a] + tree.trans[a]) * tree.scale[a];
+								boxes = boxes && unit >= static_cast<float>(node.mins[a]) - 1.0f && unit <= static_cast<float>(node.maxs[a]) + 1.0f && unit > -1.0f && unit < 65536.0f;
+							}
+						}
+					}
+				}
+			}
+			CHECK(boxes && order && leaf_size && entries == tree.leafs.size());
+			CHECK(std::all_of(covered.begin(), covered.end(), [](const int c) { return c == 1; }));
+			CHECK(std::all_of(parents.begin() + 1, parents.end(), [](const int c) { return c == 1; }));
+		};
+		check_tree(a.lods[0].surfaces[0], 0);
+		CHECK(a.lods[0].surfaces[0].trees[0].nodes.size() == 1 && a.lods[0].surfaces[0].trees[0].leafs.size() == 12);
+		{
+			// a larger mesh: a strip of 200 triangles gets inner nodes
+			std::vector<c1::GfxPackedVertex> strip(202);
+			std::vector<std::uint16_t> strip_indices;
+			for (std::size_t k = 0; k < strip.size(); k++)
+			{
+				strip[k].xyz[0] = static_cast<float>(k / 2) * 4.0f;
+				strip[k].xyz[1] = k % 2 ? 8.0f : -8.0f;
+				strip[k].xyz[2] = static_cast<float>((k / 2) % 7);
+			}
+			for (std::uint16_t k = 0; k < 200; k++)
+			{
+				strip_indices.insert(strip_indices.end(), { k, static_cast<std::uint16_t>(k + 1), static_cast<std::uint16_t>(k + 2) });
+			}
+			CompiledSurface big;
+			big.vertices = strip;
+			big.indices = strip_indices;
+			c1::XRigidVertList whole{};
+			whole.vertCount = 202;
+			whole.triCount = 200;
+			big.rigid.push_back(whole);
+			big.trees.push_back(build_collision_tree(big.vertices, big.indices, 0, 200));
+			check_tree(big, 0);
+			CHECK(big.trees[0].nodes.size() > 16 && big.trees[0].leafs.size() == 200);
+			CHECK(build_collision_tree(big.vertices, big.indices, 0, 0).nodes.empty());
+		}
+
 		// the engine's winding whatever the file has
 		options.lods[0].mesh = box_export(true);
 		CHECK(compile_model(options, b));
@@ -357,6 +448,12 @@ namespace
 		CHECK(std::abs(b.quats[2] - 23170) <= 1 && std::abs(b.quats[3] - 23170) <= 1 && b.trans[2] == 10);
 		CHECK(b.lods[0].surfaces[0].rigid.size() == 2 && b.lods[0].surfaces[0].rigid[1].boneOffset == 64 && b.lods[0].surfaces[0].rigid[0].vertCount == 12);
 		CHECK(b.lods[0].partBits[0] == 0xC0000000u && b.contents == 0 && b.collision.empty());
+		CHECK(b.lods[0].surfaces[0].trees.empty());		// no collision: bullets pass, no tree ( as the shipped models )
+		options.collisionLod = 0;
+		CHECK(compile_model(options, b));
+		check_tree(b.lods[0].surfaces[0], 0);
+		check_tree(b.lods[0].surfaces[0], 1);			// the second list's triangles count from the surface's first
+		options.collisionLod = -1;
 		// weighted vertices make the surface deformed
 		two.vertices[0].weights = { { 0, 0.75f }, { 1, 0.25f } };
 		options.lods[0].mesh = two;
