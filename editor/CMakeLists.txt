@@ -93,3 +93,15 @@ set_target_properties(codol_mapc_tool PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
 	RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
 add_dependencies(CoDOLRadiant codol_mapc_tool)
+
+# ---- the map compiler ( from a .map alone ) and the asset compiler, next to the editor
+set(CODOL_BSP_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+set(CODOL_BSP_BUILD_TESTS ON CACHE BOOL "" FORCE)
+add_subdirectory(${ROOT}/codol_bsp ${CMAKE_BINARY_DIR}/codol_bsp)
+set(CODOL_ASSETS_BUILD_TOOLS ON CACHE BOOL "" FORCE)
+set(CODOL_ASSETS_BUILD_TESTS ON CACHE BOOL "" FORCE)
+add_subdirectory(${ROOT}/codol_assets ${CMAKE_BINARY_DIR}/codol_assets)
+set_target_properties(codol_bsp_tool codol_assetc PROPERTIES
+	RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
+	RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
+add_dependencies(CoDOLRadiant codol_bsp_tool codol_assetc)

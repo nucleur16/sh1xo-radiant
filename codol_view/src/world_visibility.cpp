@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <new>
 #include <utility>
 
@@ -109,10 +110,15 @@ namespace codol::view
 		whole_frustum_ = frustum;
 		camera_cell_ = data_.cell_of_point(eye);
 		const int count = cell_count();
+		// CODOL_VIEW_STRICT_CELLS=1: only what the portals reach from the cell the camera is in is drawn - no start
+		// in cells whose box merely holds the eye, no fallback to the frustum for unreached cells. That is what the
+		// game does, and what a map compiler's cells and portals are judged by ( codol_bsp ).
+		static const bool strict = std::getenv("CODOL_VIEW_STRICT_CELLS") != nullptr;
+		const bool strict_now = strict && camera_cell_ >= 0;
 		int starts = 0;
 		for (int i = 0; i < count; i++)
 		{
-			if (i != camera_cell_ && !data_.cells[static_cast<std::size_t>(i)].contains(eye))
+			if (i != camera_cell_ && (strict_now || !data_.cells[static_cast<std::size_t>(i)].contains(eye)))
 			{
 				continue;
 			}
@@ -124,7 +130,7 @@ namespace codol::view
 			camera_cell_ = -1;
 		}
 		// GameWorldVisibility.cs:103-110: what the portals did not reach falls back to the whole frustum
-		for (int i = 0; i < count; i++)
+		for (int i = 0; i < count && !strict_now; i++)
 		{
 			const world_cell& cell = data_.cells[static_cast<std::size_t>(i)];
 			if (!reached_[static_cast<std::size_t>(i)] && box_visible(frustum, cell.center - eye, cell.half))

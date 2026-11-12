@@ -1895,6 +1895,130 @@ namespace codol::zone
 		return Status::error(e.what());
 	}
 
+	Status ZoneEditor::add_built_asset(const std::int32_t type, const std::string_view name, const std::span<const ZoneBuildChunk> chunks,
+		std::size_t position, std::size_t* index)
+	try
+	{
+		if (!loaded())
+		{
+			return Status::error("no zone loaded");
+		}
+		if (type < 0 || type >= c1::ASSET_TYPE_COUNT || c1::XASSET_HEADER_SIZE[type] == 0)
+		{
+			return Status::error("asset type without a loader");
+		}
+		if (chunks.empty() || chunks[0].string || chunks[0].bytes.size() != c1::XASSET_HEADER_SIZE[type])
+		{
+			return Status::error("the first chunk of a built asset is its header ( " + std::to_string(c1::XASSET_HEADER_SIZE[type]) + " bytes for "
+				+ asset_type_name(type) + " )");
+		}
+		auto unit = std::make_shared<Unit>();
+		unit->type = type;
+		unit->name = std::string(name);
+		unit->modified = true;
+		for (const ZoneBuildChunk& c : chunks)
+		{
+			unit->add_chunk(c.bytes, c.string);
+		}
+		for (std::uint32_t k = 0; k < chunks.size(); k++)
+		{
+			const ZoneBuildChunk& c = chunks[k];
+			std::vector<ZoneBuildPointer> sorted(c.pointers.begin(), c.pointers.end());
+			std::sort(sorted.begin(), sorted.end(), [](const ZoneBuildPointer& a, const ZoneBuildPointer& b) { return a.offset < b.offset; });
+			for (const ZoneBuildPointer& p : sorted)
+			{
+				if (static_cast<std::uint64_t>(p.offset) + 4 > c.bytes.size())
+				{
+					return Status::error("a pointer field of a built asset lies outside its chunk");
+				}
+				Reloc reloc;
+				reloc.chunk = k;
+				reloc.offset = p.offset;
+				if (p.slot)
+				{
+					if (p.asset >= impl_->assets.size())
+					{
+						return Status::error("a built asset points at an asset the zone does not have");
+					}
+					reloc.kind = TargetKind::SLOT;
+					reloc.unit = impl_->assets[p.asset].get();
+					reloc.index = 0;
+					reloc.targetOffset = 8;
+				}
+				else
+				{
+					const Unit* target = unit.get();
+					if (p.asset != npos)
+					{
+						if (p.asset >= impl_->assets.size())
+						{
+							return Status::error("a built asset points into an asset the zone does not have");
+						}
+						target = impl_->assets[p.asset].get();
+					}
+					if (p.chunk >= target->chunks.size() || p.targetOffset > target->chunks[p.chunk].size)
+					{
+						return Status::error("a pointer of a built asset leads outside its target");
+					}
+					reloc.kind = TargetKind::CHUNK;
+					reloc.unit = target;
+					reloc.index = p.chunk;
+					reloc.targetOffset = p.targetOffset;
+				}
+				unit->relocs.push_back(reloc);
+			}
+			for (const std::uint32_t offset : c.scriptStrings)
+			{
+				if (static_cast<std::uint64_t>(offset) + 2 > c.bytes.size())
+				{
+					return Status::error("a script string field of a built asset lies outside its chunk");
+				}
+				unit->scriptRefs.push_back(ScriptRef{ k, offset });
+			}
+		}
+		std::sort(unit->scriptRefs.begin(), unit->scriptRefs.end(), [](const ScriptRef& a, const ScriptRef& b)
+		{
+			return a.chunk != b.chunk ? a.chunk < b.chunk : a.offset < b.offset;
+		});
+		if (position > impl_->assets.size())
+		{
+			position = impl_->assets.size();
+		}
+		impl_->assets.insert(impl_->assets.begin() + static_cast<std::ptrdiff_t>(position), std::move(unit));
+		if (index)
+		{
+			*index = position;
+		}
+		impl_->idsDirty = true;
+		impl_->hints.clear();
+		return {};
+	}
+	catch (const std::exception& e)
+	{
+		return Status::error(e.what());
+	}
+
+	std::uint16_t ZoneEditor::script_string(const std::string_view text)
+	{
+		if (!loaded())
+		{
+			return 0;
+		}
+		std::vector<std::string> list = impl_->scriptStrings;
+		const std::size_t here = static_cast<std::size_t>(std::find(list.begin(), list.end(), text) - list.begin());
+		if (here == list.size())
+		{
+			if (here >= 0xFFFF)
+			{
+				return 0;
+			}
+			list.emplace_back(text);
+			impl_->set_script_strings(list);
+			impl_->idsDirty = true;
+		}
+		return static_cast<std::uint16_t>(here);
+	}
+
 	Status ZoneEditor::replace_asset(const std::size_t index, const ZoneEditor& donor, const std::size_t donorIndex)
 	try
 	{

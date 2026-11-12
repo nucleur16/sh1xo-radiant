@@ -159,6 +159,24 @@ namespace codol::zone
 		std::vector<std::pair<std::uint32_t, std::string>> scriptStrings;
 	};
 
+	// ---- assets built by the caller ( ZoneEditor::add_built_asset ) ---------------------------------
+	struct ZoneBuildPointer
+	{
+		std::uint32_t offset = 0;			// of the 32 bit field inside its chunk
+		bool slot = false;					// true: the header slot of top level asset `asset` ( how a zone names another asset )
+		std::size_t asset = static_cast<std::size_t>(-1);	// asset index; npos: the asset being built ( chunk targets only )
+		std::uint32_t chunk = 0;			// chunk index inside that asset ( stream order, 0 = header )
+		std::uint32_t targetOffset = 0;
+	};
+
+	struct ZoneBuildChunk
+	{
+		std::vector<std::uint8_t> bytes;
+		bool string = false;				// read with Load_XString: bytes include the terminator
+		std::vector<ZoneBuildPointer> pointers;
+		std::vector<std::uint32_t> scriptStrings;	// offsets of u16 fields that hold an index of the zone's script string list
+	};
+
 	class ZoneEditor
 	{
 	public:
@@ -230,6 +248,18 @@ namespace codol::zone
 		// the game's loaders read for it, in the order they read them: header first. Nothing is checked here;
 		// write() runs the loaders over it and fails when the pieces do not fit the header.
 		Status add_new_asset(std::int32_t type, std::string_view name, std::span<const ZoneNewPiece> pieces, std::size_t position = npos);
+
+		// Appends ( or inserts in front of `position` ) an asset made by the caller: its stream data piece by piece in
+		// the order the game's loader reads it - the header first - with every zone pointer given as a target. Fields
+		// that hold 0 ( null ), 0xFFFFFFFF ( "the data follows" ) or 0xFFFFFFFE are plain bytes of the chunk. Nothing is
+		// checked here against the asset type's layout: write() runs the loaders over it and fails when it does not
+		// fit. Used by codol_bsp, which builds every map asset this way.
+		Status add_built_asset(std::int32_t type, std::string_view name, std::span<const ZoneBuildChunk> chunks,
+			std::size_t position = npos, std::size_t* index = nullptr);
+
+		// index of `text` in the zone's script string list, which grows when the string is new ( 0 when it is full ).
+		// A zone made with create() has no strings: the first call should add "" so that index 0 means "none".
+		std::uint16_t script_string(std::string_view text);
 
 		// Replaces a top level asset with one of another zone ( same type ); pointers of other assets to the
 		// replaced asset's header keep working. Same rules as add_asset.
