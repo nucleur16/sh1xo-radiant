@@ -31,6 +31,13 @@ int model_compare(const std::filesystem::path& zoneA, const std::string& nameA, 
 int material_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, const std::filesystem::path& cache, int every,
 	const std::filesystem::path& dump);
 
+// verify_sound.cpp
+int sound_survey(const std::filesystem::path& install, const std::filesystem::path& exe, const std::string& filter);
+int sound_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, int every, const std::string& filter);
+int sound_extract(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::filesystem::path& outDir, const std::string& filter);
+int sound_zone(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::filesystem::path& outFile, int limit);
+
+// verify_anim*.cpp
 int anim_survey(const std::filesystem::path& install, const std::filesystem::path& exe, const std::string& filter);
 int anim_survey_rules(const std::filesystem::path& install, const std::filesystem::path& exe, const std::string& filter);
 int anim_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, int every, const std::string& filter, float rotationTolerance, float translationTolerance);

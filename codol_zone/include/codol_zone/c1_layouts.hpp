@@ -545,6 +545,119 @@ namespace codol::c1
 	C1_HEADER(StringTable, ASSET_TYPE_STRINGTABLE);
 
 	// ------------------------------------------------------------------------------------------
+	// sound ( Load_snd_alias_list_t 0x004B8750, Load_snd_alias_t 0x004B84B0, Load_SoundFile 0x004B8240,
+	// Load_LoadedSound 0x004B80B0, Load_MssSound_data 0x004B7F30, Load_SndCurve 0x004B82B0, Load_SpeakerMap 0x004B8420 )
+	// The Miles sound system structures of IW4 with two differences: the alias has the master priority and separate
+	// master / slave percentages ( 108 bytes, IW4: 100; the IW5 layout ), and the AILSOUNDINFO of a loaded sound has
+	// a channel mask ( 40 bytes, IW4: 36 ).
+
+	struct MssSound
+	{
+		std::int32_t format;			// WAVE format tag: 1 PCM, 17 IMA ADPCM
+		zptr dataPtr;					// runtime
+		std::uint32_t dataLen;			// bytes of `data`
+		std::uint32_t rate;
+		std::int32_t bits;
+		std::int32_t channels;
+		std::uint32_t channelMask;		// not in IW4
+		std::uint32_t samples;
+		std::uint32_t blockSize;
+		zptr initialPtr;				// runtime
+		zptr data;
+	};
+	C1_SIZE(MssSound, 44);
+	C1_OFFSET(MssSound, data, 40);
+
+	struct LoadedSound
+	{
+		zptr name;
+		MssSound sound;
+	};
+	C1_HEADER(LoadedSound, ASSET_TYPE_LOADED_SOUND);	// 0x30, IW4: 0x2C
+
+	inline constexpr std::uint8_t SAT_LOADED = 1;
+	inline constexpr std::uint8_t SAT_STREAMED = 2;
+
+	struct SoundFile
+	{
+		std::uint8_t type;				// SAT_LOADED / SAT_STREAMED
+		std::uint8_t exists;
+		std::uint8_t _pad2[2];
+		zptr loadSndOrDir;				// loaded: LoadedSound; streamed: directory string
+		zptr streamName;				// streamed: file name string
+	};
+	C1_SIZE(SoundFile, 12);
+
+	struct SndCurve
+	{
+		zptr filename;
+		std::uint16_t knotCount;
+		std::uint8_t _pad6[2];
+		float knots[16][2];
+	};
+	C1_HEADER(SndCurve, ASSET_TYPE_SOUND_CURVE);	// 0x88, same layout as IW4
+
+	struct MSSChannelMap
+	{
+		std::int32_t speakerCount;
+		struct { std::int32_t speaker; std::int32_t numLevels; float levels[2]; } speakers[6];
+	};
+	C1_SIZE(MSSChannelMap, 100);
+
+	struct SpeakerMap
+	{
+		std::uint8_t isDefault;
+		std::uint8_t _pad1[3];
+		zptr name;
+		MSSChannelMap channelMaps[2][2];
+	};
+	C1_SIZE(SpeakerMap, 408);
+
+	struct snd_alias_t
+	{
+		zptr aliasName;
+		zptr subtitle;
+		zptr secondaryAliasName;
+		zptr chainAliasName;
+		zptr mixerGroup;
+		zptr soundFile;					// SoundFile
+		std::int32_t sequence;
+		float volMin;
+		float volMax;
+		float pitchMin;
+		float pitchMax;
+		float distMin;
+		float distMax;
+		float velocityMin;
+		std::uint32_t flags;			// SNDALIAS_* below
+		std::uint8_t masterPriority;	// not in IW4
+		std::uint8_t _pad61[3];
+		float masterPercentage;			// not in IW4 ( one field with slavePercentage there )
+		float slavePercentage;
+		float probability;
+		float lfePercentage;
+		float centerPercentage;
+		std::int32_t startDelay;
+		zptr volumeFalloffCurve;		// SndCurve
+		float envelopMin;
+		float envelopMax;
+		float envelopPercentage;
+		zptr speakerMap;				// SpeakerMap
+	};
+	C1_SIZE(snd_alias_t, 108);
+	C1_OFFSET(snd_alias_t, flags, 0x38);
+	C1_OFFSET(snd_alias_t, volumeFalloffCurve, 0x58);
+	C1_OFFSET(snd_alias_t, speakerMap, 0x68);
+
+	struct snd_alias_list_t
+	{
+		zptr aliasName;
+		zptr head;						// snd_alias_t
+		std::int32_t count;
+	};
+	C1_HEADER(snd_alias_list_t, ASSET_TYPE_SOUND);
+
+	// ------------------------------------------------------------------------------------------
 	// map: entities
 
 	struct MapTriggers

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <set>
@@ -172,6 +173,7 @@ int anim_model_roundtrip(const fs::path& install, const fs::path& exe, const int
 	Rate fullyCovered, names, classes, rotationClasses, transforms, all, signFirstW, signProduct;
 	std::uint64_t noneShipped = 0, noneKept = 0, staticShipped = 0, staticBecameNone = 0, partsTotal = 0, partsCovered = 0;
 	double worstRotation = 0, worstTranslation = 0;
+	std::map<std::string, std::uint32_t> staticAtBind, staticElsewhere, noneNames;
 	std::uint32_t index = 0, shown = 0, anims = 0;
 	std::set<std::string> seen;
 	for (const fs::path& file : zones)
@@ -256,6 +258,14 @@ int anim_model_roundtrip(const fs::path& install, const fs::path& exe, const int
 				noneKept += a.translation == ANIM_TRANS_NONE && b.translation == ANIM_TRANS_NONE;
 				staticShipped += a.translation == ANIM_TRANS_STATIC;
 				staticBecameNone += a.translation == ANIM_TRANS_STATIC && b.translation == ANIM_TRANS_NONE;
+				if (a.translation == ANIM_TRANS_STATIC)
+				{
+					(b.translation == ANIM_TRANS_NONE ? staticAtBind : staticElsewhere)[a.name]++;
+				}
+				else if (a.translation == ANIM_TRANS_NONE)
+				{
+					noneNames[a.name]++;
+				}
 				for (std::uint32_t f = 0; f <= ds.lastFrame; f++)
 				{
 					const float frame = static_cast<float>(f);
@@ -321,6 +331,27 @@ int anim_model_roundtrip(const fs::path& install, const fs::path& exe, const int
 	std::printf("translations without a track: %llu shipped, %llu found again ( the frames stay at the bind translation ); constant ones: %llu shipped, %llu taken for the bind translation\n",
 		static_cast<unsigned long long>(noneShipped), static_cast<unsigned long long>(noneKept), static_cast<unsigned long long>(staticShipped), static_cast<unsigned long long>(staticBecameNone));
 	std::printf("largest difference: rotation %.4f degrees, translation %.5f units\n", worstRotation, worstTranslation);
+	if (std::getenv("CODOL_ANIM_DEBUG"))
+	{
+		const auto top = [](const char* title, const std::map<std::string, std::uint32_t>& counts)
+		{
+			std::vector<std::pair<std::uint32_t, std::string>> sorted;
+			for (const auto& [k, n] : counts)
+			{
+				sorted.emplace_back(n, k);
+			}
+			std::sort(sorted.rbegin(), sorted.rend());
+			std::printf("%s:", title);
+			for (std::size_t k = 0; k < sorted.size() && k < 40; k++)
+			{
+				std::printf(" %s x %u", sorted[k].second.c_str(), sorted[k].first);
+			}
+			std::printf("\n");
+		};
+		top("constant translation at the bind translation", staticAtBind);
+		top("constant translation elsewhere", staticElsewhere);
+		top("no translation track", noneNames);
+	}
 	print_rate("sign of a stored 3d rotation: first key has w >= 0", signFirstW);
 	print_rate("sign of a stored 3d rotation: that of conj( parent ) * child of the converted matrices", signProduct);
 	return 0;

@@ -15,6 +15,12 @@
 //                                                 two models as the zone reader sees them
 //   codol_asset_verify material-roundtrip <install> <C1.exe> <library cache> [<every n-th>] [<dump dir>]
 //                                                 shipped material -> definition text -> compile; match rate per field
+//   codol_asset_verify sound-survey <install> <C1.exe> [<zone name part>]         what the shipped sound assets are
+//   codol_asset_verify sound-roundtrip <install> <C1.exe> [<every n-th>] [<zone name part>]
+//                                                 shipped alias list -> csv -> compile, loaded sound -> .wav -> compile; match rates
+//   codol_asset_verify sound-extract <zone.ff> <C1.exe> <out dir> [<name part>]   the sounds of a zone as a source tree
+//   codol_asset_verify sound-zone <zone.ff> <C1.exe> <out.ff> [<max lists>]       the sounds of a zone compiled, linked, loaded
+//                                                 with the game's loaders and compared
 
 #include "verify.hpp"
 
@@ -316,6 +322,22 @@ int main(const int argc, char** argv)
 	if (command == "anim-survey" && argc >= 4)
 	{
 		return anim_survey(argv[2], argv[3], argc > 4 ? argv[4] : "");
+	}
+	if (command == "sound-survey" && argc >= 4)
+	{
+		return sound_survey(argv[2], argv[3], argc > 4 ? argv[4] : "");
+	}
+	if (command == "sound-roundtrip" && argc >= 4)
+	{
+		return sound_roundtrip(argv[2], argv[3], argc > 4 ? std::max(1, std::atoi(argv[4])) : 1, argc > 5 ? argv[5] : "");
+	}
+	if (command == "sound-extract" && argc >= 5)
+	{
+		return sound_extract(argv[2], argv[3], argv[4], argc > 5 ? argv[5] : "");
+	}
+	if (command == "sound-zone" && argc >= 5)
+	{
+		return sound_zone(argv[2], argv[3], argv[4], argc > 5 ? std::atoi(argv[5]) : 0);
 	}
 	std::fprintf(stderr, "usage: see the head of asset_verify.cpp\n");
 	return 2;

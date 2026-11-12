@@ -20,6 +20,8 @@
 //     --xanim <name>=<file.xanim_export>[,model=<file.xmodel_export>][,type=relative|delta|delta3d][,loop][,deltapart=<part>]
 //                                 [,assettype=<n>][,rottol=<s16 units>][,transtol=<units>]
 //     --rawfile <name>=<file>
+//     --soundalias <file.csv>        sound aliases; loaded .wav files, curves and speaker maps from the tree around it
+//     --sound-root <dir>             the folder that holds sound/ and soundaliases/ ( default: next to / above the csv )
 //
 //   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
 //     loads the file with the game's loaders, writes it again ( must be identical ), lists what is in it
@@ -248,6 +250,36 @@ namespace
 				{
 					status = Status::error(error);
 				}
+			else if (e.type == c1::ASSET_TYPE_SOUND)
+			{
+				CompiledAliasList list;
+				bool ok = extract_sound_alias_list(zone, e.header, list);
+				std::string files;
+				for (const CompiledAlias& a : list.aliases)
+				{
+					const std::string channel(sound_channel_name(static_cast<int>((a.raw.flags >> 9) & 0x3F)));
+					ok = ok && !channel.empty();
+					files += " " + (!a.hasFile ? std::string("( no file )") : a.streamed ? "streamed:" + a.streamDir + "/" + a.streamName
+						: a.loadedName + (zone.find_asset(c1::ASSET_TYPE_LOADED_SOUND, a.loadedName) ? "" : " ( by name )")) + " [" + channel + ((a.raw.flags & 1) ? ", looping" : "") + "]";
+				}
+				bad += ok ? 0 : 1;
+				std::printf("  sound     %-40s %zu alias(es):%s%s\n", name.c_str(), list.aliases.size(), files.c_str(), ok ? "" : "  DOES NOT READ");
+			}
+			else if (e.type == c1::ASSET_TYPE_LOADED_SOUND)
+			{
+				CompiledLoadedSound sound;
+				WaveData pcm;
+				const bool ok = extract_loaded_sound(editor, e.header, sound) && (sound.info.format != WAVE_IMA_ADPCM || ima_adpcm_decode(loaded_sound_wave(sound), pcm));
+				bad += ok ? 0 : 1;
+				std::printf("  loaded_sound %-37s %s, %d channel(s), %u Hz, %u samples, %u bytes%s\n", name.c_str(), sound.info.format == WAVE_IMA_ADPCM ? "IMA ADPCM" : "16 bit PCM",
+					sound.info.channels, sound.info.rate, sound.info.samples, sound.info.dataLen, ok ? (sound.info.format == WAVE_IMA_ADPCM ? ", decodes" : "") : "  DOES NOT READ");
+			}
+			else if (e.type == c1::ASSET_TYPE_SOUND_CURVE)
+			{
+				SndCurveDef curve;
+				extract_snd_curve(zone, e.header, curve);
+				std::printf("  sndcurve  %-40s %zu knots\n", name.c_str(), curve.knots.size());
+			}
 				else
 				{
 					status = decode_anim(raw, decoded);
@@ -279,7 +311,8 @@ int main(const int argc, char** argv)
 	LinkOptions link;
 	fs::path out, sourceRoot, iwiDir, iwd, zoneOut, verifyFile;
 	std::vector<std::string> images, materials, models, rawfiles;
-	std::vector<std::string> anims;
+	std::vector<std::string> anims, soundAliases;
+	fs::path soundRoot;
 	bool nameGiven = false;
 	for (int k = 1; k < argc; k++)
 	{
@@ -301,6 +334,8 @@ int main(const int argc, char** argv)
 		else if (a == "--xmodel") models.push_back(value());
 		else if (a == "--rawfile") rawfiles.push_back(value());
 		else if (a == "--xanim") anims.push_back(value());
+		else if (a == "--soundalias") soundAliases.push_back(value());
+		else if (a == "--sound-root") soundRoot = value();
 		else if (a == "--verify") verifyFile = value();
 		else return fail("unknown option " + a + " ( usage: see the head of codol_assetc.cpp or the README )");
 	}
@@ -329,6 +364,25 @@ int main(const int argc, char** argv)
 	if (const Status s = linker.begin(link); !s)
 	{
 		return fail(s.message);
+	}
+
+	// ---- sounds: loaded sounds and curves, then the alias lists that name them
+	SoundBuild sounds;
+	for (const std::string& file : soundAliases)
+	{
+		if (const Status s = build_sound_aliases(file, soundRoot.empty() ? sound_source_root(file) : soundRoot, linker.editor(), sounds); !s)
+		{
+			return fail(s.message);
+		}
+	}
+	for (const std::string& line : sounds.log)
+	{
+		std::printf("%s\n", line.c_str());
+	}
+	if (!soundAliases.empty())
+	{
+		std::printf("sounds: %u alias lists ( %u aliases ), %u loaded sounds, %u curves, %zu streamed files found\n", sounds.lists, sounds.aliases, sounds.loadedSounds,
+			sounds.curves, sounds.streamedFiles.size());
 	}
 
 	// ---- material definitions first: they say what the images are used for
@@ -458,13 +512,19 @@ int main(const int argc, char** argv)
 			}
 		}
 	}
-	if (!iwd.empty() && !iwiFiles.empty())
+	if (!iwd.empty() && !(iwiFiles.empty() && sounds.streamedFiles.empty()))
 	{
-		if (const Status s = write_iwd(iwd, iwiFiles); !s)
+		auto packed = iwiFiles;
+		packed.insert(packed.end(), sounds.streamedFiles.begin(), sounds.streamedFiles.end());
+		if (const Status s = write_iwd(iwd, packed); !s)
 		{
 			return fail(s.message);
 		}
-		std::printf("wrote %s: %zu images\n", iwd.string().c_str(), iwiFiles.size());
+		std::printf("wrote %s: %zu images, %zu streamed sound files\n", iwd.string().c_str(), iwiFiles.size(), sounds.streamedFiles.size());
+	}
+	if (iwd.empty() && !sounds.streamedFiles.empty())
+	{
+		std::printf("warning: %zu streamed sound file(s) and no --iwd: the game will not find them\n", sounds.streamedFiles.size());
 	}
 	else if (!iwiFiles.empty() && iwiDir.empty())
 	{

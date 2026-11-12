@@ -468,6 +468,21 @@ namespace codol::assets
 		return impl_->editor.add_new_asset(c1::ASSET_TYPE_XMODEL, model.name, pieces.list);
 	}
 
+	Status AssetLinker::add_loaded_sound(const CompiledLoadedSound& sound)
+	{
+		return link_loaded_sound(impl_->editor, sound);
+	}
+
+	Status AssetLinker::add_snd_curve(const SndCurveDef& curve)
+	{
+		return link_snd_curve(impl_->editor, curve);
+	}
+
+	Status AssetLinker::add_sound_aliases(const CompiledAliasList& list)
+	{
+		return link_sound_alias_list(impl_->editor, list, &impl_->log);
+	}
+
 	Status AssetLinker::write_zone(std::vector<std::uint8_t>& zoneBytes)
 	{
 		return impl_->editor.write(zoneBytes);

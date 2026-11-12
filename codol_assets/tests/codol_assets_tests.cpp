@@ -488,6 +488,8 @@ namespace
 	}
 }
 
+#include "test_sounds.inc"
+
 int main()
 {
 	std::error_code ec;
@@ -498,11 +500,14 @@ int main()
 	test_materials();
 	test_models();
 	anim_tests::test_anims();
+	test_sound_files();
+	test_sound_zone(scratch);
 	const char* env = std::getenv("CODOL_ASSETS_GAME_DIR");
 	const fs::path install = env && *env ? env : CODOL_ASSETS_GAME_DIR;
 	if (fs::exists(install / "C1.exe", ec))
 	{
 		test_install(install, scratch);
+		test_sounds_install(install);
 	}
 	else
 	{
