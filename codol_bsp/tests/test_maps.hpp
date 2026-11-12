@@ -555,7 +555,7 @@ namespace codol::bsp::test
 		doc.create_point_entity("script_fx", { 260, -440, 50 }, fire);
 		const std::vector<std::pair<std::string, std::string>> smoke = { { "fx", "smoke/thin_black_smoke_m" }, { "angles", "270 0 0" }, { "delay", "4" } };
 		doc.create_point_entity("script_fx", { 260, -440, 60 }, smoke);
-		const std::vector<std::pair<std::string, std::string>> rattle = { { "soundalias", "emt_metal_rattle_pole" } };
+		const std::vector<std::pair<std::string, std::string>> rattle = { { "soundalias", "emt_mtl_chainlink_rattle" } };
 		doc.create_point_entity("script_sound", { 204, -40, 60 }, rattle);
 	}
 

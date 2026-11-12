@@ -287,7 +287,9 @@ namespace codol::bsp
 				for (std::size_t b = 0; b < w.brushes.size(); b++)
 				{
 					const map_brush& brush = w.brushes[b];
-					if (brush.model != 0 || !(brush.contents & 1))
+					// a brush one can see through ( a fence, a grate ) lets the light through: the bake does not read the
+					// material's picture, and a solid block of shadow under a chain link fence is the worse mistake
+					if (brush.model != 0 || !(brush.contents & 1) || brush.see_through)
 					{
 						continue;
 					}

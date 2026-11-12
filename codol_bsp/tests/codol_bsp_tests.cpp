@@ -304,7 +304,10 @@ int main(const int argc, char** argv)
 	{
 		const compiled c = compile(out, game, "two_rooms");
 		check_zone(c, game, out / "maps" / "two_rooms.map");
-		CHECK(c.rep.cells == 5 && c.rep.portals == 8 && !c.rep.leaked);
+		// room, corridor, room: one portal ( two GfxPortals ) per doorway. The corridor has the doorways' cross section,
+		// so a slice through it is no opening; the doorway's cross section in the other face of its wall is the same opening
+		CHECK(c.rep.cells == 3 && c.rep.portals == 4 && !c.rep.leaked);
+		CHECK(has_note(c.rep, "2 openings found"));
 		CHECK(c.rep.faces_culled > 60);
 		const compiled leak = compile(out, game, "two_rooms_leak");
 		CHECK(leak.ok && leak.rep.leaked && leak.rep.cells == 1);
@@ -478,7 +481,9 @@ int main(const int argc, char** argv)
 		// the yard: everything in one map
 		const compiled yard = compile(out, game, "yard", true, true);
 		check_zone(yard, game, out / "maps" / "yard.map");
-		CHECK(!yard.rep.leaked && yard.rep.cells >= 3 && yard.rep.static_models == 9 && yard.rep.patches == 2);
+		CHECK(!yard.rep.leaked && yard.rep.static_models == 9 && yard.rep.patches == 2);
+		// the yard and the two buildings; a portal in each of the ten doors and windows, none inside a room or in the open
+		CHECK(yard.rep.cells == 3 && yard.rep.portals == 20);
 		CHECK(has_note(yard.rep, "scripts: 2 effects ( 2 kinds ), 1 sounds"));
 		std::printf("yard: %zu brushes, %zu surfaces, %zu cells, %zu portals, %zu lightmaps, %.1f s\n", yard.rep.clip_brushes, yard.rep.surfaces, yard.rep.cells,
 			yard.rep.portals, yard.rep.lightmaps, yard.rep.seconds);
@@ -492,7 +497,9 @@ int main(const int argc, char** argv)
 	{
 		const compiled c = compile(out, game, "big");
 		check_zone(c, game, out / "maps" / "big.map");
-		CHECK(c.rep.clip_brushes > 1000 && c.rep.cells > 20 && !c.rep.leaked);
+		CHECK(c.rep.clip_brushes > 1000 && !c.rep.leaked);
+		// 12 x 12 rooms, 2 x 12 x 11 doorways: every room is a cell, every doorway has one portal
+		CHECK(c.rep.cells == 144 && c.rep.portals == 2 * 264);
 		std::printf("big: %zu brushes, %zu surfaces, %zu cells, %zu portals, %.1f s\n", c.rep.clip_brushes, c.rep.surfaces, c.rep.cells, c.rep.portals, c.rep.seconds);
 	}
 

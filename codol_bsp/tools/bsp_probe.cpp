@@ -98,6 +98,42 @@ int main(int argc, char** argv)
 		}
 		return 0;
 	}
+	if (mode == "cells")
+	{
+		// every cell with its box, and every portal with its target and the box of its corners
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		for (std::size_t c = 0; c < world.cells.size(); c++)
+		{
+			const c1::Bounds& b = world.cells[c].raw.bounds;
+			std::printf("cell %zu: ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ), %zu portals\n", c, b.midPoint[0] - b.halfSize[0], b.midPoint[1] - b.halfSize[1],
+				b.midPoint[2] - b.halfSize[2], b.midPoint[0] + b.halfSize[0], b.midPoint[1] + b.halfSize[1], b.midPoint[2] + b.halfSize[2], world.cells[c].portals.size());
+			for (const c1::GfxPortal& p : world.cells[c].portals)
+			{
+				float plane[4];
+				std::memcpy(plane, p._unk0 + 12, 16);
+				const std::vector<float> v = z.get_array<float>(p.vertices, 3u * p.vertexCount);
+				float lo[3] = { 1e9f, 1e9f, 1e9f }, hi[3] = { -1e9f, -1e9f, -1e9f };
+				for (std::size_t k = 0; k < v.size(); k++)
+				{
+					lo[k % 3] = std::min(lo[k % 3], v[k]);
+					hi[k % 3] = std::max(hi[k % 3], v[k]);
+				}
+				std::printf("  -> %u: normal %.0f %.0f %.0f, ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ), %u corners\n", p.cellIndex, plane[0], plane[1], plane[2], lo[0], lo[1], lo[2], hi[0],
+					hi[1], hi[2], p.vertexCount);
+			}
+		}
+		return 0;
+	}
 	if (mode == "terrain")
 	{
 		// The terrain ( triangle ) collision of a clip map: how the game's compiler shapes partitions, borders, the

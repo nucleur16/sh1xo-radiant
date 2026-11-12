@@ -115,6 +115,7 @@ namespace codol::bsp
 		bool detail = false;
 		bool collides = true;			// has a cbrush_t
 		bool opaque = false;			// structural and solid: blocks sight ( bsp, csg, flood fill )
+		bool see_through = false;		// has an alpha tested or decal face: casts no baked shadow
 		int clip_index = -1;			// cbrush_t index
 		int patch = -1;				// >= 0: the collision of a triangle of world::patches[ patch ], not a brush of the map
 	};
@@ -195,7 +196,9 @@ namespace codol::bsp
 		std::vector<map_patch> patches;
 		std::vector<map_model> models;
 		std::vector<map_light> lights;	// [0] none, [1] the sun, then the light entities
-		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed
+		std::vector<map_face> portal_faces;	// faces with the material "portal": cell boundaries the mapper placed - or, in a map without any, the openings the vis stage found
+		bool auto_portals_tried = false;		// the vis stage looked for openings ( once )
+		std::string auto_portal_note;			// what it found, for the report
 		std::vector<map_light> bake_lights;	// the light entities: baked into lightmaps and light grid
 		plane_pool planes;
 		box3 bounds;					// of all brushes and patches of the world model

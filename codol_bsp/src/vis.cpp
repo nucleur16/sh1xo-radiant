@@ -8,13 +8,14 @@
 //   4. flood fill from the entities through the portals of the non solid leafs. Reaching the outside of the map is a
 //      leak ( the path is reported ); leafs the fill does not reach are the void
 //   5. hidden faces: a face is cut by the tree and is drawn when a piece of it borders a reached leaf
-//   6. cells: the reached leafs, separated where a portal face of the mapper lies - or, without any, at the closed
-//      openings the tree has ( the cross section of a door or window: the leaf portals in one plane that touch and are
-//      surrounded by solid ) - and the portals between the cells
+//   6. cells: the reached leafs, separated where a portal face of the mapper lies, and the portals between the cells.
+//      A map without portal faces gets them from the compiler: it looks for the openings in the open space ( the
+//      cross section of a door or window in the face of its wall ) and starts over with a portal face in each
 //   7. the node stream that puts a point into a cell ( GfxWorld.dpvsPlanes.nodes )
 
 #include "vis.hpp"
 
+#include <cstdlib>
 #include <queue>
 
 namespace codol::bsp
@@ -703,21 +704,145 @@ namespace codol::bsp
 				}
 			}
 		}
-		else if (sealed && ctx.opts.vis)
+		else if (sealed && ctx.opts.vis && !w.auto_portals_tried)
 		{
-			// closed openings: per plane, the open portals that touch form a patch; a small convex patch is a boundary
-			std::map<int, std::vector<int>> by_plane;
-			for (std::size_t p = 0; p < t.portals.size(); p++)
+			// No portal brushes: the compiler looks for the openings itself - the places a mapper would put a portal
+			// brush in - and compiles the map again with a portal face in each ( the code above ). An opening is a cross
+			// section of the open space in the plane of a brush face that
+			//   - is one convex piece of at most AUTO_PORTAL_AREA square units,
+			//   - has something solid ( or the void ) just beyond every edge, on at least one side of the plane, and
+			//   - on at least half of that outline on one side only: it lies in the face of a wall, where the space widens.
+			//     A cross section with solid on both sides all around is a slice through a room or a corridor.
+			// The cross sections are taken from the leafs cut by the plane, not only from the leaf portals: the tree
+			// rarely splits a doorway along the face of its wall. ( The first version took every small convex group of
+			// leaf portals: the splits of the tree cut a room into a dozen cells, and where such a group lay between
+			// several pairs of cells only one pair got its portals - seen in the client: from inside the yard's west
+			// building everything beyond the next cell was black. )
+			w.auto_portals_tried = true;
+			const auto closed_at = [&](const vec3& point)
 			{
-				if (open_portal(t.portals[p]))
+				const tnode& leaf = t.nodes[static_cast<std::size_t>(t.leaf_of(point))];
+				return leaf.solid || !leaf.reached;
+			};
+			const auto framed = [&](const winding& hull, const edit::plane& plane)
+			{
+				const vec3 centre = centre_of(hull);
+				int samples = 0, one_sided = 0;
+				for (std::size_t k = 0; k < hull.size(); k++)
 				{
-					by_plane[t.portals[p].plane_index].push_back(static_cast<int>(p));
+					const vec3 a = hull[k], b = hull[(k + 1) % hull.size()];
+					const vec3 along = b - a;
+					if (length(along) < 0.5)
+					{
+						continue;
+					}
+					vec3 out_dir = cross(along, plane.normal);
+					out_dir = out_dir * (1.0 / length(out_dir));
+					if (dot(out_dir, (a + b) * 0.5 - centre) < 0)
+					{
+						out_dir = out_dir * -1.0;
+					}
+					for (const double f : { 0.125, 0.375, 0.625, 0.875 })
+					{
+						const vec3 at = a + along * f + out_dir;
+						const bool front = closed_at(at + plane.normal * 0.5), back = closed_at(at - plane.normal * 0.5);
+						if (!front && !back)
+						{
+							return false;
+						}
+						samples++;
+						one_sided += front != back;
+					}
 				}
-			}
-			for (const auto& [plane_index, list] : by_plane)
+				return samples > 0 && one_sided * 2 >= samples;
+			};
+			const auto touching = [](const winding& wa, const winding& wb)
 			{
-				std::vector<int> group(list.size());
-				for (std::size_t k = 0; k < list.size(); k++)
+				// an edge of one lies along an edge of the other for more than half a unit ( the corners need not meet )
+				for (std::size_t i = 0; i < wa.size(); i++)
+				{
+					const vec3 a0 = wa[i], a1 = wa[(i + 1) % wa.size()];
+					const double la = length(a1 - a0);
+					if (la < 0.5)
+					{
+						continue;
+					}
+					const vec3 dir = (a1 - a0) * (1.0 / la);
+					for (std::size_t j = 0; j < wb.size(); j++)
+					{
+						const vec3 b0 = wb[j] - a0, b1 = wb[(j + 1) % wb.size()] - a0;
+						const double t0 = dot(b0, dir), t1 = dot(b1, dir);
+						if (length(b0 - dir * t0) > 0.1 || length(b1 - dir * t1) > 0.1)
+						{
+							continue;
+						}
+						if (std::min(la, std::max(t0, t1)) - std::max(0.0, std::min(t0, t1)) > 0.5)
+						{
+							return true;
+						}
+					}
+				}
+				return false;
+			};
+			struct opening
+			{
+				winding polygon;
+				edit::plane plane;
+				double area;
+			};
+			std::vector<opening> openings;
+			int too_large = 0, concave = 0, unframed = 0;
+			for (std::size_t plane_index = 0; plane_index < t.planes.size(); plane_index++)
+			{
+				const edit::plane& plane = t.planes[plane_index];
+				// the open space in this plane: the leaf portals between reached leafs that lie in it, and the cut through
+				// every reached leaf it passes through
+				std::vector<winding> pieces;
+				for (const tportal& portal : t.portals)
+				{
+					if (portal.plane_index == static_cast<int>(plane_index) && open_portal(portal) && area_of(portal.w) > 1.0)
+					{
+						pieces.push_back(portal.w);
+					}
+				}
+				for (const tnode& node : t.nodes)
+				{
+					if (!node.leaf || !node.reached)
+					{
+						continue;
+					}
+					double lo = 0, hi = 0;
+					std::vector<vec3> cut;
+					for (const int p : node.portals)
+					{
+						const winding& pw = t.portals[static_cast<std::size_t>(p)].w;
+						for (std::size_t k = 0; k < pw.size(); k++)
+						{
+							const vec3 a = pw[k], b = pw[(k + 1) % pw.size()];
+							const double da = plane.distance_to(a), db = plane.distance_to(b);
+							lo = std::min(lo, da);
+							hi = std::max(hi, da);
+							if (std::fabs(da) <= ON)
+							{
+								cut.push_back(a);
+							}
+							else if (std::fabs(db) > ON && (da > 0) != (db > 0))
+							{
+								cut.push_back(a + (b - a) * (da / (da - db)));
+							}
+						}
+					}
+					if (lo < -ON && hi > ON && cut.size() >= 3)
+					{
+						winding hull = hull_of(cut, plane);
+						if (hull.size() >= 3 && area_of(hull) > 1.0)
+						{
+							pieces.push_back(std::move(hull));
+						}
+					}
+				}
+				std::vector<int> group(pieces.size());
+				for (std::size_t k = 0; k < pieces.size(); k++)
 				{
 					group[k] = static_cast<int>(k);
 				}
@@ -729,60 +854,109 @@ namespace codol::bsp
 					}
 					return k;
 				};
-				for (std::size_t a = 0; a < list.size(); a++)
+				for (std::size_t a = 0; a < pieces.size(); a++)
 				{
-					for (std::size_t b = a + 1; b < list.size(); b++)
+					for (std::size_t b = a + 1; b < pieces.size(); b++)
 					{
-						int shared = 0;
-						for (const vec3& p : t.portals[static_cast<std::size_t>(list[a])].w)
-						{
-							for (const vec3& q : t.portals[static_cast<std::size_t>(list[b])].w)
-							{
-								shared += length(p - q) < 0.1;
-							}
-						}
-						if (shared >= 2)
+						if (root(static_cast<int>(a)) != root(static_cast<int>(b)) && touching(pieces[a], pieces[b]))
 						{
 							group[static_cast<std::size_t>(root(static_cast<int>(a)))] = root(static_cast<int>(b));
 						}
 					}
 				}
 				std::map<int, std::vector<int>> members;
-				for (std::size_t k = 0; k < list.size(); k++)
+				for (std::size_t k = 0; k < pieces.size(); k++)
 				{
-					members[root(static_cast<int>(k))].push_back(list[k]);
+					members[root(static_cast<int>(k))].push_back(static_cast<int>(k));
 				}
-				for (const auto& [r, portals] : members)
+				for (const auto& [r, list] : members)
 				{
 					double area = 0;
 					std::vector<vec3> points;
-					for (const int p : portals)
+					for (const int k : list)
 					{
-						area += area_of(t.portals[static_cast<std::size_t>(p)].w);
-						points.insert(points.end(), t.portals[static_cast<std::size_t>(p)].w.begin(), t.portals[static_cast<std::size_t>(p)].w.end());
+						area += area_of(pieces[static_cast<std::size_t>(k)]);
+						points.insert(points.end(), pieces[static_cast<std::size_t>(k)].begin(), pieces[static_cast<std::size_t>(k)].end());
 					}
-					if (area > AUTO_PORTAL_AREA || area < 64.0)
+					const char* verdict = "an opening";
+					winding hull;
+					if (area < 64.0)
 					{
 						continue;
 					}
-					const edit::plane& plane = t.planes[static_cast<std::size_t>(plane_index)];
-					winding hull = hull_of(points, plane);
-					if (hull.size() < 3 || hull.size() > 32 || std::fabs(area_of(hull) - area) > area * 0.01 + 1.0)
+					if (area > AUTO_PORTAL_AREA)
 					{
-						continue;		// not convex
+						too_large++;
+						verdict = "too large";
 					}
-					patch pt;
-					pt.portals = portals;
-					pt.polygon = std::move(hull);
-					pt.plane = plane;
-					for (const int p : portals)
+					else if (hull = hull_of(points, plane); hull.size() < 3 || hull.size() > 32 || std::fabs(area_of(hull) - area) > area * 0.01 + 1.0)
 					{
-						t.portals[static_cast<std::size_t>(p)].patch = static_cast<int>(patches.size());
+						concave++;
+						verdict = "not convex";
 					}
-					patches.push_back(std::move(pt));
+					else if (!framed(hull, plane))
+					{
+						unframed++;
+						verdict = "not an opening in something solid";
+					}
+					else
+					{
+						openings.push_back({ hull, plane, area });
+					}
+					if (std::getenv("CODOL_BSP_VIS_DEBUG"))
+					{
+						// environment CODOL_BSP_VIS_DEBUG: every cross section and what became of it
+						vec3 lo = points[0], hi = points[0];
+						for (const vec3& v : points)
+						{
+							lo = { std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z) };
+							hi = { std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z) };
+						}
+						std::fprintf(stderr, "vis: cross section in plane ( %.0f %.0f %.0f | %.0f ), %zu pieces, %.0f square units, ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ): %s%c",
+							plane.normal.x, plane.normal.y, plane.normal.z, plane.dist, list.size(), area, lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, verdict, 10);
+					}
 				}
 			}
+			// an opening in a wall is found in both faces of the wall ( and in every plane between them that some brush
+			// has a face in ): one portal per opening - of those that are parallel, of one size, at most 64 units apart
+			// and in line, the first is kept
+			std::vector<opening> kept;
+			int doubles = 0;
+			for (const opening& o : openings)
+			{
+				bool twin = false;
+				for (const opening& k : kept)
+				{
+					const vec3 offset = centre_of(o.polygon) - centre_of(k.polygon);
+					const double apart = dot(offset, k.plane.normal);
+					twin = twin || (std::fabs(dot(o.plane.normal, k.plane.normal)) > 0.999 && std::fabs(apart) <= 64.0 && length(offset - k.plane.normal * apart) < 1.0
+						&& std::fabs(o.area - k.area) < k.area * 0.01 + 1.0);
+				}
+				doubles += twin;
+				if (!twin)
+				{
+					kept.push_back(o);
+				}
+			}
+			w.auto_portal_note = format("vis: no portal brushes in the map; %zu openings found and given a portal ( cross sections left out: %d larger than %.0f square units, "
+				"%d not convex, %d not an opening in something solid; %d further cross sections of an opening that has its portal )",
+				kept.size(), too_large, AUTO_PORTAL_AREA, concave, unframed, doubles);
+			if (!kept.empty())
+			{
+				for (const opening& o : kept)
+				{
+					map_face face;
+					face.plane = o.plane;
+					face.material = "portal";
+					face.winding = o.polygon;
+					w.portal_faces.push_back(std::move(face));
+				}
+				out = {};
+				build_vis(ctx, out);
+				return;
+			}
 		}
+
 
 		// ---- cells: reached leafs connected without crossing a boundary
 		int cell_count = 0;
@@ -836,8 +1010,13 @@ namespace codol::bsp
 				{
 					continue;
 				}
-				const tportal& first = t.portals[static_cast<std::size_t>(pt.portals[0])];
-				if (t.nodes[static_cast<std::size_t>(first.node[0])].cell == t.nodes[static_cast<std::size_t>(first.node[1])].cell)
+				bool separates = false;
+				for (const int p : pt.portals)
+				{
+					const tportal& portal = t.portals[static_cast<std::size_t>(p)];
+					separates = separates || t.nodes[static_cast<std::size_t>(portal.node[0])].cell != t.nodes[static_cast<std::size_t>(portal.node[1])].cell;
+				}
+				if (!separates)
 				{
 					for (const int p : pt.portals)
 					{
@@ -883,11 +1062,34 @@ namespace codol::bsp
 			{
 				continue;
 			}
-			const tportal& first = t.portals[static_cast<std::size_t>(pt.portals[0])];
-			const int front_cell = t.nodes[static_cast<std::size_t>(first.node[0])].cell, back_cell = t.nodes[static_cast<std::size_t>(first.node[1])].cell;
-			if (front_cell < 0 || back_cell < 0 || front_cell == back_cell)
+			// the leaf portals of a boundary by the pair of cells they lie between ( one pair as a rule; a boundary whose
+			// pieces border different cells gets a portal per pair, so that no way from cell to cell is left out )
+			std::map<std::pair<int, int>, std::vector<int>> pairs;
+			for (const int p : pt.portals)
 			{
-				continue;
+				const tportal& portal = t.portals[static_cast<std::size_t>(p)];
+				const int front = t.nodes[static_cast<std::size_t>(portal.node[0])].cell, back = t.nodes[static_cast<std::size_t>(portal.node[1])].cell;
+				if (front >= 0 && back >= 0 && front != back)
+				{
+					pairs[{ front, back }].push_back(p);
+				}
+			}
+			for (const auto& [cells_of, members] : pairs)
+			{
+			const int front_cell = cells_of.first, back_cell = cells_of.second;
+			winding outline = pt.polygon;
+			if (pairs.size() > 1 || members.size() != pt.portals.size())
+			{
+				std::vector<vec3> points;
+				for (const int p : members)
+				{
+					points.insert(points.end(), t.portals[static_cast<std::size_t>(p)].w.begin(), t.portals[static_cast<std::size_t>(p)].w.end());
+				}
+				outline = hull_of(points, pt.plane);
+				if (outline.size() < 3)
+				{
+					continue;
+				}
 			}
 			// two portals: one in each cell, its normal pointing into the other cell, its corners clockwise seen from
 			// that side - as the portals of the shipped maps are
@@ -895,7 +1097,7 @@ namespace codol::bsp
 			{
 				const int own = side == 0 ? front_cell : back_cell, target = side == 0 ? back_cell : front_cell;
 				const vec3 normal = side == 0 ? pt.plane.normal * -1.0 : pt.plane.normal;
-				winding polygon = pt.polygon;
+				winding polygon = outline;
 				const vec3 facing = cross(polygon[1] - polygon[0], polygon[2] - polygon[0]);
 				if (dot(facing, normal) > 0)
 				{
@@ -924,6 +1126,7 @@ namespace codol::bsp
 				}
 				out.cells[static_cast<std::size_t>(own)].portals.push_back(std::move(rp));
 				out.portals++;
+			}
 			}
 		}
 
@@ -1016,6 +1219,10 @@ namespace codol::bsp
 				return all;
 			}
 		};
+		if (!w.auto_portal_note.empty())
+		{
+			rep.notes.push_back(w.auto_portal_note);
+		}
 		out.cell_nodes = emit{ t, w, cell_count }.run(t.head);
 		out.built = true;
 		rep.cells = static_cast<std::size_t>(cell_count);
