@@ -1,6 +1,6 @@
 param([Parameter(Mandatory)][string]$Map, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Out,
       [string]$Game = 'D:\CoD\CODOL Builds\Call of Duty Online 1.1.1.13', [string[]]$Assets = @(), [string]$Loadscreen, [string]$DisplayName,
-      [string]$Environment = 'urban', [string]$Cache, [string[]]$Extra = @(), [string]$Bsp, [string]$Assetc)
+      [string]$Environment = 'urban', [string]$Cache, [string[]]$Extra = @(), [string]$Bsp, [string]$Assetc, [switch]$Fast)
 # A map with everything around it, from a .map:
 #
 #   <Out>\zone\<Name>.ff            the map zone: world, collision, lights, the minimap material compass_map_<Name> with
@@ -27,6 +27,7 @@ New-Item -ItemType Directory -Force $zone, $work, $presence, "$Out\scripts" | Ou
 $a = @('--map', $Map, '--exe', "$Game\C1.exe", '--install', $Game, '--out', "$zone\$Name.ff", '--name', $Name, '--cache', $Cache,
        '--report', "$work\$Name.report.txt", '--minimap', "$work\compass_map_$Name.tga", '--scripts', "$Out\scripts")
 foreach ($z in $Assets) { $a += @('--assets', $z) }
+if ($Fast) { $a += '--fast' }
 & $Bsp @a @Extra | Select-Object -Last 2
 if ($LASTEXITCODE) { throw 'codol_bsp failed' }
 

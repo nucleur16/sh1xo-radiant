@@ -736,6 +736,145 @@ namespace editor::ui
 		});
 	}
 
+	// ---- what the game's scripts ask of every multiplayer map --------------------------------------------------
+
+	namespace
+	{
+		struct gameplay_state
+		{
+			int spawns = 0;
+			bool intermission = false;
+			bool care_package = false;		// _airdrop.gsc: script error at every start without it
+			bool heli = false;				// _helicopter.gsc: heli_start and heli_loop_start
+			edit::bounds world;
+			edit::vec3 first_spawn;
+		};
+
+		gameplay_state inspect_gameplay(const edit::document& doc)
+		{
+			gameplay_state g;
+			bool heli_start = false, heli_loop = false;
+
+			for (const object_id id : doc.entities())
+			{
+				const auto* e = doc.find_entity(id);
+				if (!e) { continue; }
+
+				const auto cls = e->classname();
+				const auto name = e->value("targetname");
+
+				if (e->is_worldspawn())
+				{
+					for (const object_id child : e->children)
+					{
+						const auto b = doc.object_bounds(child);
+						if (b.valid()) { g.world.add(b.mins); g.world.add(b.maxs); }
+					}
+				}
+
+				if (cls.starts_with("mp_") && cls.find("spawn") != std::string_view::npos)
+				{
+					if (!g.spawns) { g.first_spawn = e->origin(); }
+					g.spawns++;
+				}
+
+				g.intermission |= cls == "mp_global_intermission";
+				g.care_package |= name == "care_package";
+				heli_start |= name == "heli_start";
+				heli_loop |= name == "heli_loop_start";
+			}
+
+			g.heli = heli_start && heli_loop;
+			return g;
+		}
+
+		std::vector<std::string> gameplay_problems(const gameplay_state& g)
+		{
+			std::vector<std::string> out;
+			if (!g.spawns) { out.emplace_back("no spawn points ( mp_dm_spawn, mp_tdm_spawn .. ): nobody can spawn"); }
+			if (!g.intermission) { out.emplace_back("no mp_global_intermission: the camera of the end of a match has no place"); }
+			if (!g.care_package) { out.emplace_back("no care package ( script_model \"care_package\" that targets a script_brushmodel ): script error at every map start"); }
+			if (!g.heli) { out.emplace_back("no helicopter path ( script_origin heli_start, heli_loop_start ): air killstreaks run into script errors"); }
+			return out;
+		}
+	}
+
+	// Adds what is missing of the care package and the helicopter path. One undo step.
+	void add_gameplay_entities()
+	{
+		auto& s = get_scene();
+		if (!s.open) { return; }
+
+		auto& doc = s.doc;
+		const auto g = inspect_gameplay(doc);
+
+		if (g.care_package && g.heli)
+		{
+			ImGui::Toast(ImGuiToastType_Info, "Gameplay entities", "The map has a care package and a helicopter path already.");
+			return;
+		}
+
+		using pairs = std::vector<std::pair<std::string, std::string>>;
+		const bool has_world = g.world.valid();
+		const edit::vec3 centre = has_world ? edit::vec3{ (g.world.mins.x + g.world.maxs.x) * 0.5, (g.world.mins.y + g.world.maxs.y) * 0.5, (g.world.mins.z + g.world.maxs.z) * 0.5 } : edit::vec3{};
+
+		doc.begin_transaction("Add gameplay entities");
+		doc.deselect_all();
+		int added = 0;
+
+		if (!g.care_package)
+		{
+			// beside the first spawn point; the script takes the crate and its collision away when the match starts
+			const edit::vec3 at = g.spawns ? edit::vec3{ g.first_spawn.x + 64.0, g.first_spawn.y, g.first_spawn.z } : edit::vec3{ centre.x, centre.y, has_world ? g.world.mins.z + 16.0 : 0.0 };
+			const object_id box = doc.create_box({ at.x - 29, at.y - 15, at.z }, { at.x + 29, at.y + 15, at.z + 30 }, "clip");
+
+			if (box)
+			{
+				doc.deselect_all();
+				doc.select(box);
+				const pairs collision = { { "targetname", "airdrop_collision" }, { "script_gameobjectname", "airdrop_pallet" } };
+				doc.create_brush_entity("script_brushmodel", collision);
+				doc.deselect_all();
+				const pairs crate = { { "model", "com_plasticcase_green_big_us_dirt" }, { "targetname", "care_package" }, { "target", "airdrop_collision" } };
+				doc.create_point_entity("script_model", at, crate);
+				added++;
+			}
+		}
+
+		if (!g.heli)
+		{
+			// a way in, a closed loop, a way out and a crash path, all inside the map's box near its top
+			const double reach = has_world ? std::max(64.0, 0.4 * std::min(g.world.maxs.x - g.world.mins.x, g.world.maxs.y - g.world.mins.y) * 0.5) : 512.0;
+			const double z = has_world ? g.world.maxs.z - std::min(64.0, (g.world.maxs.z - g.world.mins.z) * 0.25) : 512.0;
+			const double low = has_world ? g.world.mins.z + (g.world.maxs.z - g.world.mins.z) * 0.25 : 128.0;
+
+			const auto node = [&](const double x, const double y, const double height, const char* name, const char* target)
+			{
+				pairs keys = { { "targetname", name } };
+				if (target) { keys.emplace_back("target", target); }
+				doc.create_point_entity("script_origin", { centre.x + x, centre.y + y, height }, keys);
+			};
+
+			node(-reach, -reach, z, "heli_start", "heli_dest_1");
+			node(0, 0, z, "heli_dest_1", nullptr);
+			node(reach, -reach, z, "heli_loop_start", "heli_loop_1");
+			node(reach * 0.6, -reach * 0.6, z, "heli_loop_1", "heli_loop_2");
+			node(reach * 0.6, reach * 0.6, z, "heli_loop_2", "heli_loop_3");
+			node(-reach * 0.6, reach * 0.6, z, "heli_loop_3", "heli_loop_4");
+			node(-reach * 0.6, -reach * 0.6, z, "heli_loop_4", "heli_loop_1");
+			node(-reach, reach, z, "heli_leave", nullptr);
+			node(reach, reach, z, "heli_crash_start", "heli_crash_1");
+			node(reach * 0.5, reach * 0.3, low, "heli_crash_1", nullptr);
+			added++;
+		}
+
+		doc.deselect_all();
+		doc.end_transaction();
+
+		game::printf_to_console("[CoDOL] gameplay entities: %s%s added\n", !g.care_package ? "care package " : "", !g.heli ? "helicopter path " : "");
+		ImGui::Toast(ImGuiToastType_Success, "Gameplay entities", added ? "Added what the game's scripts ask of every map." : "Nothing added.");
+	}
+
 	// Build: the whole map zone from the .map alone ( codol_bsp ): collision, BSP, cells and portals, render
 	// geometry, light bake, and its load zone. For maps of your own; a map imported from the game only holds that
 	// map's collision brushes, so use "Compile map to a fastfile" for edits of a shipped map.
@@ -783,38 +922,73 @@ namespace editor::ui
 			return;
 		}
 
+		// what the scripts will miss: said before the build, it does not stop it
+		{
+			const auto g = inspect_gameplay(s.doc);
+
+			for (const auto& line : gameplay_problems(g))
+			{
+				game::printf_to_console("^3[CoDOL] build: %s\n", line.c_str());
+			}
+
+			if (!g.care_package || !g.heli)
+			{
+				game::printf_to_console("^3[CoDOL] build: Edit > Add gameplay entities puts the care package and the helicopter path in\n");
+			}
+		}
+
 		const auto map_file = s.map_file;
 		const std::string name = to_utf8(map_file.stem());
 		const auto out_dir = base_dir / "compiled";
 		std::filesystem::create_directories(out_dir / "cache", ec);
 
-		const auto out = out_dir / (name + ".ff");
-		const auto report = out_dir / (name + ".build.txt");
+		// The whole package ( tools\package_map.ps1 ): map zone with its minimap, load zone, level scripts, the files
+		// of the create-room list and INSTALL.txt, in compiled\<map>\. Without the script: the two zones alone.
+		const auto script = base_dir / "tools" / "package_map.ps1";
+		const auto assetc = base_dir / "codol_assetc.exe";
+		const bool package = std::filesystem::is_regular_file(script, ec) && std::filesystem::is_regular_file(assetc, ec) && exe.filename() == "C1.exe";
+		const auto assets_zone = assets::zone_file();
+		const bool with_assets = std::filesystem::is_regular_file(assets_zone, ec);
 
-		std::string command_line = "\"" + to_utf8(tool) + "\" --map \"" + to_utf8(map_file) + "\" --exe \"" + to_utf8(exe) + "\" --install \"" + to_utf8(install)
-			+ "\" --out \"" + to_utf8(out) + "\" --name " + name + " --report \"" + to_utf8(report) + "\" --cache \"" + to_utf8(out_dir / "cache") + "\"";
+		std::filesystem::path out, report;
+		std::string command_line;
 
-		// models and materials of the project
-		if (const auto assets_zone = assets::zone_file(); std::filesystem::is_regular_file(assets_zone, ec))
+		if (package)
 		{
-			command_line += " --assets \"" + to_utf8(assets_zone) + "\"";
+			const auto package_dir = out_dir / name;
+			out = package_dir / "zone" / (name + ".ff");
+			report = package_dir / "work" / (name + ".report.txt");
+
+			command_line = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + to_utf8(script) + "\" -Map \"" + to_utf8(map_file) + "\" -Name " + name
+				+ " -Out \"" + to_utf8(package_dir) + "\" -Game \"" + to_utf8(install) + "\" -Cache \"" + to_utf8(out_dir / "cache") + "\" -Bsp \"" + to_utf8(tool)
+				+ "\" -Assetc \"" + to_utf8(assetc) + "\"";
+
+			if (with_assets) { command_line += " -Assets \"" + to_utf8(assets_zone) + "\""; }
+			if (const auto picture = map_file.parent_path() / (name + "_load.png"); std::filesystem::is_regular_file(picture, ec)) { command_line += " -Loadscreen \"" + to_utf8(picture) + "\""; }
+			if (fast) { command_line += " -Fast"; }
 		}
-
-		if (fast)
+		else
 		{
-			command_line += " --fast";
+			out = out_dir / (name + ".ff");
+			report = out_dir / (name + ".build.txt");
+
+			command_line = "\"" + to_utf8(tool) + "\" --map \"" + to_utf8(map_file) + "\" --exe \"" + to_utf8(exe) + "\" --install \"" + to_utf8(install)
+				+ "\" --out \"" + to_utf8(out) + "\" --name " + name + " --report \"" + to_utf8(report) + "\" --cache \"" + to_utf8(out_dir / "cache") + "\"";
+
+			if (with_assets) { command_line += " --assets \"" + to_utf8(assets_zone) + "\""; }
+			if (fast) { command_line += " --fast"; }
 		}
 
 		busy = true;
 		game::printf_to_console("[CoDOL] building %s ..\n", name.c_str());
 		ImGui::Toast(ImGuiToastType_Info, "Build", ("Building " + name + " ..").c_str());
 
-		std::thread([command_line, out, report, name, base_dir]
+		std::thread([command_line, out, report, name, base_dir, package]
 		{
 			std::string output;
 			const int code = components::codol_game::run_command(command_line, to_utf8(base_dir), output);
 
-			components::codol_game::post_to_gui([code, output, out, report, name]
+			components::codol_game::post_to_gui([code, output, out, report, name, package]
 			{
 				busy = false;
 
@@ -831,8 +1005,17 @@ namespace editor::ui
 				}
 
 				game::printf_to_console("[CoDOL] built: %s ( and its _load zone )\n[CoDOL] report: %s\n", to_utf8(out).c_str(), to_utf8(report).c_str());
-				game::printf_to_console("[CoDOL] to play it: copy both .ff files into the game's zone folder ( client and server ) and start the lobby with CODOL_FORCE_MAP=%s\n", name.c_str());
-				ImGui::Toast(ImGuiToastType_Success, "Build", ("Built " + name + ": compiled\\" + name + ".ff").c_str(), 8000);
+
+				if (package)
+				{
+					game::printf_to_console("[CoDOL] package: compiled\\%s\\ - zones, level scripts, create-room list files; presence\\INSTALL.txt says where each file goes\n", name.c_str());
+				}
+				else
+				{
+					game::printf_to_console("[CoDOL] to play it: copy both .ff files into the game's usermaps\\%s\\ folder and start the lobby with CODOL_FORCE_MAP=%s\n", name.c_str(), name.c_str());
+				}
+
+				ImGui::Toast(ImGuiToastType_Success, "Build", ("Built " + name + ": " + to_utf8(out)).c_str(), 8000);
 			});
 		}).detach();
 	}
@@ -997,6 +1180,14 @@ namespace editor::ui
 
 		if (ImGui::MenuItem(undo_label.c_str(), "Ctrl+Z", false, open && doc.can_undo())) { undo(); }
 		if (ImGui::MenuItem(redo_label.c_str(), "Ctrl+Y", false, open && doc.can_redo())) { redo(); }
+		ImGui::Separator();
+
+		if (ImGui::MenuItem("Add gameplay entities", nullptr, false, open)) { add_gameplay_entities(); }
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("Adds what the game's scripts ask of every multiplayer map and the map does not have yet:\na care package with its collision ( airdrop ) and a helicopter path ( script_origins ).");
+		}
+
 		ImGui::Separator();
 
 		if (ImGui::MenuItem("Delete", "Backspace", false, any)) { delete_selection(); }
@@ -1204,6 +1395,13 @@ namespace editor::ui
 		command::register_command("map_build", [](args_t args)
 		{
 			if (need_map()) { build_map(args.size() > 1 && args[1] == "fast"); }
+		});
+
+		command::register_command("ed_gameplay", [](args_t)
+		{
+			if (!need_map()) { return; }
+			add_gameplay_entities();
+			for (const auto& line : gameplay_problems(inspect_gameplay(get_scene().doc))) { game::printf_to_console("^3still missing: %s\n", line.c_str()); }
 		});
 
 		command::register_command("map_close", [](args_t) { close_map(true); });

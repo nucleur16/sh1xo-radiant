@@ -42,15 +42,38 @@ needed. What it is made of:
 | CoD4 mod tools | here | what it does today |
 |---|---|---|
 | Radiant | `CoDOLRadiant.exe` | open a map of the install, edit entities / models / brushes in 3D and 2D views with undo, save as `.map` |
-| `cod4map` | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the map's fastfile: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. Incremental: it patches the shipped zone, it does not build a map from nothing. No light bake. |
+| `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce, light grid, reflection probes ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
+| editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. It patches the shipped zone; no light bake. |
 | Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials and models: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export` -> native assets in `mod\<map>\<map>_assets.ff`, shown by the editor at once. See [Your own assets](#your-own-assets). |
 | `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
 | script editing | Script Workbench, rcon reload | unchanged |
 
 Compiled fastfiles are unsigned ( `IWffu100` ); the signed form needs a key the client does not have. Per the notes
 in the install, the retail client only loads unsigned zones from disk with the `Kernel33.dll` patch; the dedicated
-server reads both. See `codol_mapc/README.md` for what has to be checked in the game first - none of the compiled
-output has been loaded in the game yet.
+server reads both. Maps built from scratch and edited shipped maps have both been loaded on the dedicated server and
+in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was checked where and what is still open.
+
+### A map of your own
+
+1. **File > New map**, a name like `mp_mymap`. It is saved as `map_source\mp_mymap.map`.
+2. Draw the map: brushes, terrain patches, `misc_model`s, lights, `reflection_probe`s, spawn points
+   ( `mp_dm_spawn`, `mp_tdm_spawn_*` .. ), one `mp_global_intermission`, `node_pathnode`s for bots. The map has to be
+   closed ( no way from an entity to the void ) or stand in a sky box; the build reports a leak with its position.
+3. **Edit > Add gameplay entities** adds what the game's scripts ask of every multiplayer map and the map does not
+   have yet: the care package with its collision ( without it `_airdrop.gsc` throws a script error at every map
+   start ) and a helicopter path ( `heli_start`, `heli_loop_start` .. ). The build names what is missing.
+4. **File > Build map** ( or "fast" while you work on the layout ). The result is a package in `compiled\<map>\`:
+
+   | | |
+   |---|---|
+   | `zone\<map>.ff`, `zone\<map>_load.ff` | the map zone ( with the minimap material `compass_map_<map>` ) and its load zone; a picture `map_source\<map>_load.png` becomes the loading screen |
+   | `scripts\maps\mp\<map>.gsc` ( + `_fx`, `createfx` ) | the level script for the dedicated server's script folder |
+   | `presence\` | the row, arena entry and name for the create-room list, and `INSTALL.txt`: where every file goes |
+   | `work\<map>.report.txt` | what the compiler did: counts, timings, warnings |
+
+   Materials and models of the map's asset project ( next section ) are taken into the zone.
+
+Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
 where the work goes.
 
@@ -96,7 +119,8 @@ right away and is applied like any other ( browser, `tex_set` ). A model is plac
 * A model of the project that an entity uses - a `misc_model` ( static ) or any other class ( `script_model` .. ) -
   is copied into the map zone with its materials and images ( "entity models / static models: xmodel .. taken from
   zone .." in the report ).
-* **New world materials are not drawn in the game.** The incremental compiler draws new faces only with materials
+* **New world materials are not drawn in the game by Compile map** ( File > Build map draws them: the material, its
+  images and technique set go into the built zone ). The incremental compiler draws new faces only with materials
   that the world of the base map already uses; faces with any other material collide but are invisible. The Assets
   window says so next to every such material, and the compile lists the faces - before it runs and with the
   compiler's report - in the console, in a toast and in the Assets window ( "Last compile: not in the game" ).
@@ -125,20 +149,23 @@ definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import wi
 
 Be aware of these before planning work around this branch:
 
-- **No way back into the game for geometry.** A shipped map can be opened and edited, but nothing
-  compiles a `.map` into a 1.1.1.13 map zone, so edits to brushes and static models stay in radiant;
-  only entity edits reach the game (see [Map Entities](#map-entities)). The chain that could do it is
-  `cod4map` / `cod4rad` -> `linker_pc` -> an IW3 to IW4 map converter -> IW4x zonebuilder ->
-  AssetExplorer `iw4-port`. Everything except the IW3 to IW4 converter (iw3x-port) is on this
-  machine.
-- **The native viewport is a viewer so far.** It shows the shipped map from its fastfile, not the edited `.map`: no picking, no selection, and edits made in radiant do not appear in it. It has no fog, no spot/omni shadow maps, no post effects, no skinning or animation. Radiant's own 3D window is still the CoD4 renderer and only draws CoD4 assets.
-- **The editor still runs inside CoD4 radiant.** `iw3r.dll` is loaded by `IW3xRadiant.exe` (a patched `CoD4Radiant.exe`) and needs a CoD4 mod tools root to start. The native libraries and their tools (`codol_zonetool`, `codol_viewtool`, `codol_mapconv`) do not.
-- **Brush texture alignment is not recovered.** Sides get the right material but a default
-  projection (`64 64 0 0 0 0`), so textures are scaled and shifted differently than in the game.
-- **Only brush geometry is imported.** Terrain, patches and decals exist in the game as render
-  surfaces without a brush; they are not in the imported map.
+- **Maps of your own: lighting is simpler than the game's own maps.** `light` entities are baked, they are not
+  dynamic primary lights; dynamic sun shadows are untested; no T-junction repair. See "Limits" in
+  `codol_bsp/README.md`.
+- **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
+  players do not: put clip brushes around models.
+- **No animations, sounds or effects of your own.** `codol_assetc` builds images, materials and models. A map can
+  place the game's effects and sounds ( `script_fx`, `script_sound` ), it cannot bring new ones.
+- **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
+  of deleted brushes and does not re-bake light. For that, build the map from scratch.
+- **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;
+  terrain, patches and decals of a shipped map exist only as render surfaces and are not in the imported `.map`.
+- **The create-room list is not installed for you.** The build writes the files; `presence\INSTALL.txt` says which
+  script of the install takes them in. `CODOL_FORCE_MAP=<map>` on the lobby plays a map without the list.
 - **Entity overrides are mp only.** The server applies `<map>.d3dbsp.ents` in mp matches; co-op and
   zombies compose their own entities.
+- The sections below this one describe the radiant plugin ( `iw3r.dll` in CoD4 radiant ), which the standalone
+  editor replaces; the Script Workbench and the game bridge are the same code in both.
 
 ## Setup
 

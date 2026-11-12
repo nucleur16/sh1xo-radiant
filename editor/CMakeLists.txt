@@ -113,3 +113,8 @@ set_target_properties(codol_bsp_tool PROPERTIES
 	RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
 	RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/Debug)
 add_dependencies(CoDOLRadiant codol_bsp_tool)
+
+# Build map runs the packaging script ( minimap material, load zone, level scripts, list files ) from tools\ next to the exe
+add_custom_command(TARGET CoDOLRadiant POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:CoDOLRadiant>/tools
+	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ROOT}/codol_bsp/tools/package_map.ps1 $<TARGET_FILE_DIR:CoDOLRadiant>/tools/package_map.ps1)
