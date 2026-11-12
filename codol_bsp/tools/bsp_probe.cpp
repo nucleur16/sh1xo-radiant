@@ -9,6 +9,8 @@
 //   codol_bsp_probe lights <zone.ff> <C1.exe> [out dir]                  the primary lights with what hangs on each, the light definitions and their strips
 //   codol_bsp_probe lightcuts <zone.ff> <C1.exe> [edges]                 how surfaces are cut by the primary lights: seams between surfaces of one material and plane
 //   codol_bsp_probe lightat <zone.ff> <C1.exe> x y z                     what the lit shader reads at a point of the world
+//   codol_bsp_probe techsets <zone.ff> <C1.exe> [text]                   the lit technique slots of the technique sets: plain / shadowed, sun / spot / omni
+//   codol_bsp_probe hullplanes <zone.ff> <C1.exe> [list]                 the further axes of the light regions' hulls by kind: diagonal, cone, through the light ( and a portal edge )
 //   codol_bsp_probe ents <zone.ff> <C1.exe> [text]                       the entities whose text holds text
 //   codol_bsp_probe patchworld <zone.ff> <C1.exe> <out.ff> <size> <offset>=<hex> ..   a copy with GfxWorld header bytes changed ( experiments )
 
@@ -60,6 +62,244 @@ int main(int argc, char** argv)
 		}
 		std::printf("%s\n", ok ? "valid" : "INVALID");
 		return ok ? 0 : 1;
+	}
+	if (mode == "techsets")
+	{
+		// codol_bsp_probe techsets <zone.ff> <C1.exe> [text] [out dir]: the lit technique slots of every technique set
+		// ( whose name holds text ) - lit, sun, spot, omni, each plain and with the light's shadow map - with the
+		// technique's name and the code samplers ( type 4 ) of its first pass: 6 is the sun's shadow map, 7 the spot /
+		// omni light's. With an out dir the byte code of the first pass' shaders is written there ( D3DDisassemble
+		// reads it ): <set>__t<slot>__vs|ps_<name>.bin
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		const std::string filter = argc > 4 ? argv[4] : "";
+		const std::string shader_dir = argc > 5 ? argv[5] : "";
+		const auto save_shader = [&](const std::string& file, const zone::zaddr shader)
+		{
+			if (shader_dir.empty() || !shader)
+			{
+				return;
+			}
+			const c1::MaterialShader s = z.get<c1::MaterialShader>(shader);
+			if (!s.program || !s.programSize)
+			{
+				return;
+			}
+			const std::vector<std::uint32_t> code = z.get_array<std::uint32_t>(s.program, s.programSize);
+			if (std::FILE* f = std::fopen((shader_dir + "/" + file + "_" + std::string(z.c_string(s.name)) + ".bin").c_str(), "wb"))
+			{
+				std::fwrite(code.data(), 4, code.size(), f);
+				std::fclose(f);
+			}
+		};
+		for (const zone::AssetRecord& record : z.all_assets())
+		{
+			if (record.type != c1::ASSET_TYPE_TECHNIQUE_SET)
+			{
+				continue;
+			}
+			zone::TechniqueSetView set;
+			if (!zone::read_techset(z, record.header, set) || set.isReference || std::string(set.name).find(filter) == std::string::npos)
+			{
+				continue;
+			}
+			std::printf("%s\n", std::string(set.name).c_str());
+			for (const int slot : { 10, 12, 14, 16, 18, 20, 22 })
+			{
+				const zone::zaddr at = set.raw.techniques[slot];
+				if (!at)
+				{
+					std::printf("   %2d -\n", slot);
+					continue;
+				}
+				const c1::MaterialTechnique tech = z.get<c1::MaterialTechnique>(at);
+				std::printf("   %2d %-44s passes %u; code samplers:", slot, std::string(z.c_string(tech.name)).c_str(), tech.passCount);
+				const c1::MaterialPass& pass = tech.passArray[0];
+				const std::size_t count = static_cast<std::size_t>(pass.perPrimArgCount) + pass.perObjArgCount + pass.stableArgCount;
+				if (pass.args && count)
+				{
+					for (const c1::MaterialShaderArgument& a : z.get_array<c1::MaterialShaderArgument>(pass.args, count))
+					{
+						if (a.type == 4)
+						{
+							std::printf(" s%u=%u", a.dest, a.value);
+						}
+					}
+				}
+				if (pass.pixelShader)
+				{
+					std::printf("; ps %s", std::string(z.c_string(z.get<zone::zaddr>(pass.pixelShader))).c_str());
+				}
+				if (pass.vertexShader)
+				{
+					std::printf("; vs %s", std::string(z.c_string(z.get<zone::zaddr>(pass.vertexShader))).c_str());
+				}
+				save_shader(std::string(set.name) + "__t" + std::to_string(slot) + "__ps", pass.pixelShader);
+				save_shader(std::string(set.name) + "__t" + std::to_string(slot) + "__vs", pass.vertexShader);
+				std::printf("\n");
+			}
+		}
+		return 0;
+	}
+	if (mode == "hullplanes")
+	{
+		// codol_bsp_probe hullplanes <zone.ff> <C1.exe> [list]: what the further axes of the light regions' hulls are.
+		// Per axis: a diagonal of the cube; a plane that touches the light's cone ( its direction makes the angle
+		// 90 degrees - half the cone with the beam ); a plane THROUGH THE LIGHT ( its range starts or ends at 0 ) - and
+		// of those, the ones that hold an edge of a portal of the world ( both ends within a unit of the plane ).
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		struct light_region
+		{
+			std::uint32_t hullCount, hulls;
+		};
+		struct region_hull
+		{
+			float mid[9], half[9];
+			std::uint32_t axisCount, axis;
+		};
+		struct region_axis
+		{
+			float dir[3], mid, half;
+		};
+		struct com_world
+		{
+			std::uint32_t name;
+			std::int32_t isInUse;
+			std::uint32_t count, lights;
+		};
+		struct com_light
+		{
+			std::uint8_t type, canUseShadowMap, exponent, unused;
+			float color[3], dir[3], origin[3], radius, cosHalfFovOuter, cosHalfFovInner, cosHalfFovExpanded, rotationLimit, translationLimit;
+			std::uint32_t defName;
+		};
+		const c1::GfxWorld& h = world.raw;
+		std::uint32_t pointers[10];
+		std::memcpy(pointers, h._unk416, sizeof(pointers));
+		std::vector<light_region> regions;
+		if (pointers[9])
+		{
+			regions = z.get_array<light_region>(pointers[9], h.primaryLightCount);
+		}
+		std::vector<com_light> lights;
+		if (const zone::zaddr at = zone::first_asset(z, c1::ASSET_TYPE_COMWORLD))
+		{
+			const com_world com = z.get<com_world>(at);
+			lights = z.get_array<com_light>(com.lights, com.count);
+		}
+		// every edge of every portal
+		struct edge
+		{
+			float a[3], b[3];
+		};
+		std::vector<edge> edges;
+		std::size_t portal_count = 0;
+		for (const auto& cell : world.cells)
+		{
+			for (const c1::GfxPortal& p : cell.portals)
+			{
+				const std::vector<float> v = z.get_array<float>(p.vertices, 3u * p.vertexCount);
+				portal_count++;
+				for (std::size_t k = 0; k + 2 < v.size(); k += 3)
+				{
+					const std::size_t n = (k + 3) % v.size();
+					edges.push_back({ { v[k], v[k + 1], v[k + 2] }, { v[n], v[n + 1], v[n + 2] } });
+				}
+			}
+		}
+		const bool list = argc > 4;
+		int hulls = 0, first_hulls = 0, axes = 0, diagonal = 0, cone = 0, through = 0, through_edge = 0, other = 0, with_edge_first = 0, with_edge_further = 0;
+		for (std::size_t l = 0; l < regions.size() && l < lights.size(); l++)
+		{
+			if (!regions[l].hullCount)
+			{
+				continue;
+			}
+			const com_light& c = lights[l];
+			const std::vector<region_hull> hs = z.get_array<region_hull>(regions[l].hulls, regions[l].hullCount);
+			for (std::size_t k = 0; k < hs.size(); k++)
+			{
+				hulls++;
+				first_hulls += k == 0;
+				bool hull_has_edge = false;
+				if (!hs[k].axisCount || !hs[k].axis)
+				{
+					continue;
+				}
+				for (const region_axis& ax : z.get_array<region_axis>(hs[k].axis, hs[k].axisCount))
+				{
+					axes++;
+					const float d[3] = { std::fabs(ax.dir[0]), std::fabs(ax.dir[1]), std::fabs(ax.dir[2]) };
+					const float along = ax.dir[0] * c.dir[0] + ax.dir[1] * c.dir[1] + ax.dir[2] * c.dir[2];	// with the way back along the beam
+					const float sine = std::sqrt(std::max(0.0f, 1.0f - c.cosHalfFovOuter * c.cosHalfFovOuter));
+					const bool starts_at_light = std::fabs(ax.mid - ax.half) < 0.51f || std::fabs(ax.mid + ax.half) < 0.51f;
+					const char* kind = "other";
+					int edge_hit = -1;
+					if (std::fabs(d[0] - 0.57735f) < 0.002f && std::fabs(d[1] - 0.57735f) < 0.002f && std::fabs(d[2] - 0.57735f) < 0.002f)
+					{
+						diagonal++;
+						kind = "diagonal";
+					}
+					else if (c.type == 2 && starts_at_light && std::fabs(-along - sine) < 0.004f)
+					{
+						cone++;
+						kind = "cone";
+					}
+					else if (starts_at_light)
+					{
+						through++;
+						kind = "through the light";
+						for (std::size_t e = 0; e < edges.size() && edge_hit < 0; e++)
+						{
+							float da = 0, db = 0, len = 0;
+							for (int a = 0; a < 3; a++)
+							{
+								da += ax.dir[a] * (edges[e].a[a] - c.origin[a]);
+								db += ax.dir[a] * (edges[e].b[a] - c.origin[a]);
+								len += (edges[e].a[a] - edges[e].b[a]) * (edges[e].a[a] - edges[e].b[a]);
+							}
+							if (std::fabs(da) < 1.0f && std::fabs(db) < 1.0f && len > 16.0f)
+							{
+								edge_hit = static_cast<int>(e);
+							}
+						}
+						if (edge_hit >= 0)
+						{
+							through_edge++;
+							hull_has_edge = true;
+							kind = "through the light and a portal edge";
+						}
+					}
+					else
+					{
+						other++;
+					}
+					if (list)
+					{
+						std::printf("light %zu hull %zu: axis ( %.3f %.3f %.3f ) range %.1f .. %.1f: %s\n", l, k, ax.dir[0], ax.dir[1], ax.dir[2], ax.mid - ax.half, ax.mid + ax.half, kind);
+					}
+				}
+				(k == 0 ? with_edge_first : with_edge_further) += hull_has_edge;
+			}
+		}
+		std::printf("%zu portals with %zu edges; %d hulls ( %d first hulls of a light, %d further ), %d further axes: %d diagonals, %d cone planes, %d planes through the light"
+			" ( %d of them hold a portal edge ), %d other; hulls with a portal edge plane: %d first, %d further\n", portal_count, edges.size(), hulls, first_hulls,
+			hulls - first_hulls, axes, diagonal, cone, through, through_edge, other, with_edge_first, with_edge_further);
+		return 0;
 	}
 	if (mode == "portals")
 	{

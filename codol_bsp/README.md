@@ -33,7 +33,11 @@ compiler: surfaces are cut by the reach of the primary lights, light regions hav
 planes, lights can be scriptable, every light definition of the install can be named, T-junctions are repaired -
 and it settled two open questions in the client: a primary spot **does** throw the shadows of players and script
 models ( shadow map, seen on a compiled map ), and a project's loaded sounds **do** play ( measured at the client's
-audio session ) while its streamed ones do not. What is approximate or missing is listed under
+audio session ) while its streamed ones do not ( they do since the sixth round ). The **seventh round**
+( [Seventh round](#seventh-round-omni-shadows-lights-that-move-doorways-coloured-bounce) ): an omni light's shadows
+of players and models are there - inside the light's cone, which is what the shaders read; lights a script moves
+or turns own what they can reach; light regions have planes through doorways; a floor under several rooms is lit at
+run time in each; bounced light has the colour of the materials. What is approximate or missing is listed under
 [Limits](#limits-and-what-is-not-done).
 
 ## Build
@@ -354,9 +358,16 @@ So the bake computes in linear light and writes what the game reads:
   through: the bake does not read the material's picture, and the solid block of shadow the yard's chain link fence
   threw in the client was the worse mistake. Such a brush gets its shadow from the game's sun shadow map.
 * **Bounced light**: every luxel sends 24 cosine weighted rays ( 12 / 48 ) over its side and takes what the luxels
-  they end on throw back - half of what arrives there ( direct light and the sun's share; the images of the materials
-  are not read: a grey world with a reflectivity of 0.5 ). One bounce, two at `--quality 2`. Shadowed faces are no
-  longer black.
+  they end on throw back: what arrives there ( direct light and the sun's share ) times what the material reflects.
+  That is the **mean of the material's colour map** - of the squares of its texels, since the lit shaders square the
+  colour map - times 2 x `radiosityscale`: a picture of mid grey ( 128 ) throws back half, which every surface did
+  until the seventh round ( `ch_concrete_05_col` comes to 0.248 0.239 0.236, almost exactly that ); a red wall
+  throws red light, a dark one little. The picture is read natively ( `material_color.cpp` ):
+  `images/<name>.iwi` out of the install's image archives in any of its formats, the wavelet coded ones included,
+  or the pixels in a project's zone; the means of streamed pictures are kept in `codol_bsp_matcolor.txt` next to
+  the catalog. The report says how many materials had a picture ( `light: bounced light takes the colour of 6 of 6
+  materials` ). `CODOL_BSP_GREY_BOUNCE=1` compiles the grey world to compare with. One bounce, two at
+  `--quality 2`. The light grid, the reflection probes and the minimap picture see the same coloured scene.
 * **Light entities** are baked unless they are primary lights ( [Primary lights](#primary-lights) ).
 * **Light grid**: a sample at every grid point ( 32 x 32 x 64 units ) that is not inside a brush. A sample is what
   arrives from all around ( the sky directions: sky colour, or what the luxel the ray ends on throws back; the light
@@ -395,10 +406,11 @@ part counts as 1 ( `0.1 0.1 0.1` is white ), as radiant's light entity says and 
 | `suncolor`, `sunlight` | `1 0.95 0.85`, `1.3` | hue and brightness of the sun ( the shipped maps: 1.15 .. 1.6 ). `sunlight 0`: no sun |
 | `ambient`, `_color` | `0.1`, `1 1 1` | brightness and hue of light that is everywhere, also in a closed room ( shipped: 0.01 .. 0.2 ) |
 | `skylight`, `skycolor` | `0.4`, `0.8 0.9 1` | light of the sky dome: a surface that sees the whole sky receives half of it ( measured on mp_vacant's sun lit surfaces ) |
+| `radiosityscale` | `1` | how strong bounced light is ( the shipped maps: 0.8 .. 1.7 ); 0.1 .. 4 |
 
 A worldspawn without any of them gets the defaults. ( Until the fourth round it got **nothing**: a key that was
 missing was read as 0 - no sun, no sky, no ambient light. ) Not read: `diffusefraction`, `sundiffusecolor`,
-`radiosityscale`, `sunradiosity`, `maxbounces`, `contrastgain`.
+`sunradiosity`, `maxbounces`, `contrastgain`.
 
 **light** ( radiant's light entity ):
 
@@ -408,9 +420,9 @@ missing was read as 0 - no sun, no sky, no ambient light. ) Not read: `diffusefr
 | `radius` | `600` | where the light ends. Radiant's own default is 200, which leaves a room of 512 units dark at the walls |
 | `intensity`, `_color` | `1`, `1 1 1` | brightness at the light, and hue |
 | `spawnflags` | `0` | 1 `PRIMARY_OMNI`, 2 `PRIMARY_SPOT`: a primary light; 4 `PRIMARY_SCRIPTABLE`: a primary light a script can change ( below ); 8 `PRIMARY_NOSHADOWMAP` |
-| `maxturn`, `maxmove` | `0`, `0` | of a scriptable light: how far ( degrees, units ) a script may turn and move it. They become the record's rotation limit ( the cosine ) and translation limit |
+| `maxturn`, `maxmove` | `0`, `0` | of a scriptable light: how far ( degrees, units ) a script may turn and move it. They become the record's rotation limit ( the cosine ) and translation limit, widen the record's "expanded" cone, and make everything the light could reach then its own ( below, "Lights that move or turn" ) |
 | `target` or `angles` | straight down | where a spot points: at the entity with that `targetname` ( the cone is then a circle of 64 units around it ), or along the angles |
-| `fov_outer`, `fov_inner` | 90, 0 ( primary omni: 120, 60 ) | the cone of a spot, in degrees. A light with `fov_outer` ( or a target ) is a spot also when it is only baked |
+| `fov_outer`, `fov_inner` | 90, 0 ( primary omni: 120, 60 ) | the cone of a spot, in degrees. A light with `fov_outer` ( or a target ) is a spot also when it is only baked. For a **primary omni** light the cone is where players and models throw shadows ( "Omni lights and their shadows" ): it points straight down unless `angles` or a `target` aim it |
 | `exponent` | `0` | the fade from `fov_inner` to `fov_outer`: 0 a hard edge, 1 linear, higher steeper - as the game's spot shader has it |
 | `def` | `light_point_linear` | the light definition: the falloff picture. Any definition a zone of the install has ( below ); a name none has is reported and replaced |
 
@@ -464,8 +476,10 @@ is written the same way:
 
 * **ComWorld record**: type 2 ( spot ) / 3 ( omni ), `canUseShadowMap` ( 0 with `PRIMARY_NOSHADOWMAP` or a cone
   over 120 degrees ), exponent, colour, the way back along the beam, origin, radius, the cosines of the half cone
-  angles ( the "expanded" one equals the outer, as in every shipped light ), rotation limit 1, translation limit 0,
-  the definition's name. An omni light has a cone too ( it places the shadow map ): 120 / 60 degrees downwards.
+  angles, rotation limit 1, translation limit 0, the definition's name. The "expanded" cone equals the outer one
+  for every shipped light that may not turn; it is the outer cone widened by `maxturn` ( four lights of
+  zm_asylum_sh with `maxturn 360`: -1 ). An omni light has a cone too - its shadow map: 120 / 60 degrees
+  downwards unless the map says otherwise.
 * **the light definitions** ( [Light keys](#light-keys) ): sampler state 0x62, `lmapLookupStart` 1, 35, 69 .., and
   per definition its falloff in row 0 of every lightmap page: the texel before the strip a copy of the first
   value, 32 texels of curve, a copy of the last.
@@ -480,6 +494,12 @@ is written the same way:
   only inside it. The primary lightmap of a surface is its light's visibility; what the other primary lights and
   the sun send to it is baked into the secondary lightmap like any light entity's. The game's compiler cuts along
   the pieces its BSP leaves of a face, not along a grid - the seams are elsewhere, the rule is the same.
+  Since the seventh round the cut has two steps: a block of the grid in which more than one light wins squares
+  ( the sun, light entities ) is split along the grid line that separates them best, down to two squares - squares
+  nothing reaches do not count -, and a block that is one light entity's is then cut around what the light wins.
+  Before, a face was cut once around all a light wins and each block went to whatever had most of its squares,
+  unlit ones included: **one floor brush under two rooms and a corridor, lit in one room, went to "nothing" as a
+  whole and was not lit at run time at all** ( the test map `door_light` ).
 * **light grid entries** and **static models** name the primary light that gives their place the most light.
 * **shadow geometry**: per light entity the surfaces that name it, ascending, and the static models that do ( the
   shipped lists hold exactly those; the suns list models and no surfaces ).
@@ -493,8 +513,16 @@ is written the same way:
   along one ( mp_vacant's light 2: six axes of exactly that form with ranges 0 .. 200 = its radius ). The compiler
   takes of these twelve the ones that cut the most off the volume the nine ranges enclose. The game uses the
   region to decide which entities a light's shadow map holds and which light lights a moving model
-  ( `C1.exe` 0xA858D0: a box outside every hull of a light is not drawn into its shadow map ). Not made: the
-  planes through the light and the edges of a doorway some shipped hulls have.
+  ( `C1.exe` 0xA858D0: a box outside every hull of a light is not drawn into its shadow map ).
+  **Planes through the light and an edge of a portal** ( seventh round ): what a light sends through a doorway lies
+  inside the planes through the light and the doorway's edges. `codol_bsp_probe hullplanes` counts them in the
+  shipped hulls: mp_highrise has 63 axes whose range starts at the light, 15 of them hold a portal edge
+  ( mp_nuked 16 / 8, zm_asylum_sh 79 / 27 ), nearly all in hulls of cells the light is not in ( 10 of 67, 6 of
+  18, 21 of 60 such hulls have one ). Here: the edges of the portals nearest to the light are twenty more
+  candidates; a hull of a cell the light is not in takes those that cut the most, with a range that starts at the
+  light. A hull holds what lies in *its* cell - also of a face that several cells draw. Most of the other axes
+  of the shipped hulls are directions of the map's walls ( mp_nuked: 0.940 -0.342 0 and its like ); those are not
+  made.
 * the header: `primaryLightCount`, the entity shadow visibility array ( run time ).
 
 In the client ( `shots\c4spot_a`, `c4spot_b`, `c4side_a`, `c4side_c`, `c4omni_b` ): the spot's cone on floor and
@@ -524,6 +552,65 @@ compiled map gets them:
 The round before looked for the shadow of the player himself, standing in the beam. There is none: the first
 person view has no body, in the spot's light as in the sun's ( `c5side_beam`; third round `cv9_3` ). On shipped
 mp_vacant nothing was looked at again.
+
+**Omni lights and their shadows** ( seventh round ). The client does shadow omni primary lights - with a shadow map
+that looks along the light's direction through its cone, like a spot's:
+
+* *The code.* A light gets a shadow map when its record says `canUseShadowMap` and the setting `1602` is on; the
+  type is not asked ( 0xA85330 ). The map's view is `-dir` with the outer cone as its field of view, clamped to a
+  cosine of 0.001 .. 0.999 ( 0xABD540 ). The technique of a surface is picked from a table of seven per kind -
+  none, sun, spot, omni, sun + shadow, spot + shadow, omni + shadow ( written at 0xAB71C0: slots 10 12 16 20 14 18
+  22 ) - by the light's type, + 3 when it has a shadow map this frame ( 0xAB7400 ).
+* *The shader.* `codol_bsp_probe techsets <zone> <exe> [name] [out dir]` lists the lit slots of the technique
+  sets and writes their byte code. Slot 22 of `wc_l_hsm_r0c0n0s0` is `lm_hsm_omni_..`, which reads the spot shadow
+  map ( code sampler 7 ) - in the shipped zones and in a compiled one alike. Its pixel shader takes
+  `lerp( primary lightmap, shadow map, cone x lightSpotFactors.w )` as the light's visibility, the cone being
+  `saturate( dot( to the light, lightSpotDir ) x factors.x + factors.y )`: 1 inside the inner angle, 0 outside the
+  outer one. ( The spot's shader has `lerp( lightmap, shadow map, factors.w )` and multiplies the light with the
+  cone. ) **So under an omni light players and models throw shadows only inside the cone of its record, at full
+  strength inside the inner angle; outside the cone the baked visibility stands alone.** The light itself is
+  not touched by the cone ( `lm_omni_..` does not read it ).
+* *The shipped maps* ( `codol_bsp_probe lights` over all of them ). 279 omni primary lights in 21 maps, 155 with
+  `canUseShadowMap`. Their cones: 120 / 60 degrees for 114 of them ( the game compiler's default ), 90 / 60 for
+  53, 90 / 30 for 18, 120 / 80 for 13, the rest between 60 and 122 degrees wide with inner angles from 0 to
+  110; nearly all look straight down.
+* *In the client* ( `mp_c7omni`: the room, one omni light 215 units above the middle ). Script models hung at four
+  distances, the darkness of the floor under each against the same view without them: with the default cone
+  ( 120 / 60 ) 0.47 under the lamp, 0.79 at 200 units, 0.93 at 280, nothing at 370; with `fov_inner 105` it is
+  0.44, 0.54, 0.74, nothing ( `c7omni_g_boxes`, `c7omni_h_boxes`, `round7\rects.py` ). Bots: a bot's long shadow on the
+  floor beside the hanging cases ( `c7omni_mix2` ), a faint one further out ( `c7omni_bots3_crop` ). The sixth
+  round's lamp had this cone too, a floor close to white under it and bots mostly further out: their shadows were
+  the faint ones.
+
+The default cone of an omni light stays the game's: 120 / 60 degrees, straight down. A mapper who wants full
+shadows further out sets `fov_inner` ( up to `fov_outer`; over 120 degrees a light gets no shadow map ), one who
+wants them elsewhere aims the light ( `angles`, `target` ); what lies outside the cone has no shadows of moving
+things, whatever the map does - a spot is the light for that. The editor's Light section says where the cone is.
+
+**Lights that move or turn** ( `spawnflags 4` with `maxmove` / `maxturn`; seventh round ). Measured over every map
+of the install ( `codol_bsp_probe lights`, 1033 spot and omni lights in 40 maps ): **no light has a translation
+limit**; the only limits other than 1 / 0 are four red rotating lights of zm_asylum_sh ( `maxturn 360`,
+`spawnflags 12` ): rotation limit -1, an "expanded" cone of -1, and 193 to 571 surfaces each that name them - all
+around, not only in the cone they were compiled with - with hulls as wide as their radius. So:
+
+* the record's expanded cone is the outer cone widened by `maxturn` ( the client tests what a light's shadow map
+  holds against it: 0xA86280, 0xA858D0 );
+* **what such a light could reach in some position a script may give it, and no light reaches as the map is
+  compiled, is its own**: the squares of a face ( the cut ), surfaces, light grid points, static models, the
+  region's hulls, the shadow geometry. "Could reach": the falloff at the distance less `maxmove`, inside the cone
+  widened by `maxturn` whose tip is pulled back so far that it holds the cone of every position. The baked
+  visibility ( primary lightmap ) is the one from where the light was compiled.
+* Seen in the client ( `mp_c7lamp`, the sixth round's two lamps, the first with `maxmove 300` ): moved 250 units by
+  `.origin`, its pool is a whole circle ( `c7lamp_6_moved` ); in the sixth round it ended at the edge of the
+  surfaces that named it ( `c6lamp_11_move` ).
+* **How scripts move a light.** The game's own scripts do it three ways: `moveTo` / `rotateTo` on the light
+  ( `maps\invasion_fx.gsc`, "these numbers less than half of maxmove, and maxturn values" ), a new `.origin` every
+  frame ( the chandelier of `maps\dcemp_endpart_code.gsc` ), and `linkTo` a mover ( `common_scripts\_elevator.gsc`:
+  "append primary light(s) as children of elevator moving body" ). On the test server ( `codol_dedrun` ) only
+  `.origin` works: `moveTo` ends with the script error `entity 87 is not a script_brushmodel, script_model,
+  script_origin, or light` and `linkTo` with `entity (classname: 'light_spot') does not currently support
+  linkTo` - its checks know the class `light`, and the lights of this game are `light_spot` / `light_omni`. That
+  is the server's; a level script that sets `.origin` in a loop moves the light.
 
 What is missing compared to the game's compiler is listed under [Limits](#limits-and-what-is-not-done).
 
@@ -601,7 +688,7 @@ Every compile ends with `validate_zone` and writes nothing when it fails:
   list exists.
 * The stages check themselves: leaf centres against their portals, lightmap charts do not overlap.
 
-`codol_bsp_tests` ( 411 checks with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
+`codol_bsp_tests` ( 523 checks with `--assets`, 476 without, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
 per map: validation, the zone read by `codol_zone` and written again is byte identical, tree walk == brute force on
 3000 random segments ( `clip_trace` ), `codol_edit::import_fastfile` of the compiled zone gives back the map's brushes;
 box room: traces hit floor, wall, ceiling, crate, stacked crates where the map has them; two rooms: 3 cells, 4
@@ -628,7 +715,13 @@ curve below the linear one; the picture of the second definition as an image of 
 from `maxturn` / `maxmove`; the entity with `"pl#" "3"` in the entity string and no other light; a hull with one to
 eight unit axes that holds the floor under the light and not a point beside the cone ); a definition no zone has is
 replaced with a warning; and T-junctions - counted on the zones of the box room, the two rooms, the content and
-the terrain map and the two spots: none, while the two spots compiled without the repair have some.
+the terrain map and the two spots: none, while the two spots compiled without the repair have some. Since the
+seventh round: the omni light's default cone and one of its own; the expanded cone of a light that may turn; a lamp that may move
+300 units or turn all around against the same lamp fixed ( which floor names it, what its region holds, lit texels
+in the primary lightmap where only the moved lamp reaches ); a light that shines through two doorways ( one floor
+brush under all three cells names it in each, three hulls, planes through the light in the hulls of the other
+cells and none in its own, a point beside the beam outside the region ); bounced light ( warm in a room of warm
+materials, white in the grey world, stronger with `radiosityscale` ).
 
 `codol_mapc` `check_server_collision` reads the terrain as the server's decoder does ( partition ranges, vertex
 blocks, border runs, AABB tree nodes ); the shipped maps pass it.
@@ -783,6 +876,7 @@ below: the entries have to be deflated and the server has to have the archive to
 
 Not looked at in the client this round: a scriptable light changed by a script, the other light definitions
 ( only `light_point_quadratic` ), an omni light's shadows, terrain borders ( nothing changed there ).
+( The first three were looked at in the sixth and seventh round. )
 
 ### Sixth round: streamed sounds, edited shipped maps, scripted light
 
@@ -879,6 +973,7 @@ the crates throw their baked shadows. The frame has a shadow map pass - 172 draw
 1024 x 2048 depth buffer ( `c6omni_stats` ) - so the bots are drawn into the light's shadow map. **A shadow of a bot
 on the floor was not made out** in fourteen pictures from two places ( the floor under the light is close to white
 there ). So an omni light's shadows of players are still not shown; under a spot they are ( fifth round ).
+( **Found in the seventh round**: the shadows are there inside the light's cone, and this lamp's was narrow. )
 
 **The create-room list.** `round6\list_build.ps1`: the editor builds the box room as `mp_c6list` and installs it
 with `list` into the test client, whose `client_shipRetail\patch\codol_common.ff` is made a real copy first ( it
@@ -904,6 +999,40 @@ New in the harness: `put_zone.ps1`, `put_iwd.ps1`, `make_base.ps1` ( `main\` as 
 click in the client's menus with a picture ), `views.ps1`, `dvar_shots.ps1`, `snd_sequence.ps1`, `change_map.ps1`,
 `serve_map.ps1`, `serve_package.ps1`, `serve_stock.ps1`, `editor_mapc.ps1`, `editor_fx.ps1`, `list_build.ps1`. After
 every run `stop_all.ps1` was seen to have taken the frame dump dll out of the test client's folder.
+
+### Seventh round: omni shadows, lights that move, doorways, coloured bounce
+
+The same harness; what is new is under `tests/harness/round7/`: a level script that takes commands through a dvar
+( `overlay\maps\mp\c7_view.gsc`: the player to a place *with his view angles* - this server's `setviewpos` keeps
+the angles -, script models that throw shadows, a light's `.origin` / `moveTo` / `linkTo` ), `c7.ps1` ( steps and
+pictures ), `go.ps1` ( another map without restarting anything: the server takes a new script folder over rcon ),
+`rects.py` ( brightness and colour of rectangles of two pictures ), `make_omni_maps.py`, `make_bounce_map.py`,
+`mapc_anim.ps1`. Pictures: `build-editor\bsptest\shots\c7*`, maps and logs under `build-editor\bsptest\c7\`.
+
+| what | the client showed | pictures / numbers |
+|---|---|---|
+| **an omni light's shadows** ( `mp_c7omni` ) | script models and bots throw shadows on the floor inside the light's cone, darker towards the point under the lamp; none outside. See "Omni lights and their shadows" | `c7omni_e_boxes` / `c7omni_e_empty`, `c7omni_g_boxes` ( cone 120 / 60, the default ), `c7omni_h_boxes` ( `fov_inner 105` ), `c7omni_mix2`, `c7omni_bots3_crop` |
+| the control: a **spot straight down** with the same cone ( `mp_c7spotd` ) | the cone's circle on the floor, the shadow of a bot and of a hanging case in it | `c7spotd_bots3` |
+| **a lamp moved by a script** ( `mp_c7lamp`, `maxmove 300` ) | the moved lamp's pool is a whole circle 250 units from where it was compiled | `c7lamp_6_moved`; sixth round: `c6lamp_11_move` |
+| `moveTo`, `linkTo` on the lamp | nothing moves; the server's log has the script errors quoted under "Lights that move or turn" | `c7lamp_9_link1` .. `11_link3` |
+| **a spot through two doorways** ( `mp_c7door`: the two rooms with one floor brush, a spot in the first room aimed at the doorway ) | the floor is lit by it in its room, in the corridor and in the far room; on the far room's wall the doorway's bright picture, and in it the shadow of a script model hanging in the beam | `c7door_8_wall_boxes` / `c7door_7_wall`, `c7door_6_beam_boxes` |
+| **coloured bounce** ( `mp_c7bounce`: a red and a blue wall, a low concrete screen in front of each, one white light ) | the back of the screen and the floor behind it take the wall's colour: red / blue of the screen 1.38 before the red wall and 0.98 before the blue one, 1.11 for both in the grey world; the floor in the lamp's light is the same in both ( 1.02 ) | `c7bounce_red` / `c7bounce_red_grey`, `c7bounce_blue` / `c7bounce_blue_grey` |
+| the yard with all of it ( `mp_c7yard`, not packaged ) | as before: sun, sky, buildings, fence, mound, effects | `c7yard_ground`, `c7yard_over` |
+
+What script models could not show: whether a *box* beside the beam in the far room stays out of the shadow map
+( the hull's portal planes ) - the client draws both hanging cases into the map ( 11 -> 13 draws ); its test for
+models of this kind has no region step ( 0xA85750 ), the one for boxes has ( 0xA858D0 ).
+
+**A project's animations in an edited shipped map** ( `round7\mapc_anim.ps1`; server only ): shipped mp_rust,
+unedited, through `codol_mapc --assets <project zone>` with the project's animlist appended and its animtree as a
+rawfile ( 2 xanim, 2 xmodel, 1 fx, 3 loaded sounds .. carried; the file as long as the shipped one ), and a level
+script - the shipped one with `#using_animtree( "mp_c4fx" )`, `precacheMpAnim`, two script models and
+`scriptModelPlayAnim` - in front of the server's. The server: `CoDOL animlists: mp_rust.animlist loaded, 2
+entries` ( `mp_c4fx codol_test_spin`, `mp_c4fx codol_test_lid` ); at `developer 1` `CoDOL mounted animtree:
+animtrees/mp_c4fx.atr` between the game's own trees; `codol_animmodelprobe`: `10 client trees: .. 9=mp_c4fx
+10=multiplayer`; `getAnimLength` 2 and 1.33 s; no "cannot play animation", 0 script errors; collision installed,
+758 leaves, 14 primary lights. The same lines as for a map built from scratch. After the test the links to the
+stock zone were put back; the install's `mp_rust.ff` has its date of 2014.
 
 ### Script model animations
 
@@ -979,23 +1108,30 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
   ( the report says how many cross sections were left out and why ); open terrain is one cell; a mapper's portal
   brushes switch the search off. A face seen from several cells is drawn once per cell ( and has a lightmap chart
   per cell ).
-* **Light**: the world is grey for bounced light ( reflectivity 0.5, the materials' images are not read ); a see through brush ( fence ) casts no baked shadow; reflection probes show the
-  scene without textures and their cube orientation is assumed; the outdoor image ( weather occlusion ) is empty;
+* **Light**: bounced light has the mean colour of a material's colour map, not its pattern, and static models
+  throw back grey; that a mid grey picture reflects half is this compiler's choice ( `radiosityscale` scales it );
+  a see through brush ( fence ) casts no baked shadow; reflection probes show the scene in the materials' mean
+  colours and their cube orientation is assumed; the outdoor image ( weather occlusion ) is empty;
   the light grid's 56 directions are taken from `codol_view`'s port of the model lighting lookup, not measured in
-  the game. The worldspawn keys `diffusefraction`, `sundiffusecolor`, `radiosityscale`, `sunradiosity` and
+  the game. The worldspawn keys `diffusefraction`, `sundiffusecolor`, `sunradiosity` and
   `maxbounces` are not read. That a surface under the open sky receives half of `skycolor x skylight` is fitted to
   one shipped map; how the game's compiler weighs `ambient` was not measured. The split of a luxel's light between
   the two lightmap layers ( up to 0.85 into the directed one ) is this compiler's own rule.
 * **Primary lights**: what is written is what the shipped zones hold, with these differences. **Surfaces** are cut
-  along a grid of 32 units around what a light wins, not along the pieces of the game compiler's BSP; a piece is
-  never smaller than a grid square, and the specular highlight of a light ends at the cut ( its diffuse light goes
-  on in the lightmap ). **Light regions**: a hull per cell with cone planes and diagonals; no planes through the
-  light and the edges of a portal. **Scriptable lights** are written as the shipped zones have them and a script
-  changes one in the client ( sixth round ); the baked visibility and the cut of the surfaces of a light that a
-  script moves stay where they were compiled, and `moveTo` on a light showed no movement. At most 253 primary
-  lights, 15 light definitions. Under an **omni** light the client draws a shadow map pass with the players in
-  it, but no shadow of a player was made out in the pictures ( sixth round ). `codol_viewtool` draws primary lights without their
-  shadow maps.
+  along a grid of 32 units, not along the pieces of the game compiler's BSP: a piece is never smaller than a grid
+  square ( two where lights meet ), the border between two lights is a stair of grid lines, and the specular
+  highlight of a light ends at the cut ( its diffuse light goes on in the lightmap ). A face that several cells
+  see is still drawn whole by each. **Light regions**: a hull per cell with cone planes, diagonals and planes
+  through portal edges; not the wall directions most shipped axes are; that a box beside a doorway's beam stays
+  out of the shadow map was not seen ( script models are not tested against the region ). **Lights that move or
+  turn** own what they could reach *where no other light reaches as compiled*; where another light or the sun
+  wins a surface, the moved light's pool still ends there - a surface names one light. Their baked visibility
+  is the one of the compiled position. No shipped map has a moving light to compare with. On the test server
+  only `.origin` moves a light ( `moveTo` / `linkTo`: the server's script errors ). **Omni lights**: shadows of
+  players and models only inside the cone, fading from the inner to the outer angle ( the game's shaders ); the
+  compiler does not aim or widen the cone by itself.
+  At most 253 primary lights, 15 light definitions. `codol_viewtool` draws primary lights without their shadow
+  maps.
 * **Brush models** are drawn and collide, but are in no cell ( the engine places dynamic models itself ) and are lit
   by the lightmap of the place they were compiled at.
 * **Sky**: faces with a sky material become the sky surfaces of `skies[0]` with the material's cube map when its header

@@ -829,6 +829,12 @@ namespace codol::bsp
 					d.height = image.height;
 					sized = true;
 				}
+				if (t.raw.semantic == 2 && d.color_map.empty())
+				{
+					// the colour of bounced light: from the pixels when the zone has them, else by name from the image archives
+					d.color_map = std::string(t.imageName);
+					d.albedo_known = !reference && albedo_from_zone_image(*from, t.image, d.see_through, d.albedo);
+				}
 			}
 		}
 		return s->described.emplace(std::string(name), std::move(d)).first->second;
