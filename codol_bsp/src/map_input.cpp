@@ -120,6 +120,11 @@ namespace codol::bsp
 		// dark at the walls )
 		constexpr float DEFAULT_LIGHT_RADIUS = 600.0f;
 
+		// What a surface under the open sky receives of "skycolor" x "skylight": half. Measured on mp_vacant, whose sun lit
+		// surfaces hold ( 0.30 0.60 0.75 ) of light without the sun ( codol_bsp_probe lights: upper layer 118 184 206, lower
+		// 97 82 77 ) under skycolor 0.35 0.75 1 x skylight 1.3 and an ambient light of 0.15 x ( 0.71 0.71 1 ).
+		constexpr float SKY_SCALE = 0.5f;
+
 		// "_color", "suncolor": the hue of a light. The largest part counts as 1 ( 0.1 0.1 0.1 is white ), as radiant's
 		// light entity says and as the suns of the shipped maps show ( mp_vacant: suncolor 0.84 0.81 0.58, sunlight 1.6,
 		// ComWorld colour 1.600 1.543 1.105 )
@@ -479,9 +484,9 @@ namespace codol::bsp
 		for (int k = 0; k < 3; k++)
 		{
 			w.sun_color[k] = color[k] * sunlight;
-			w.ambient[k] = ambient_color[k] * ambient + sky_color[k] * skylight;
+			w.ambient[k] = ambient_color[k] * ambient + sky_color[k] * skylight * SKY_SCALE;
 			w.ambient_light[k] = ambient_color[k] * ambient;
-			w.sky_light[k] = sky_color[k] * skylight;
+			w.sky_light[k] = sky_color[k] * skylight * SKY_SCALE;
 			w.lights[1].color[k] = w.sun_color[k];
 			w.lights[1].dir[k] = w.sun_dir[k];
 		}

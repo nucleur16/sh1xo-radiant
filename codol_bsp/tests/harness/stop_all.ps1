@@ -18,6 +18,11 @@ foreach ($what in 'client', 'lobby', 'server') {
 }
 # the frame dump d3d9.dll start_client.ps1 put next to the client ( a file of the harness, not a link into the install )
 if (-not (Get-Process codoMP_client_shipRetail -ErrorAction SilentlyContinue)) {
-  if ($stopped_client) { Start-Sleep -Milliseconds 800 }
-  Remove-Item "$Client\d3d9.dll", "$Client\codol_shot.req", "$Client\codol_shot.log" -ErrorAction SilentlyContinue
+  # the client holds the dll for a moment after it is stopped: try until it is gone
+  for ($try = 0; $try -lt 20; $try++) {
+    Remove-Item "$Client\d3d9.dll", "$Client\codol_shot.req", "$Client\codol_shot.log" -ErrorAction SilentlyContinue
+    if (-not (Test-Path "$Client\d3d9.dll")) { break }
+    Start-Sleep -Milliseconds 300
+  }
+  if (Test-Path "$Client\d3d9.dll") { "WARNING: $Client\d3d9.dll is still there: remove it by hand" }
 }

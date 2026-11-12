@@ -60,6 +60,14 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
 2. Draw the map: brushes, terrain patches, `misc_model`s, lights, `reflection_probe`s, spawn points
    ( `mp_dm_spawn`, `mp_tdm_spawn_*` .. ), one `mp_global_intermission`, `node_pathnode`s for bots. The map has to be
    closed ( no way from an entity to the void ) or stand in a sky box; the build reports a leak with its position.
+
+   **Light.** A `light` is created with `radius 600`, `intensity 1`, `_color 1 1 1`; it reaches as far as its
+   radius and is down to a quarter at half of it. `spawnflags 2` ( `PRIMARY_SPOT`, with `fov_outer` / `fov_inner` /
+   `exponent` and `angles` or a `target` ) or `1` ( `PRIMARY_OMNI` ) makes it a primary light: the game lights the
+   world and the models with it at run time instead of from the lightmap. The worldspawn takes `sundirection`,
+   `suncolor`, `sunlight`, `ambient` with `_color`, `skylight` with `skycolor`; without them a map has a sun of
+   1.3 from `-50 40 0`, an ambient light of 0.1 and a sky light of 0.4. All keys with their defaults:
+   `codol_bsp/README.md`, "Light keys".
 3. **Edit > Add gameplay entities** adds what the game's scripts ask of every multiplayer map and the map does not
    have yet: the care package with its collision ( without it `_airdrop.gsc` throws a script error at every map
    start ) and a helicopter path ( `heli_start`, `heli_loop_start` .. ). The build names what is missing.
@@ -104,6 +112,10 @@ mod\<project>\sound\<file>                       what the file column of the ali
 mod\<project>\fx\<folder>\<name>.efx             an effect; its name is <folder>/<name>, what loadfx takes
 mod\<project>\scripts\..                         your own scripts: maps\mp\<map>.gsc, animtrees\<tree>.atr ..; not
                                                  compiled, the built map takes them as they are
+mod\<project>\vision\<map>.vision               the map's vision file: glow, film tweaks ( r_glow "1", r_filmContrast
+                                                 "1.2" .. ); without one the build writes a neutral default
+mod\<project>\sun\<map>.sun                     the sun's sprite and flare ( r_sunsprite_size, r_sunflare_max_size .. );
+                                                 without one a map with a sun and a sky gets a default flare
 mod\<project>\generated\animtrees\<tree>.atr     written by the build: one per animtree the animations name
 mod\<project>\generated\animlists\map.animlist   written by the build: becomes animlists/<map>.animlist of the map
 mod\<project>\zz_<project>_sounds.iwd            written by the build: the streamed sound files
@@ -221,9 +233,16 @@ of the install ): the server mounts the map zone, reads `animlists/mp_edassets2.
 and 1.33 s, `setAnim` binds the script model to the tree, `loadfx` / `playfx` and `playSound` / `playLoopSound` /
 `ambientPlay` run; the server's own decoders take the animations and the model. Controls: the same script with an
 alias no zone has stops with "unknown sound alias", the same package without the carried assets with "xanim .. is
-not in any mounted zone". **Not checked: a client.** Nobody has seen one of these animations or effects or heard
-one of the sounds, and the dedicated server gives `loadfx` an id for any name, so for effects the run only shows
-that the zone mounts and the script runs.
+not in any mounted zone".
+
+**In the game client** ( loopback, the test user; `codol_bsp/README.md`, "Fourth round" ): a packaged map with a
+project of one effect, two animated models and three sound aliases loads; the **effect** placed with a `script_fx`
+entity is drawn, its smoke puffs coming again and again; the two **models** stand where the level script spawns
+them but their **animations do not move** - on this test server no script model animation reaches the client, the
+hanging clothes of shipped mp_crash_tropical stand still as well; **sound** cannot be heard on the test machine,
+the client's log has no "Missing soundalias" and no load error. The effects a map places are made by the client
+from the text of `maps\mp\<map>_fx.gsc` and `maps\createfx\<map>_fx.gsc`: leave those two to the build, or keep
+their exact form.
 
 Not there: deleting or renaming an asset from the editor ( delete the files, Rescan ), editing a material's
 definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import windows, playing an animation, a sound
@@ -251,16 +270,19 @@ not extended: give your animations a tree of their own. Sounds and effects of a 
 
 Be aware of these before planning work around this branch:
 
-- **Maps of your own: lighting is simpler than the game's own maps.** `light` entities are baked, they are not
-  dynamic primary lights; dynamic sun shadows are untested; no T-junction repair. See "Limits" in
-  `codol_bsp/README.md`.
+- **Maps of your own: lighting is simpler than the game's own maps.** A surface has one primary light ( the sun,
+  or one `light` with `PRIMARY_SPOT` / `PRIMARY_OMNI` ) and is not cut where the reach of two meets; a player's
+  shadow in a primary light entity was not seen in the client ( the sun's is ); bounced light does not take the
+  colour of the materials; no T-junction repair. See "Limits" in `codol_bsp/README.md`.
 - **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
   players do not: put clip brushes around models.
-- **Nobody has seen or heard an animation, sound or effect of your own in the game.** The Assets window builds
-  them and File > Build map puts them into the map with their animtrees, animlist and your level script; a
-  dedicated server runs a level script that uses them without a script error ( [In the built map](#in-the-built-map) ).
-  No client has loaded such a map, the editor does not play them, and streamed sounds need their `.iwd` in the
-  game's `main\` folder - a plain archive next to the game's own, which was not tried.
+- **Nobody has seen an animation of your own move or heard a sound of your own.** The Assets window builds them
+  and File > Build map puts them into the map with their animtrees, animlist and your level script; a dedicated
+  server runs a level script that uses them without a script error, and the client loads such a map and draws its
+  effect ( [In the built map](#in-the-built-map) ). But script model animations do not move in the client on the
+  test server - shipped ones do not either -, the test machine has no audio, the editor does not play them, and
+  streamed sounds need their `.iwd` in the game's `main\` folder ( the client started with one there; whether it
+  played the file is not known ).
 - **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
   of deleted brushes and does not re-bake light. For that, build the map from scratch.
 - **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;

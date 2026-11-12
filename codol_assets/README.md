@@ -444,7 +444,12 @@ delta 3d ), back to text both ways, two animations through the linker and the lo
 
 ### Animations: not done, taken on trust
 
-* **No animation of this compiler has been seen moving.** The server evaluates them ( below ); the client was not run.
+* **No animation of this compiler has been seen moving.** The server evaluates them ( below ). In the client
+  ( `codol_bsp/README.md`, "Fourth round" ) a crate with `codol_test_spin` and the lid box with `codol_test_lid`,
+  both started with `scriptModelPlayAnim` from the level script of a packaged map, are drawn where they were
+  spawned and **do not move** - and neither do the hanging clothes of shipped mp_crash_tropical, which the game's
+  own script animates the same way: on the test server ( CoD4x_Server `codol_dedrun` ) script model animations do
+  not reach the client. So the client run says nothing about the animations themselves.
 * The tolerance of the original converter is an estimate from the shipped keys; its criterion is not known.
 * The sign of 6 % of the shipped rotations ( first key with w < 0 ) is not reproduced; it matters only where the game
   blends two animations without looking at the side, which was not examined.
@@ -643,10 +648,14 @@ tripped into a zone.
 
 ### Sounds: not done, taken on trust
 
-* **Nothing was played.** No client run. The dedicated server has no sound system; it does look an alias up when a
-  script plays it ( "On a dedicated server" below: the new aliases are found, a name no zone has is a script
-  error ). That Miles accepts a `LoadedSound` made here rests on the fields and data being byte identical to the
-  shipped ones for the same wave.
+* **Nothing was heard.** The client was run with a map whose level script plays `codol_test_hum` as a loop sound
+  and `codol_test_beep` every three seconds on script models, and which places `codol_test_hum` with a
+  `script_sound` entity ( `codol_bsp/README.md`, "Fourth round" ): the map loads, the client's log has no "Missing
+  soundalias" and no load error - but the test machine has no audio, so that says the aliases are found, not that
+  they sound right. The dedicated server has no sound system; it does look an alias up when a script plays it ( "On
+  a dedicated server" below: the new aliases are found, a name no zone has is a script error ). That Miles accepts
+  a `LoadedSound` made here rests on the fields and data being byte identical to the shipped ones for the same
+  wave.
 * Flag names: `looping` is certain ( looping ambient / engine aliases ); `fulldrylevel` = bit 3, `nowetlevel` = bit 4
   and `rlooping` = bit 5 are the IW4 order, not established from the exe. Bit 6 has no name.
 * `vol_mod` is stored as the mixer group and does not scale the volume ( the shipped volumes look scaled:
@@ -829,9 +838,14 @@ playfx( level._effect[ "my_effect" ], ( 0, 0, 64 ) );
 
 ### Effects: limits, not verified
 
-* **Not seen in the game.** The loaders take the zones and what they build is what was compiled; no client has drawn
-  a compiled effect. On the dedicated server `loadfx` + `playfx` of a compiled effect run without a script error, but
-  that server gives every name an id without looking at the asset ( "On a dedicated server" below ).
+* **Seen in the game** ( `codol_bsp/README.md`, "Fourth round"; `build-editor\bsptest\shots\c4fx_fx_sheet.png` ):
+  `codol_test/spark_burst`, carried into a map zone and placed with a `script_fx` entity ( `delay 1.5` ), is drawn
+  by the client - the looping smoke element's puffs appear and rise in six frames over three seconds. The sparks
+  and the light of the one shot elements were not caught in a frame. The client makes placed effects itself from
+  the text of `maps/mp/<map>_fx.gsc` and `maps/createfx/<map>_fx.gsc`, which have to be exactly as the game's
+  createfx tool writes them ( `codol_bsp` does ); `playfx` from script was not tried in the client. On the
+  dedicated server `loadfx` + `playfx` of a compiled effect run without a script error, but that server gives every
+  name an id without looking at the asset ( "On a dedicated server" below ).
 * The +252 integer and the +256 string of `FxElemDef` are carried, their meaning is not known. The flag bits above
   `blocksSight` have IW4's names; that 1.1.1.13 gives them the same meaning was not shown.
 * The second velocity graph set's random rule and the "back compatible" case are fitted, with two shipped effects

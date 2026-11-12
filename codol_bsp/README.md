@@ -23,8 +23,12 @@ game's shaders ), on the dedicated server ( probes, bullet traces, bots ) and - 
 client, with pictures** ( [Third round](#third-round-the-client-with-pictures) ): the yard loads with its own loading
 picture and minimap, sky, baked and bounced light, models, a modder's materials, terrain one walks over; what the
 client showed wrong was fixed ( cells that hid everything behind them, no dynamic sun shadows, a crash on shooting a
-`codol_assets` model, a block of shadow under a fence ). What is approximate or missing is listed under
-[Limits](#limits-and-what-is-not-done).
+`codol_assets` model, a block of shadow under a fence ). The **fourth round**
+( [Fourth round](#fourth-round-light-primary-lights-vision-sun-effects) ) read what the lit shaders do with the
+lightmaps out of the shaders themselves: the bake now writes the game's units ( a room with one light entity was
+nearly black ), light entities can be primary lights ( lit at run time, with baked visibility ), every map gets a
+vision file and a map with a sun its flare, and the effect scripts have the shape the client reads. What is
+approximate or missing is listed under [Limits](#limits-and-what-is-not-done).
 
 ## Build
 
@@ -43,7 +47,7 @@ Static CRT, `/std:c++latest`, `/W4 /WX`, x64 and Win32 ( use x64 ). Builds `codo
 ```
 codol_bsp --map <file.map> --exe <C1.exe> --install <install dir> --out <mapname.ff> [--name <mapname>]
           [--report <file>] [--zone-out <file>] [--cache <dir>] [--donor <zone.ff>]... [--rawfile <name>=<file>]...
-          [--assets <project zone.ff>]... [--minimap <picture.tga>] [--scripts <folder>]
+          [--assets <project zone.ff>]... [--minimap <picture.tga>] [--scripts <folder>] [--vision <file>] [--sun <file>]
           [--fast | --quality n] [--no-light] [--no-vis] [--no-load] [--level 0..9] [--exact-size <bytes>]
 codol_bsp --check <map.ff> --exe <C1.exe>
 ```
@@ -62,6 +66,7 @@ codol_bsp --check <map.ff> --exe <C1.exe>
 * `--assets` / `--donor` a fast file searched for materials and xmodels ahead of the install's catalog: a
   `codol_assetc` project zone with a modder's own materials and models, a ported map.
 * `--minimap`, `--scripts`: see [Minimap, scripts, the files around a map](#minimap-scripts-the-files-around-a-map).
+* `--vision`, `--sun`: the map's vision and sun file, see [Vision file, sun flare](#vision-file-sun-flare).
 * `--exact-size` pads the file to a length ( only needed when a compiled map takes the place of a *stock* zone: the
   client compares the length of every stock zone with a table ).
 * `--check` runs the validators on any map fast file. Shipped maps fail some of the render checks: those are written
@@ -116,13 +121,15 @@ Asset order of a compiled zone ( `codol_linker --list` ); the shipped map zones 
 | asset | what |
 |---|---|
 | rawfile `animlists/<map>.animlist` | empty; the server refuses a map without it |
-| `com_map` | ComWorld: primary lights - [0] none, [1] the sun ( colour x intensity, direction towards the sun ). It stores the string `maps/mp/<map>.d3dbsp` every other map asset points at |
+| rawfiles `vision/<map>.vision`, `sun/<map>.sun` | glow and film tweaks; the sun's sprite and flare ( the second only with a sun and a sky ) |
+| `lightdef` | `light_point_linear`, when the map has a primary light entity: a name, the falloff image by name, where its copy starts in row 0 of the lightmaps |
+| `com_map` | ComWorld: primary lights - [0] none, [1] the sun ( colour x intensity, direction towards the sun ), then the primary light entities. It stores the string `maps/mp/<map>.d3dbsp` every other map asset points at |
 | `fx_map` | FxWorld without glass ( all zero but `firstFreePiece` 0xFFFF ) |
 | `image`, `techset`, `material` .. | what the world's materials need, see [Materials](#materials) |
 | `gfx_map` | GfxWorld |
 | `game_map_mp` | GameWorldMp: no path data ( the loader clears it ), an empty `G_GlassData` ( the server reads it without a null check ) |
 | `col_map_mp` | clipMap with the MapEnts nested in it |
-| rawfiles | `--rawfile` |
+| rawfiles | `maps/mp/<map>_fx.gsc`, `maps/createfx/<map>_fx.gsc` ( always: the client reads them ), `--rawfile` |
 
 `<map>_load.ff`: the materials `$defeatbackdrop` and `$levelbriefing` with the technique set `2d` and a rawfile, as the
 shipped load zones. The materials are carried over from a shipped load zone, so the loading picture is that map's.
@@ -180,8 +187,8 @@ the surface types brick and metal and pass through the decal.
 
 1. **Read** ( `map_input.cpp` ). Brushes through `codol_edit` ( planes, windings, corners ). `detail` brushes, brush
    entities ( `model "*N"`, brushes are taken as model space: an entity with an `origin` is placed by it, as
-   `codol_edit`'s import writes them ), `light` entities, worldspawn keys `sundirection`, `suncolor`, `sunlight`,
-   `ambient`, `skycolor`, `skylight`. Brushes with `hint` / `skip` / `portal*` materials are no geometry; a face with
+   `codol_edit`'s import writes them ), `light` entities and the worldspawn's light keys
+   ( [Light keys](#light-keys) ). Brushes with `hint` / `skip` / `portal*` materials are no geometry; a face with
    the material `portal` is a cell boundary. Patches are tessellated by `codol_edit` ( 4 subdivisions per curve
    segment ). `misc_model` -> static models, `script_fx` / `script_sound` -> script lines.
 2. **Collision** ( `clip_build.cpp` ). Per brush a `cbrush_t`: the six axial sides implied by the bounds, the others
@@ -288,31 +295,47 @@ surface type. Terrain is one sided, as in the game: from below one passes throug
 
 ### The light bake
 
-How the game's lit shaders use the lightmaps was measured by compiling constant lightmaps and rendering them with
-`codol_viewtool` ( `tests/harness/lm_experiment.ps1`, floor of the box room ):
+How the game's lit shaders use the lightmaps was read from the shaders: `codol_viewtool` with
+`CODOL_VIEW_DUMP_SHADERS=<folder>` writes the byte code of every shader it draws with, `D3DDisassemble` turns it
+into text ( `lm_dfog_r0c0n0s0_sm3`, `lm_sm_sun_dfog_..`, `lm_spot_dfog_..` of the world, `lp_dfog_..` of the
+models ). What they do:
 
-| lightmaps ( upper layer, lower layer, primary ) | floor rgb |
+| data | how the shader uses it |
 |---|---|
-| black, black, 0 | 2 2 2 |
-| 255 red, black, 0 | 136 2 2 |
-| black, 255 green, 0 | 2 45 2 |
-| grey 64, black, 0 | 34 34 33 |
-| black, grey 64, 0 | 7 8 8 |
-| black, black, 255 | 170 156 136 ( the sun's colour ) |
+| **secondary lightmap** ( A8R8G8B8, two layers of 512 x 1024 on top of each other ) | `light = ( upper.rgb * Nz + lower.rgb * cos( D, N ) )^2`. `N` is the normal of the normal map in tangent space, `D = ( dx, dy, 1 )` with `dx = upper.a * 4.08 - 2.08` along the tangent and `dy = lower.a * 4.0645 - 2.0645` along `cross( normal, tangent ) * binormal sign`. The upper layer is light without a direction, the lower layer light from the direction the two alpha channels give - and both hold **square roots** |
+| **primary lightmap** ( L8, 1024 x 2048 ) | how much of the surface's *primary light* reaches the texel. The shader adds the light itself: `colour * max( 0, N . L )` for the sun, `colour * falloff^2 * cone * max( 0, N . L )` for a spot or omni light, with the run time shadow map on top |
+| **row 0 of the secondary lightmap** | the falloff of the primary spot / omni lights: read at `u = ( lmapLookupStart + 32 * distance / radius ) / 512`, `v = 0`, and squared. The game's compiler lays a copy of the light definition's falloff picture there ( `codol_bsp_probe lights` prints the row of any map ) |
+| **light grid colours** | a byte is `sqrt( light ) / 2`: the model shaders double and square what they read |
+| **reflection probes** | square roots, too |
 
-So: the **primary** lightmap ( L8, 1024 x 2048 ) is how much of the sun reaches a texel - the shader adds the sun
-itself; the **secondary** ( A8R8G8B8, 512 x 2048 ) is two layers of 512 x 1024 on top of each other, the upper one the
-baked light without the sun, linear; the lower one adds little and not linearly and is written black ( what it stands
-for was not established ); alpha has no effect. Lightmap coordinates 0 .. 1 span one layer.
+The first three rounds wrote linear values into all of them - the game squared them. A surface that receives 0.33
+came out as 0.11: **a room lit by one light entity was nearly black** ( `shots\ed2_a`; with the fix `shots\c4ed_a` ).
+The earlier table of this section ( a constant upper layer of 255 gives 0.86 of full sun, the lower layer "adds
+little and not linearly", alpha "has no effect" ) was those squares and a direction of ( 2, 2, 1 ) seen without
+knowing it. The shipped lightmaps agree with the reading: both layers are used ( mp_vacant: upper layer 128 in the
+median, lower 68, alpha around 130 = straight along the normal ).
 
+So the bake computes in linear light and writes what the game reads:
+
+* **Per luxel** what arrives ( rgb ) and where it comes from ( the sum of luminance x direction over ambient
+  light, sky, light entities, bounces ). The share that comes from one side - 0 for light from all over, up to
+  0.85 for a single light - goes to the lower layer with its direction, the rest to the upper one; on a flat normal
+  the two add up to exactly what arrives, a normal map sees the light's direction.
 * **Charts and pages.** One chart per face of a surface ( brush face or patch triangle ), one luxel per 16 units
   ( `--fast` 32, `--quality 2` 8 ), a luxel of padding. The charts of a surface go into one page ( a surface names
   one lightmap ); surfaces are shelf packed, tallest chart first, into up to 30 pages, and only when that is not
   enough the luxel grows ( reported ). The 144 room map at `--quality 2`: 4484 charts, 2.8 million luxels, 7 pages.
-* **Direct light** per luxel: `ambient` + sky light ( the share of sky directions, cosine weighted, whose ray ends
-  on a face with a `sky*` material or leaves the map, times `skycolor x skylight` ) + every `light` entity ( linear
-  falloff to `radius`, `n . l`, spot cone from `fov_outer` / `fov_inner` / `angles`, shadow ray ). Per primary texel
-  ( 2 x 2 per luxel ) one ray towards the sun; a 3 x 3 box filter per chart softens the edge.
+* **Direct light** per luxel: the ambient light + sky light ( the share of sky directions, cosine weighted, whose
+  ray ends on a face with a `sky*` material or leaves the map, times half of `skycolor x skylight` ) + every light
+  entity that is not the surface's primary light ( colour x the falloff of the game's falloff picture, squared, x
+  `n . l`, the cone of a spot, a shadow ray ) + the sun where the surface has another primary light. Per primary
+  texel ( 2 x 2 per luxel ) one ray towards the surface's primary light; a 3 x 3 box filter per chart softens the
+  edge.
+* **The falloff** of a light entity is the game's: `images/falloff_linear.iwi` ( 32 x 1, L8 ) is read from the
+  install's image archives ( once; kept in `codol_bsp_falloff.txt` next to the catalog ), laid into row 0 of every
+  lightmap page for the primary lights' shader, and used - squared, as that shader does - for the lights the bake
+  bakes. It is 1 up to a tenth of the radius and falls to 0 at the radius; in linear light a light is down to a
+  quarter at half its radius.
 * **Occluders**: the solid world brushes ( a BVH ) and triangles ( a second BVH ): the tessellation of the patches
   and LOD 0 of the static models. A brush with an alpha tested or decal face ( a fence, a grate ) lets the light
   through: the bake does not read the material's picture, and the solid block of shadow the yard's chain link fence
@@ -321,15 +344,15 @@ for was not established ); alpha has no effect. Lightmap coordinates 0 .. 1 span
   they end on throw back - half of what arrives there ( direct light and the sun's share; the images of the materials
   are not read: a grey world with a reflectivity of 0.5 ). One bounce, two at `--quality 2`. Shadowed faces are no
   longer black.
-* **Light entities are baked, they are not primary lights**: ComWorld has "none" and the sun only. Dynamic objects do
-  not cast shadows in them.
+* **Light entities** are baked unless they are primary lights ( [Primary lights](#primary-lights) ).
 * **Light grid**: a sample at every grid point ( 32 x 32 x 64 units ) that is not inside a brush. A sample is what
   arrives from all around ( the sky directions: sky colour, or what the luxel the ray ends on throws back; the light
-  entities ) as an average and a lean per colour, `E( n ) = m0 + n . m1`; the 56 colours of an entry are that
+  entities and the sun, but for the sample's own primary light ) as an average and a lean per colour, `E( n ) = m0 + n . m1`; the 56 colours of an entry are that
   function at the 56 directions of a colour set - the surface texels of the 4 x 4 x 4 block the model lighting volume
   is looked up in with the normal ( `codol_view` `light_grid.cpp`, from CODOL-AssetExplorer ). So a model is brighter
   on the side the light comes from. Colour sets are deduplicated after dropping low bits ( 2, more when there are over
-  65535 ); primary light = the sun where it is visible. Rows / runs as the shipped grids. At most 3 million points:
+  65535 ); primary light = the primary light that gives the point the most light ( the sun where it is visible,
+  a primary light entity in its reach ), none in the shade. Rows / runs as the shipped grids. At most 3 million points:
   a map whose brushes reach far beyond its spawn points and path nodes gets a grid around those ( reported ).
 * **Reflection probes**: probe 0 ( the default, black ), then one per `reflection_probe` entity, or one in the middle
   of the map. A probe is a picture of the scene from its place: per texel of the 64 x 64 cube a ray, which shows the
@@ -345,6 +368,102 @@ for was not established ); alpha has no effect. Lightmap coordinates 0 .. 1 span
   three were changed to what the shipped maps have while looking for the missing shadows and made no difference in
   the client; shipped mp_rust patched the other way ( `codol_bsp_probe patchworld` ) kept its shadows.
 
+### Light keys
+
+What the compiler reads; everything else on these entities is ignored. A colour gives the hue only: its largest
+part counts as 1 ( `0.1 0.1 0.1` is white ), as radiant's light entity says and the suns of the shipped maps show
+( mp_vacant: `suncolor 0.84 0.81 0.58`, `sunlight 1.6`, ComWorld colour `1.600 1.543 1.105` ).
+
+**worldspawn** ( the keys of the shipped maps' worldspawn; values are linear light, 1 = a white surface is white ):
+
+| key | default | what |
+|---|---|---|
+| `sundirection` | `-50 40 0` | pitch and yaw of the sun, as angles: `-90 0 0` is straight overhead |
+| `suncolor`, `sunlight` | `1 0.95 0.85`, `1.3` | hue and brightness of the sun ( the shipped maps: 1.15 .. 1.6 ). `sunlight 0`: no sun |
+| `ambient`, `_color` | `0.1`, `1 1 1` | brightness and hue of light that is everywhere, also in a closed room ( shipped: 0.01 .. 0.2 ) |
+| `skylight`, `skycolor` | `0.4`, `0.8 0.9 1` | light of the sky dome: a surface that sees the whole sky receives half of it ( measured on mp_vacant's sun lit surfaces ) |
+
+A worldspawn without any of them gets the defaults. ( Until the fourth round it got **nothing**: a key that was
+missing was read as 0 - no sun, no sky, no ambient light. ) Not read: `diffusefraction`, `sundiffusecolor`,
+`radiosityscale`, `sunradiosity`, `maxbounces`, `contrastgain`.
+
+**light** ( radiant's light entity ):
+
+| key | default | what |
+|---|---|---|
+| `origin` | | |
+| `radius` | `600` | where the light ends. Radiant's own default is 200, which leaves a room of 512 units dark at the walls |
+| `intensity`, `_color` | `1`, `1 1 1` | brightness at the light, and hue |
+| `spawnflags` | `0` | 1 `PRIMARY_OMNI`, 2 `PRIMARY_SPOT`: a primary light; 8 `PRIMARY_NOSHADOWMAP`. 4 ( scriptable ) is not supported |
+| `target` or `angles` | straight down | where a spot points: at the entity with that `targetname` ( the cone is then a circle of 64 units around it ), or along the angles |
+| `fov_outer`, `fov_inner` | 90, 0 ( primary omni: 120, 60 ) | the cone of a spot, in degrees. A light with `fov_outer` ( or a target ) is a spot also when it is only baked |
+| `exponent` | `0` | the fade from `fov_inner` to `fov_outer`: 0 a hard edge, 1 linear, higher steeper - as the game's spot shader has it |
+| `def` | `light_point_linear` | the falloff. Only this one is known; another name is reported and replaced |
+
+`codol_bsp` prints what it read ( `light keys: sun ( 1.30 1.23 1.11 ) from ( .. ), ambient ( .. ), sky ( .. ); 2
+light entities, 1 of them primary` ). CoDOL Radiant gives a new `light` the keys `radius 600`, `intensity 1`,
+`_color 1 1 1`.
+
+### Primary lights
+
+A light entity with `PRIMARY_SPOT` or `PRIMARY_OMNI` is a primary light of the map: the shader lights the world,
+the static models and whatever moves with it at run time ( normal map, specular highlight, shadow map ), and the
+lightmap only holds where it reaches. What a map stores for one was measured on the shipped zones with
+`codol_bsp_probe lights <zone> <exe>` ( mp_vacant: 5 spots, mp_highrise: 64 lights, mp_nuked: 14 omni lights ) and
+is written the same way:
+
+* **ComWorld record**: type 2 ( spot ) / 3 ( omni ), `canUseShadowMap` ( 0 with `PRIMARY_NOSHADOWMAP` or a cone
+  over 120 degrees ), exponent, colour, the way back along the beam, origin, radius, the cosines of the half cone
+  angles ( the "expanded" one equals the outer, as in every shipped light ), rotation limit 1, translation limit 0,
+  the definition's name. An omni light has a cone too ( it places the shadow map ): 120 / 60 degrees downwards.
+* **the light definition** `light_point_linear` ( sampler state 0x62, `lmapLookupStart` 1 ) and its falloff in row
+  0 of every lightmap page: texel 0 a copy of the first value, 1 .. 32 the curve, 33 a copy of the last.
+* **a surface names one primary light**: the one that gives it the most light ( summed over its luxels, with
+  shadows ) - the sun or a light entity. The primary lightmap of the surface is that light's visibility; what the
+  other primary lights and the sun send to it is baked into the secondary lightmap like any light entity's.
+* **light grid entries** and **static models** name the primary light that gives their place the most light.
+* **shadow geometry**: per light entity the surfaces that name it, ascending, and the static models that do ( the
+  shipped lists hold exactly those; the suns list models and no surfaces ).
+* **light region**: one hull per light entity - the ranges of everything it lights ( luxels, grid points, model
+  boxes ) along nine axes ( x, y, z, x + y, x - y, x + z, x - z, y + z, y - z; not normalised, relative to the
+  light's origin ), which is what the hulls of the shipped maps hold; no further axes ( the shipped hulls have
+  0 .. 8 of them ).
+* the header: `primaryLightCount`, the entity shadow visibility array ( run time ).
+
+In the client ( `shots\c4spot_a`, `c4spot_b`, `c4omni_b` ): the spot's cone on floor and wall with the colour of
+the light, the baked shadows of a brush and of a static model in it, the model lit from the light's side; the
+same for the omni light. **Not seen: a player's shadow in such a light** - neither on the compiled map nor under
+the spot of shipped mp_vacant ( `c4vac_c`, `c4vac_d` ), where the floor in the shadow's place is at the end of the
+light's reach; whether this client draws spot shadow maps at all was not established. What is missing compared to
+the game's compiler is listed under [Limits](#limits-and-what-is-not-done).
+
+### Vision file, sun flare
+
+* **`vision/<map>.vision`** is asked for by the client when a level starts ( "couldn't open 'vision/mp_x.vision'" in
+  its log without one ). In 1.1.1.13 the settings are named by **number** ( the dvars have numeric names ): `511`
+  r_glow, `516` r_glowRadius0, `512` r_glowBloomCutoff, `513` r_glowBloomDesaturation, `514` r_glowBloomIntensity0,
+  `520` r_filmEnable, `522` r_filmContrast, `521` r_filmBrightness, `523` r_filmDesaturation, `524`
+  r_filmDesaturationDark, `525` r_filmInvert, `526` / `527` / `528` r_filmLightTint / MediumTint / DarkTint, `529`
+  r_primaryLightUseTweaks, `530` / `531` r_primaryLightTweakDiffuseStrength / SpecularStrength ( `517`, `515`, `518`,
+  `519`: the second glow radius, intensity and the sky bleed ) - read off `vision/default.vision` and
+  `vision/mp_vacant.vision` of common_mp, which have the layout, order and values of the earlier games' files.
+  The compiler writes a default ( a little glow, the film tweaks on without changing a colour ), or the mapper's
+  file: `--vision <file>`, else `<map>.vision` next to the `.map`; `package_map.ps1 -Project` takes
+  `mod\<project>\vision\<map>.vision`. The file may name the settings ( `r_filmContrast "1.25"` ) or number them;
+  what the compiler does not know is reported and left out. Seen in the client: the mapper's file changes the
+  picture ( `c4fx_props`: contrast 1.25, more glow ) against the default ( `c4fx2_props` ), and the log line is gone.
+* **The sun's sprite and flare** are the sun block of the GfxWorld; `sun/<map>.sun` is the file the game's compiler
+  makes it from, and the shipped map zones carry it as a rawfile. Its settings are numbers too ( `1704`
+  r_sunsprite_shader .. `1724` r_sun_fx_position, in the order of the earlier games' file ), checked against the
+  blocks of the same zones ( `codol_bsp_probe sun` ): mp_killhouse_sh has `1705 "23.9"` and a sprite size of 23.9,
+  `1707 "343"` / `1709 "528"` and flare sizes of 171.5 / 264 ( half ), `1708 "71"` / `1710 "10.4909"` and the
+  cosines 0.3256 / 0.9833, `1712 "2.8"` and 2800 ms, `1724 "351.691 181.278 -18.5703"` and the direction
+  ( -0.989 -0.022 0.145 ). A map with a sun ( `sunlight` above 0 ) and a sky face gets a default flare ( materials
+  `sun` and `sun_flare`, copied from the install; sprite 16, flare up to 600 at 2 degrees, alpha 0.5, no
+  blinding ) where its sun stands; `--sun <file>`, `<map>.sun` next to the `.map` or
+  `mod\<project>\sun\<map>.sun` replace it ( names or numbers ). Block and rawfile are written. Seen in the
+  client: the sun in the sky of the yard ( `c4fx_sun`; before: `cv5_sky` ).
+
 ### Minimap, scripts, the files around a map
 
 * `--minimap <file.tga>`: the map from above ( 512 x 512, north = + y up ) as the lightmaps light it; rays go through
@@ -355,8 +474,16 @@ for was not established ); alpha has no effect. Lightmap coordinates 0 .. 1 span
   one shot effect that starts with the map, `soundalias` ) and `script_sound` ( `soundalias`: a looping sound ) are
   no entities of the game: they become `maps/createfx/<map>_fx.gsc` in the form the game's createfx tool writes
   ( `createOneshotEffect` / `createLoopEffect` / `createLoopSound` ) and `maps/mp/<map>_fx.gsc` ( `loadfx` per
-  effect, then the placement ), both rawfiles of the zone. An effect has to be in a zone that is loaded ( the common
-  zones: `fire/firelp_small_pm`, `smoke/thin_black_smoke_m` .. ); effect assets are not copied into the map.
+  effect ), both rawfiles of every zone. **The client reads the text of these two files** when a level starts and
+  makes the effects and looping sounds itself; it wants them as the game's createfx tool writes them. The placement
+  has to begin with the line `//_createfx generated. Do not touch!!` - with the compiler's own first line the
+  client logged "Unexpected text .. when trying to find '//_createfx generated. Do not touch!!' in map's effect
+  file" and placed nothing ( the effects of the third round's pictures came from the server, which ran the
+  placement as script ). So both files now have the shape of the shipped ones line for line, CR LF included, and
+  like there the script only runs the placement in a developer build that asks for server side effects -
+  otherwise every effect would be there twice. An effect has to be in a zone that is loaded ( the common zones:
+  `fire/firelp_small_pm`, `smoke/thin_black_smoke_m` .. ) or in the map zone ( `package_map.ps1` carries a
+  project's effects there ).
 * `--scripts <dir>` also writes those two and the level script `maps/mp/<map>.gsc` ( `_fx`, `_load`, the minimap
   setup ) to a folder: the dedicated server reads level scripts from its script folder, never from a zone.
 * `tools/package_map.ps1 -Map x.map -Name mp_x -Out <dir> [-Assets zone.ff ..] [-Loadscreen picture]` puts a map
@@ -384,7 +511,7 @@ Every compile ends with `validate_zone` and writes nothing when it fails:
   list exists.
 * The stages check themselves: leaf centres against their portals, lightmap charts do not overlap.
 
-`codol_bsp_tests` ( 223 checks with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
+`codol_bsp_tests` ( 327 checks with `--assets`, 0 failed on this machine ): writes the test maps with `codol_edit` and compiles them;
 per map: validation, the zone read by `codol_zone` and written again is byte identical, tree walk == brute force on
 3000 random segments ( `clip_trace` ), `codol_edit::import_fastfile` of the compiled zone gives back the map's brushes;
 box room: traces hit floor, wall, ceiling, crate, stacked crates where the map has them; two rooms: 3 cells, 4
@@ -395,7 +522,16 @@ terrain map: 144 triangles that lie on the ramp and face up, 4 borders, the serv
 minimap picture and the generated scripts; the light bake's notes; a 144 room map: more than 1000 brushes and 20
 cells. With `--assets <project zones>` ( the two test zones ) also the modder material map and the yard. Since the third
 round: the openings found ( two rooms 2, the yard 10 - 3 cells, 20 portals -, the 144 rooms 264 - every room a cell ),
-and per zone that every lit technique set has its hardware shadow map sibling or a warning.
+and per zone that every lit technique set has its hardware shadow map sibling or a warning. Since the fourth round,
+read back from the zone as the game reads it: a room with one keyless light and a worldspawn without light keys
+( the defaults in the report, both lightmap layers used, the floor under the light between 0.4 and 0.9 and more
+than 1.6 times the corner, the falloff row full at texel 1, never rising, empty at texel 32, the vision rawfile
+with numbers, the two effect files in the shipped shape ); the worldspawn keys ( `_color` tints the ambient light,
+colours count by their largest part ); a primary spot ( ComWorld record field by field, the light definition, a
+surface that names it, its shadow geometry = the surfaces that name it, one region hull that holds the floor under
+the light and not the far corner, light grid points that name it, its light not in the secondary lightmap ) and a
+primary omni light; a mapper's vision file with names, numbers and an unknown setting; the default sun flare
+( block valid, two materials, sprite size, direction of the ComWorld sun, the `.sun` rawfile ).
 
 `codol_mapc` `check_server_collision` reads the terrain as the server's decoder does ( partition ranges, vertex
 blocks, border runs, AABB tree nodes ); the shipped maps pass it.
@@ -483,6 +619,30 @@ Also seen: `Error: Missing soundalias` for a `script_sound` whose alias no loade
 one of common_mp ); `vision/<map>.vision` is asked for and not there ( no vision file is written ); the client once
 crashed in its own in-game menu code while nothing of the map was involved.
 
+### Fourth round: light, primary lights, vision, sun, effects
+
+The same harness ( loopback, the test user, the frame dump dll in the shadow client only ), with the server at
+`developer 0`: at `developer 1` this server stops a match on a script error of its own at the first spawn with a
+class ( `codol_getLoadoutKillstreak: mp/coMarketplaceItems.csv is not mounted` ), which has nothing to do with the
+map. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), the maps and the asset project of the test under
+`build-editor\bsptest\c4\`.
+
+| what | the client showed | pictures |
+|---|---|---|
+| **the editor's room** ( `mp_edroom`: closed room of 512 units, one `light` without keys, a worldspawn without light keys ) | before: nearly black ( `ed2_a` ). Two causes: the lightmaps held linear light, which the shaders square; and the missing worldspawn keys were read as 0 instead of their defaults ( no ambient light ). After: floor, walls and ceiling lit, brightest under the light, the crate's baked shadow | `c4ed_a`, `c4ed_b` |
+| **a primary spot** ( `mp_c4spot`: `spawnflags 2`, `fov_outer 100`, `fov_inner 50`, `exponent 1`, pointing down, colour 1 0.9 0.7, plus a baked blue light ) | the warm cone on the floor and up the wall, the baked shadow of the brush crate and of a static model in it, the model lit from above | `c4spot_a`, `c4spot_b` |
+| **a primary omni light** ( `mp_c4omni`: `spawnflags 1` ) | the whole room lit by it at run time, the crate's shadow from its visibility in the primary lightmap, the static model lit | `c4omni_a`, `c4omni_b` |
+| a player's shadow in a primary light | not seen on the compiled map ( `c4spot_d` ); not seen under the spot of shipped mp_vacant either ( `c4vac_c`, `c4vac_d` ) | |
+| **the yard with the new bake** ( `mp_c4fx` ) | the same scene as in the third round with the light in the game's units: shadows lit by the sky, the bounce visible; the sky light halved against the first try of this round ( `c4fx2_over`: too bright a shade ) to what shipped mp_vacant holds | `c4fx3_over` ( third round: `cv1_overview` ) |
+| **vision file** | the log line "couldn't open 'vision/<map>.vision'" is gone; a mapper's file next to the `.map` ( contrast 1.25, more glow ) changes the picture against the default | `c4fx_props` / `c4fx2_props` |
+| **sun flare** | the sun stands in the sky where the worldspawn puts it, with its glow | `c4fx_sun` ( third round: `cv5_sky` ) |
+| **a project's effect** ( `codol_test/spark_burst`, compiled by `codol_assets`, placed with `script_fx`, `delay 1.5` ) | its smoke puffs appear and rise, again and again; made by the client from the two effect files ( no parse error in its log any more ) | `c4fx_fx_sheet` ( six frames ) |
+| **a project's animations** ( a crate with `codol_test_spin`, a two bone box with `codol_test_lid`, `scriptModelPlayAnim` ) | both models are drawn where the script spawns them; **neither moves** ( six frames over three seconds are the same ). The server reports no error. The hanging clothes of shipped mp_crash_tropical, which the game's own `_animatedmodels` script animates the same way, **do not move either** on this server ( five frames, mean difference 0.02 of 255 ): script model animations do not reach the client here, whatever the map | `c4fx_anim_sheet`, `c4crash_clothes_sheet` |
+| **a project's sounds** ( `playLoopSound`, `playSound`, a `script_sound` with the project's alias ) | nothing can be heard on this machine. The client's log has no "Missing soundalias" and no load error for the map | |
+| **bullets on the alpha tested fence** | six shots at the chain link fence: the impact puff at the fence, no crash; the fence throws its pattern as a run time sun shadow | `c4fence_before`, `c4fence_fire`, `c4fence_after` |
+| **terrain borders** | walking ( W held ) across the west edge of the mound and over it ( x -300 -> 167, z 23 ), along its south and north edges ( 677 and 673 units, 5 and 15 off the line ), diagonally over a corner ( to 175 175, z 7 ) and down its north side: nowhere stuck, nowhere through. No seam between mound and ground | `c4terr_edge`, `c4walk_*` |
+| **Esc / class / resume, with deaths in between** ( the sequence before the one client crash of the third round ) | eight rounds, four deaths and respawns: the client stays up. The crash did not come back | `c4respawn_end` |
+
 ## Scale
 
 x64 Release, this machine ( 32 threads ):
@@ -528,25 +688,40 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
   ( the report says how many cross sections were left out and why ); open terrain is one cell; a mapper's portal
   brushes switch the search off. A face seen from several cells is drawn once per cell ( and has a lightmap chart
   per cell ).
-* **Light**: the world is grey for bounced light ( reflectivity 0.5, the materials' images are not read ); the lower
-  secondary layer is black; **light entities are not dynamic primary lights** ( baked only; only `light_point_linear`
-  falloff ), so players cast no shadow in them ( they are lit by them, through the light grid ); a `light` without
-  a `radius` reaches 300 units - the editor's first room is dark; a see through brush ( fence ) casts no baked shadow;
-  reflection probes show the scene without textures and their cube orientation is assumed; no sun flare; the outdoor
-  image ( weather occlusion ) is empty; light regions are empty; the light grid's 56 directions are taken from
-  `codol_view`'s port of the model lighting lookup, not measured in the game.
+* **Light**: the world is grey for bounced light ( reflectivity 0.5, the materials' images are not read ); only the
+  `light_point_linear` falloff; a see through brush ( fence ) casts no baked shadow; reflection probes show the
+  scene without textures and their cube orientation is assumed; the outdoor image ( weather occlusion ) is empty;
+  the light grid's 56 directions are taken from `codol_view`'s port of the model lighting lookup, not measured in
+  the game. The worldspawn keys `diffusefraction`, `sundiffusecolor`, `radiosityscale`, `sunradiosity` and
+  `maxbounces` are not read. That a surface under the open sky receives half of `skycolor x skylight` is fitted to
+  one shipped map; how the game's compiler weighs `ambient` was not measured. The split of a luxel's light between
+  the two lightmap layers ( up to 0.85 into the directed one ) is this compiler's own rule.
+* **Primary lights**: what is written is what the shipped zones hold, with these differences. A **surface** is as
+  large as the render stage made it ( faces of one material in a cell, per 1024 units ) and names one light: the
+  game's compiler cuts surfaces by the lights' reach, so there a floor can be lit by several primary lights side by
+  side - here the strongest gets the surface, the others are baked into it ( they still light it, without run time
+  shadows or highlights ). A **light region** is one hull of nine ranges; the shipped ones have several hulls per
+  light ( through a doorway ) and up to eight further planes each. `PRIMARY_SCRIPTABLE` ( a light script can move
+  or switch ), `maxturn` / `maxmove` are not supported; at most 253 primary lights. **A player's shadow in a
+  primary light was not seen** in the client, on a compiled map or a shipped one, so whether shadow geometry and
+  region are right for it is not shown; `codol_viewtool` draws primary lights without their shadow maps.
 * **Brush models** are drawn and collide, but are in no cell ( the engine places dynamic models itself ) and are lit
   by the lightmap of the place they were compiled at.
 * **Sky**: faces with a sky material become the sky surfaces of `skies[0]` with the material's cube map when its header
-  is in a zone ( seen in the client ). No sun flare: the sun block only carries the direction.
-* **Effects and sounds**: `script_fx` / `script_sound` only write script lines; effect and sound assets are not
-  copied into the map zone ( they have to be in a zone that is loaded: a sound alias that is not gives `Missing
-  soundalias` lines in the client ). The client runs the generated `_fx` rawfiles ( fire and smoke in the yard ); on
-  the server the generated level script compiles and runs ( no script errors ).
+  is in a zone ( seen in the client ). The sun flare's blinding and glare ( `r_sunblind_*`, `r_sunglare_*` ) are
+  written as given and were not looked at; the lens flare settings of some shipped `.sun` files ( `2692` .. `2745` )
+  are not known to the compiler ( reported, left out ).
+* **Effects and sounds**: `script_fx` / `script_sound` write the two effect files the client reads; the effect and
+  sound assets have to be in a zone that is loaded - the common zones, or the map zone ( `package_map.ps1` carries a
+  project's there ); a sound alias that is nowhere gives `Missing soundalias` lines in the client. Exploders and
+  interval sounds ( `createExploder`, `createIntervalSound` of the shipped files ) are not written. Sound was never
+  heard: this machine has no audio.
+* **Script model animations** do not move in the client on the test server - a shipped map's do not either ( fourth
+  round ) -, so a compiled animation has still not been seen moving.
 * **Minimap**: the picture is the lightmapped scene from above, roofs included; the material is made by
   `codol_assetc` ( `package_map.ps1` ), the compiler itself only writes the picture. A room with a ceiling has a
   dark minimap.
-* No vision file ( the client asks for `vision/<map>.vision` ), no `MapTriggers` ( trigger entities are brush models `*N` ), no glass, no dynEnts, no path data
+* No `MapTriggers` ( trigger entities are brush models `*N` ), no glass, no dynEnts, no path data
   ( GameWorldMp has none in this game ), no sound aliases.
 * Unsigned container only ( `codol_zone` ).
 * `codol_mapc` ( the importing compiler ) had the same clip entry mistake for *added* / moved static models
