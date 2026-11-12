@@ -9,8 +9,10 @@ param([string]$Kernel33Repo = 'D:\CoD\k33work\cod-offline-1.1.1.13', [string]$Ou
 $ErrorActionPreference = 'Stop'
 if (-not (Test-Path "$Kernel33Repo\k33shot.c")) { throw "$Kernel33Repo has no k33shot.c: not a Kernel33 checkout with the screenshot feature" }
 New-Item -ItemType Directory -Force $Out | Out-Null
-$unix = '/' + $Kernel33Repo.Substring(0, 1).ToLower() + ($Kernel33Repo.Substring(2) -replace '\\', '/')
-& $Bash -lc "cd '$unix' && export PATH=/c/msys64/mingw32/bin:`$PATH && K33_NO_COPY=1 K33_LOCAL_TESTING=1 K33_DIAGNOSTICS=1 sh build.sh > build_kernel33_harness.log 2>&1"
-if ($LASTEXITCODE) { "build FAILED: see $Kernel33Repo\build_kernel33_harness.log"; exit 1 }
+# the log goes next to the result, not into the Kernel33 checkout
+$log = '/' + $Out.Substring(0, 1).ToLower() + ($Out.Substring(2) -replace '\\', '/') + '/build_kernel33.log'
+$unix = '/'+ $Kernel33Repo.Substring(0, 1).ToLower() + ($Kernel33Repo.Substring(2) -replace '\\', '/')
+& $Bash -lc "cd '$unix' && export PATH=/c/msys64/mingw32/bin:`$PATH && K33_NO_COPY=1 K33_LOCAL_TESTING=1 K33_DIAGNOSTICS=1 sh build.sh > '$log' 2>&1"
+if ($LASTEXITCODE) { "build FAILED: see $Out\build_kernel33.log"; exit 1 }
 Copy-Item "$Kernel33Repo\Kernel33.dll" "$Out\Kernel33.dll" -Force
 "$Out\Kernel33.dll"
