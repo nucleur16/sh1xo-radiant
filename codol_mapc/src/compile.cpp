@@ -128,6 +128,77 @@ namespace codol::mapc
 			ctx.rep.entities_after));
 	}
 
+	// Models of entities ( script_model .. ) that the map zone does not have and a donor zone does: the xmodel
+	// becomes a top level asset in front of the gfx_map, with what it depends on, so that the game finds it by
+	// name once the map is loaded. Static models ( misc_model with "codol_static" ) are the business of
+	// stage_models. A model that neither the zone nor a donor has is left alone: it may be in one of the game's
+	// common zones, which the compiler does not read.
+	void stage_entity_models(context& ctx)
+	{
+		std::vector<std::string> wanted;
+		for (const edit::object_id id : ctx.edited.entities())
+		{
+			const edit::entity* e = ctx.edited.find_entity(id);
+			if (!e || (e->classname() == "misc_model" && e->find("codol_static")))
+			{
+				continue;
+			}
+			const std::string model(e->value("model"));
+			if (model.empty() || model[0] == '*' || std::find(wanted.begin(), wanted.end(), model) != wanted.end()
+				|| ctx.editor.find_asset(c1::ASSET_TYPE_XMODEL, model) != ZoneEditor::npos)
+			{
+				continue;
+			}
+			wanted.push_back(model);
+		}
+		if (wanted.empty())
+		{
+			return;
+		}
+		std::vector<std::unique_ptr<ZoneEditor>> donors;
+		for (const auto& file : ctx.opts.donors)
+		{
+			auto donor = std::make_unique<ZoneEditor>();
+			if (const zone::Status s = donor->open(file, ctx.key); !s)
+			{
+				ctx.warn("donor zone: " + s.message);
+				continue;
+			}
+			donors.push_back(std::move(donor));
+		}
+		bool added = false;
+		for (const std::string& model : wanted)
+		{
+			for (const auto& donor : donors)
+			{
+				const std::size_t in_donor = donor->find_asset(c1::ASSET_TYPE_XMODEL, model);
+				if (in_donor == ZoneEditor::npos)
+				{
+					continue;
+				}
+				const std::size_t gfx_now = ctx.editor.find_asset(c1::ASSET_TYPE_GFXWORLD, ctx.editor.asset(ctx.gfx_asset).name);
+				const std::size_t before = ctx.editor.asset_count();
+				if (const zone::Status s = ctx.editor.add_asset(*donor, in_donor, gfx_now, true); !s)
+				{
+					ctx.warn("entity model '" + model + "' could not be taken from zone '" + donor->name() + "': " + s.message
+						+ ". Entities with it have no model in the game unless another loaded zone has it");
+				}
+				else
+				{
+					ctx.rep.model_assets_added += static_cast<int>(ctx.editor.asset_count() - before);
+					ctx.note(format("entity models: xmodel '%s' taken from zone '%s' with %zu assets it depends on", model.c_str(), donor->name().c_str(),
+						ctx.editor.asset_count() - before - 1));
+					added = true;
+				}
+				break;
+			}
+		}
+		if (added)
+		{
+			ctx.reload();		// the asset table moved
+		}
+	}
+
 	bool compile_zone(ZoneEditor& editor, const edit::document& baseline, const edit::document& edited, const options& opts, const zone::ClientKey& key,
 		std::vector<std::uint8_t>& zone_bytes, report& rep, std::string& error)
 	try
@@ -173,6 +244,10 @@ namespace codol::mapc
 		if (opts.entities)
 		{
 			stage_entities(ctx);
+			if (!opts.donors.empty())
+			{
+				stage_entity_models(ctx);
+			}
 		}
 		if (opts.models && (!d.models_moved.empty() || !d.models_deleted.empty() || !d.models_added.empty()))
 		{
@@ -209,7 +284,7 @@ namespace codol::mapc
 				"%u static models - accepted", info.brushes, info.brush_sides, info.brush_edges, info.planes, info.leaf_brush_nodes, info.leaf_brushes, info.inline_leaf_brushes,
 				info.static_models));
 		}
-		rep.identical = !rep.entities_changed && rep.models_moved + rep.models_deleted + rep.models_added + rep.models_hidden == 0
+		rep.identical = !rep.entities_changed && !rep.model_assets_added && rep.models_moved + rep.models_deleted + rep.models_added + rep.models_hidden == 0
 			&& rep.brushes_replaced + rep.brushes_deleted + rep.brushes_added + rep.surfaces_added == 0;
 		// leave the editor on the compiled zone, so that the caller can read the result back
 		{

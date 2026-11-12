@@ -43,7 +43,11 @@ codol_mapc --check <map.ff> --exe <C1.exe>
   without that it imports `--base` again and uses that import.
 * `--out` an unsigned `IWffu100` fast file ( see `codol_zone/README.md` for who loads those ). `--zone-out` the
   inflated zone. `--report` what was done, what was approximated, what was left out ( also printed ).
-* `--donor` a fast file a new static model may be taken from when the map zone does not have it ( repeatable ).
+* `--donor` a fast file a new static model may be taken from when the map zone does not have it ( repeatable ). The
+  model of any other entity ( `script_model` .. ) that the map zone does not have and a donor has is copied as well:
+  a top level xmodel in front of the gfx_map with what it depends on ( "entity models: xmodel .. taken from zone .." in
+  the report ). A model neither has is left alone - it may be in one of the game's common zones, which the compiler
+  does not read. Not loaded by a game client or server yet.
 * `--no-brushes` also leaves out the surfaces: render surfaces are only made for brushes the brush stage compiled.
 * Exit code 0: written. 1: failed, nothing written. A map without differences gives the base zone, byte for byte.
 * A compile that changes collision data reads the result back the way a dedicated server does ( below ) and fails,
