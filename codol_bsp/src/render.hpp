@@ -40,6 +40,9 @@ namespace codol::bsp
 		zone_ref ref;
 		const material_desc* desc = nullptr;
 		int draw_class = 0;				// 0 lit opaque, 1 lit transparent / decal
+		// the mean of its colour map's squared texels: what it reflects ( read_material_colours ). Not known: a mid grey.
+		float albedo[3] = { 0.25f, 0.25f, 0.25f };
+		bool albedo_known = false;
 	};
 
 	struct render_portal
@@ -128,6 +131,8 @@ namespace codol::bsp
 	void build_render_surfaces(compile_context& ctx, render_world& rw);
 	// lightmaps, lightmap coordinates, light grid, reflection probes
 	void bake_lighting(compile_context& ctx, render_world& rw);
+	// the colour every material throws light back with: the mean of its colour map ( material_color.cpp )
+	void read_material_colours(compile_context& ctx, render_world& rw);
 	// vertices of the world that lie on an edge of a face become vertices of that face ( tjunction.cpp )
 	void repair_t_junctions(compile_context& ctx, render_world& rw);
 }

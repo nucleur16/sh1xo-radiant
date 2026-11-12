@@ -207,7 +207,15 @@ namespace codol::bsp
 		std::uint32_t surface_type_bits = 0;
 		zone_ref sky_image;				// the cube map of a sky material, when its pixels or header are in a zone
 		std::string sky_image_name;
+		// what its surfaces throw light back with ( material_color.cpp ): the name of its colour map, and - when the
+		// picture's pixels are in the zone that has the material ( a project's ) - the mean of its squared texels
+		std::string color_map;
+		float albedo[3] = { 0.25f, 0.25f, 0.25f };
+		bool albedo_known = false;
 	};
+
+	// the mean of the squared texels of an image whose pixels are in a zone; false: streamed, or not read
+	bool albedo_from_zone_image(const Zone& z, zaddr image, bool by_alpha, float out[3]);
 
 	// Copies materials ( with technique set, shaders, images ) and xmodels out of loaded zones into the zone that is
 	// being built, as top level assets in front of the map assets.

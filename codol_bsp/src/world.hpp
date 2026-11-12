@@ -258,6 +258,7 @@ namespace codol::bsp
 		float ambient[3] = { 0.25f, 0.27f, 0.32f };		// ambient + sky light: what a flat ( --no-light ) map is lit with
 		float ambient_light[3] = { 0.05f, 0.05f, 0.05f };	// worldspawn "ambient"
 		float sky_light[3] = { 0.4f, 0.45f, 0.5f };		// worldspawn "skycolor" x "skylight": what a surface that sees the whole sky receives
+		float radiosity_scale = 1.0f;	// worldspawn "radiosityscale": how strong bounced light is
 		std::uint32_t checksum = 0;
 		bool planes_final = false;		// the plane array was written: no stage may add to it
 

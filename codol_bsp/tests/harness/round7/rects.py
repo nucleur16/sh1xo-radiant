@@ -1,6 +1,6 @@
 # rects.py <a.png> <b.png> <name=x0,y0,x1,y1> ..: the mean brightness ( 0 .. 255 ) of rectangles of two pictures taken
-# from the same place, and b / a - how dark a shadow is that only picture b has. Coordinates are those of the
-# pictures given ( the 1600 wide _s.png ).
+# from the same place, and b / a - how dark a shadow is that only picture b has -, and their mean colour with red over
+# blue ( the tint of bounced light ). Coordinates are those of the pictures given ( the 1600 wide _s.png ).
 import sys, zlib, struct
 
 def load(path):
@@ -36,16 +36,19 @@ def load(path):
 def mean(img, r):
     w, h, bpp, rows = img
     x0, y0, x1, y1 = r
-    s = n = 0
+    s, n = [0, 0, 0], 0
     for y in range(max(y0, 0), min(y1, h)):
         row = rows[y]
         for x in range(max(x0, 0), min(x1, w)):
-            s += row[x * bpp] + row[x * bpp + 1] + row[x * bpp + 2]; n += 3
-    return s / max(n, 1)
+            for c in range(3): s[c] += row[x * bpp + c]
+            n += 1
+    return [v / max(n, 1) for v in s]
 
 a, b = load(sys.argv[1]), load(sys.argv[2])
 for spec in sys.argv[3:]:
     name, r = spec.split('=')
     r = tuple(int(v) for v in r.split(','))
-    ma, mb = mean(a, r), mean(b, r)
-    print('%-10s %6.1f -> %6.1f   ratio %.2f' % (name, ma, mb, mb / max(ma, 1e-6)))
+    ca, cb = mean(a, r), mean(b, r)
+    ma, mb = sum(ca) / 3, sum(cb) / 3
+    print('%-10s %6.1f -> %6.1f   ratio %.2f   r g b %5.1f %5.1f %5.1f ( red / blue %.3f ) -> %5.1f %5.1f %5.1f ( red / blue %.3f )'
+          % (name, ma, mb, mb / max(ma, 1e-6), ca[0], ca[1], ca[2], ca[0] / max(ca[2], 1e-6), cb[0], cb[1], cb[2], cb[0] / max(cb[2], 1e-6)))

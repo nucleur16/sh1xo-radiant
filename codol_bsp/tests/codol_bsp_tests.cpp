@@ -225,6 +225,51 @@ namespace
 			}
 			return -1.0f;
 		}
+		// the baked light at a point of the floor as the shader makes it of the two layers on a flat normal, r g b; false: no triangle
+		bool floor_rgb(const float x, const float y, float out[3], const float height = 0.0f) const
+		{
+			const std::vector<c1::GfxWorldVertex> vertices = world.vertices();
+			const std::vector<std::uint16_t> indices = world.indices();
+			for (const zone::WorldSurface& surface : world.surfaces)
+			{
+				for (std::uint32_t t = 0; t < surface.raw.triCount; t++)
+				{
+					const c1::GfxWorldVertex* v[3];
+					bool flat = true;
+					for (int k = 0; k < 3; k++)
+					{
+						v[k] = &vertices[surface.raw.firstVertex + indices[surface.raw.baseIndex + 3 * t + static_cast<std::uint32_t>(k)]];
+						flat = flat && std::fabs(v[k]->xyz[2] - height) < 0.01f;
+					}
+					const float d = (v[1]->xyz[1] - v[2]->xyz[1]) * (v[0]->xyz[0] - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (v[0]->xyz[1] - v[2]->xyz[1]);
+					if (!flat || std::fabs(d) < 1e-6f)
+					{
+						continue;
+					}
+					const float a = ((v[1]->xyz[1] - v[2]->xyz[1]) * (x - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					const float b = ((v[2]->xyz[1] - v[0]->xyz[1]) * (x - v[2]->xyz[0]) + (v[0]->xyz[0] - v[2]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					if (a < 0 || b < 0 || a + b > 1)
+					{
+						continue;
+					}
+					const float u = a * v[0]->lmapCoord[0] + b * v[1]->lmapCoord[0] + (1 - a - b) * v[2]->lmapCoord[0],
+						w = a * v[0]->lmapCoord[1] + b * v[1]->lmapCoord[1] + (1 - a - b) * v[2]->lmapCoord[1];
+					const int sw = secondary.raw.width, sh = secondary.raw.height / 2;
+					const int px = std::clamp(static_cast<int>(u * static_cast<float>(sw)), 0, sw - 1), py = std::clamp(static_cast<int>(w * static_cast<float>(sh)), 0, sh - 1);
+					const std::uint8_t* up = texel(0, px, py);
+					const std::uint8_t* low = texel(1, px, py);
+					const float dx = static_cast<float>(up[3]) / 255.0f * 4.08f - 2.08f, dy = static_cast<float>(low[3]) / 255.0f * 4.06451607f - 2.06451607f;
+					for (int c = 0; c < 3; c++)
+					{
+						// texels are b g r a
+						const float root = static_cast<float>(up[2 - c]) / 255.0f + static_cast<float>(low[2 - c]) / 255.0f / std::sqrt(dx * dx + dy * dy + 1.0f);
+						out[c] = root * root;
+					}
+					return true;
+				}
+			}
+			return false;
+		}
 		// the primary light the floor ( z = `height` ) names at a point; -1: no triangle there
 		int floor_light(const float x, const float y, const float height = 0.0f) const
 		{
@@ -1216,6 +1261,35 @@ int main(const int argc, char** argv)
 		CHECK(write_light_map(out / "maps", "odd_def", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"spawnflags\" \"1\"\n\"def\" \"light_point_nowhere\"\n}\n"));
 		const compiled odd = compile(out, game, "odd_def");
 		CHECK(odd.ok && std::any_of(odd.rep.warnings.begin(), odd.rep.warnings.end(), [](const std::string& w) { return w.find("'light_point_nowhere' is in no zone") != std::string::npos; }));
+	}
+
+	// ---- light: bounced light has the colour of the materials. A closed room, one white light, no other light: what
+	// the floor in a crate's shadow receives came off the walls and the ceiling ( concrete and cinder blocks whose
+	// colour maps are warmer than grey ) - it is warm; in a grey world ( the rounds before ) it is white.
+	// "radiosityscale" makes the bounce stronger.
+	{
+		const std::string keys = "\"sunlight\" \"0\"\n\"ambient\" \"0\"\n\"skylight\" \"0\"", lamp = "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"radius\" \"900\"\n\"intensity\" \"2\"\n}\n";
+		CHECK(write_light_map(out / "maps", "bounce_colour", keys, lamp));
+		CHECK(write_light_map(out / "maps", "bounce_grey", keys, lamp));
+		CHECK(write_light_map(out / "maps", "bounce_strong", keys + "\n\"radiosityscale\" \"2\"", lamp));
+		const compiled coloured = compile(out, game, "bounce_colour"), strong = compile(out, game, "bounce_strong");
+		_putenv("CODOL_BSP_GREY_BOUNCE=1");
+		const compiled grey = compile(out, game, "bounce_grey");
+		_putenv("CODOL_BSP_GREY_BOUNCE=");
+		check_zone(coloured, game, out / "maps" / "bounce_colour.map");
+		CHECK(has_note(coloured.rep, "bounced light takes the colour of 5 of 5 materials") && has_note(grey.rep, "without the colour of the materials"));
+		const zone_light a(coloured.file, game), b(grey.file, game), c(strong.file, game);
+		CHECK(a.ok && b.ok && c.ok);
+		if (a.ok && b.ok && c.ok)
+		{
+			// behind the crate at 128 .. 192: the light at ( 0 0 200 ) does not reach the floor there
+			float with[3] = {}, without[3] = {}, more[3] = {};
+			CHECK(a.floor_rgb(232, 232, with) && b.floor_rgb(232, 232, without) && c.floor_rgb(232, 232, more));
+			CHECK(with[0] > 0.002f && without[0] > 0.002f);
+			CHECK(with[0] > with[2] * 1.08f && with[0] >= with[1] && with[1] >= with[2]);
+			CHECK(std::fabs(without[0] - without[2]) < without[0] * 0.03f);
+			CHECK(more[1] > with[1] * 1.5f);
+		}
 	}
 
 	// ---- light: a light a script may MOVE ( maxmove ). What it could reach in another position and nothing else lights

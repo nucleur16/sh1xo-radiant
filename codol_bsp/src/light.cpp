@@ -1211,8 +1211,12 @@ namespace codol::bsp
 			setup.sky_directions.push_back({ r * std::cos(a), r * std::sin(a), z });
 		}
 
-		// What a surface throws back: half of what arrives ( the images of the materials are not read; a grey world ).
-		constexpr float REFLECT = 0.5f;
+		// What a surface throws back: what arrives times what its material reflects - the mean of its colour map, whose
+		// texels the game's shaders square ( material_color.cpp ) - times 2 x "radiosityscale". The 2: a material whose
+		// colour map is a mid grey ( 128: 0.25 squared ) throws back half, which is what every surface did until the
+		// seventh round ( a grey world ) and what the sky and ambient light were fitted with; the game's pictures are
+		// painted darker than what things reflect. A red wall now throws red light, a dark floor little.
+		constexpr float REFLECT = 0.5f;		// of a material without a colour map that could be read, and of static models
 		const int bounce_rays = ctx.opts.quality <= 0 ? 12 : ctx.opts.quality == 1 ? 24 : 48;
 		const int bounces = !ctx.opts.light ? 0 : ctx.opts.quality <= 1 ? 1 : 2;
 
@@ -2167,11 +2171,27 @@ namespace codol::bsp
 				}
 			}
 			// bounced light: every luxel looks around ( cosine weighted directions over its side ) and takes what the
-			// luxels it sees throw back
+			// luxels it sees throw back - in the colour of its material
+			if (ctx.opts.light)
+			{
+				read_material_colours(ctx, rw);
+			}
+			std::vector<float> reflect(luxel_count * 3, REFLECT);
+			for (const chart& c : charts)
+			{
+				const render_material& material = rw.materials[static_cast<std::size_t>(rw.surfaces[static_cast<std::size_t>(c.surface)].material)];
+				for (std::size_t at = c.first; at < c.first + static_cast<std::size_t>(c.w) * static_cast<std::size_t>(c.h) && at < luxel_count; at++)
+				{
+					for (std::size_t k = 0; k < 3; k++)
+					{
+						reflect[at * 3 + k] = std::clamp(2.0f * w.radiosity_scale * material.albedo[k], 0.0f, 0.95f);
+					}
+				}
+			}
 			emit.assign(luxel_count * 3, 0.0f);
 			for (std::size_t k = 0; k < luxel_count * 3; k++)
 			{
-				emit[k] = REFLECT * (direct[k] + primary_part[k]);
+				emit[k] = reflect[k] * (direct[k] + primary_part[k]);
 			}
 			std::vector<vec3> hemisphere;
 			for (int k = 0; k < bounce_rays; k++)
@@ -2225,13 +2245,13 @@ namespace codol::bsp
 				{
 					indirect[k] += gathered[k];
 					came_from[k] += gathered_from[k];
-					emit[k] = REFLECT * gathered[k];
+					emit[k] = reflect[k] * gathered[k];
 				}
 			}
 			// what every luxel throws back in the end
 			for (std::size_t k = 0; k < luxel_count * 3; k++)
 			{
-				emit[k] = REFLECT * (direct[k] + indirect[k] + primary_part[k]);
+				emit[k] = reflect[k] * (direct[k] + indirect[k] + primary_part[k]);
 			}
 			// ---- the two layers of the secondary lightmap: light without a direction above, light from the direction the
 			// two alpha channels give below, as square roots that add up to the square root of what arrives
@@ -3045,7 +3065,8 @@ namespace codol::bsp
 							{
 								for (int k = 0; k < 3; k++)
 								{
-									c[k] = std::sqrt(emit[from * 3 + static_cast<std::size_t>(k)] / REFLECT);
+									// what the luxel throws back, as bright as a mid grey surface was without the materials' colours
+								c[k] = std::sqrt(emit[from * 3 + static_cast<std::size_t>(k)] / (REFLECT * w.radiosity_scale));
 								}
 							}
 						}

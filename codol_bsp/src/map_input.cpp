@@ -517,6 +517,12 @@ namespace codol::bsp
 		parse_floats(ws.value("_color", ""), ambient_color, 3);
 		parse_floats(ws.value("skycolor", ""), sky_color, 3);
 		parse_floats(ws.value("skylight", ""), &skylight, 1);
+		// how strong bounced light is ( the shipped maps: 0.8 .. 1.7, written both ways )
+		if (!parse_floats(ws.value("radiosityscale", ""), &w.radiosity_scale, 1))
+		{
+			parse_floats(ws.value("radiosityScale", ""), &w.radiosity_scale, 1);
+		}
+		w.radiosity_scale = std::clamp(w.radiosity_scale, 0.1f, 4.0f);
 		normalize_color(color);
 		normalize_color(ambient_color);
 		normalize_color(sky_color);
