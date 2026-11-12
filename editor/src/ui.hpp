@@ -100,6 +100,8 @@ namespace editor::ui
 	void save_as_dialog();
 	void export_entities(bool reload);
 	void compile_map();
+	void new_map(const std::string& name, bool force = false);
+	void build_map(bool fast);
 	void close_map(bool force = false);
 	void exit_editor();
 

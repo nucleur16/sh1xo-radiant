@@ -690,6 +690,153 @@ namespace editor::ui
 		}).detach();
 	}
 
+	// A new, empty map: written to map_source\<name>.map and opened. Such a map has no zone of the game behind
+	// it; "Build map" compiles it from nothing.
+	void new_map(const std::string& name, const bool force)
+	{
+		std::string clean;
+		for (const char c : name)
+		{
+			if (std::isalnum(static_cast<unsigned char>(c)) || c == '_')
+			{
+				clean.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+			}
+		}
+
+		if (clean.empty())
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "New map", "Give the map a name: letters, digits and _ ( mp_mymap ).");
+			return;
+		}
+
+		const auto file = std::filesystem::u8path(utils::fs::get_basepath()) / "map_source" / (clean + ".map");
+		std::error_code ec;
+
+		if (std::filesystem::exists(file, ec))
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "New map", ("map_source\\" + clean + ".map exists already: open it, or pick another name.").c_str(), 6000);
+			return;
+		}
+
+		guarded(force, [file]
+		{
+			edit::document fresh;
+			std::string error;
+			std::error_code dir_error;
+			std::filesystem::create_directories(file.parent_path(), dir_error);
+
+			if (!fresh.save_map_file(file, error) || !get_scene().open_map_file(file, error))
+			{
+				game::printf_to_console("^1[CoDOL] new map: %s\n", error.c_str());
+				ImGui::Toast(ImGuiToastType_Error, "New map", error.c_str(), 6000);
+				return;
+			}
+
+			game::printf_to_console("[CoDOL] new map %s\n", to_utf8(file).c_str());
+		});
+	}
+
+	// Build: the whole map zone from the .map alone ( codol_bsp ): collision, BSP, cells and portals, render
+	// geometry, light bake, and its load zone. For maps of your own; a map imported from the game only holds that
+	// map's collision brushes, so use "Compile map to a fastfile" for edits of a shipped map.
+	void build_map(const bool fast)
+	{
+		auto& s = get_scene();
+
+		if (!s.open)
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "Build", "Open or create a map first.");
+			return;
+		}
+
+		static std::atomic_bool busy = false;
+		if (busy)
+		{
+			ImGui::Toast(ImGuiToastType_Warning, "Build", "A build is still running.");
+			return;
+		}
+
+		if (!save())
+		{
+			return;
+		}
+
+		const auto base_dir = std::filesystem::u8path(utils::fs::get_basepath());
+		const auto install = std::filesystem::u8path(components::codol_game::install_path());
+		const auto tool = base_dir / "codol_bsp.exe";
+		std::error_code ec;
+
+		std::filesystem::path exe = install / "C1.exe";
+		if (!std::filesystem::is_regular_file(exe, ec))
+		{
+			exe = install / "codoMP_client_shipRetail.exe";
+		}
+
+		std::string problem;
+		if (!std::filesystem::is_regular_file(tool, ec)) { problem = "codol_bsp.exe is not next to the editor."; }
+		else if (!std::filesystem::is_regular_file(exe, ec)) { problem = "The client exe was not found in the install ( File > Settings )."; }
+
+		if (!problem.empty())
+		{
+			game::printf_to_console("^1[CoDOL] build: %s\n", problem.c_str());
+			ImGui::Toast(ImGuiToastType_Error, "Build", problem.c_str(), 6000);
+			return;
+		}
+
+		const auto map_file = s.map_file;
+		const std::string name = to_utf8(map_file.stem());
+		const auto out_dir = base_dir / "compiled";
+		std::filesystem::create_directories(out_dir / "cache", ec);
+
+		const auto out = out_dir / (name + ".ff");
+		const auto report = out_dir / (name + ".build.txt");
+
+		std::string command_line = "\"" + to_utf8(tool) + "\" --map \"" + to_utf8(map_file) + "\" --exe \"" + to_utf8(exe) + "\" --install \"" + to_utf8(install)
+			+ "\" --out \"" + to_utf8(out) + "\" --name " + name + " --report \"" + to_utf8(report) + "\" --cache \"" + to_utf8(out_dir / "cache") + "\"";
+
+		// models and materials of the project
+		if (const auto assets_zone = assets::zone_file(); std::filesystem::is_regular_file(assets_zone, ec))
+		{
+			command_line += " --assets \"" + to_utf8(assets_zone) + "\"";
+		}
+
+		if (fast)
+		{
+			command_line += " --fast";
+		}
+
+		busy = true;
+		game::printf_to_console("[CoDOL] building %s ..\n", name.c_str());
+		ImGui::Toast(ImGuiToastType_Info, "Build", ("Building " + name + " ..").c_str());
+
+		std::thread([command_line, out, report, name, base_dir]
+		{
+			std::string output;
+			const int code = components::codol_game::run_command(command_line, to_utf8(base_dir), output);
+
+			components::codol_game::post_to_gui([code, output, out, report, name]
+			{
+				busy = false;
+
+				if (!output.empty())
+				{
+					game::printf_to_console("%s\n", output.c_str());
+				}
+
+				if (code != 0)
+				{
+					game::printf_to_console("^1[CoDOL] build of %s failed ( exit code %d )\n", name.c_str(), code);
+					ImGui::Toast(ImGuiToastType_Error, "Build", ("Build of " + name + " failed, see the console.").c_str(), 8000);
+					return;
+				}
+
+				game::printf_to_console("[CoDOL] built: %s ( and its _load zone )\n[CoDOL] report: %s\n", to_utf8(out).c_str(), to_utf8(report).c_str());
+				game::printf_to_console("[CoDOL] to play it: copy both .ff files into the game's zone folder ( client and server ) and start the lobby with CODOL_FORCE_MAP=%s\n", name.c_str());
+				ImGui::Toast(ImGuiToastType_Success, "Build", ("Built " + name + ": compiled\\" + name + ".ff").c_str(), 8000);
+			});
+		}).detach();
+	}
+
 	void close_map(const bool force)
 	{
 		guarded(force, [] { get_scene().close(); });
@@ -755,6 +902,23 @@ namespace editor::ui
 	{
 		auto& s = get_scene();
 
+		if (ImGui::BeginMenu("New map"))
+		{
+			static std::string name = "mp_mymap";
+			ImGui::SetNextItemWidth(220.0f);
+			const bool enter = ImGui::InputText("##new_map_name", &name, ImGuiInputTextFlags_EnterReturnsTrue);
+			ImGui::SameLine();
+
+			if (ImGui::Button("Create") || enter)
+			{
+				new_map(name, false);
+				ImGui::CloseCurrentPopup();
+			}
+
+			ImGui::TextDisabled("saved as map_source\\<name>.map");
+			ImGui::EndMenu();
+		}
+
 		if (ImGui::MenuItem("Open map ..", "Ctrl+O"))
 		{
 			GET_GUI(ggui::codol_map_ents_dialog)->open();
@@ -793,6 +957,21 @@ namespace editor::ui
 		ImGui::MenuItem("Load the map on the server after the export", nullptr, &maps->m_reload_after_export);
 
 		ImGui::Separator();
+
+		if (ImGui::MenuItem("Build map ( from scratch )", nullptr, false, s.open))
+		{
+			build_map(false);
+		}
+
+		if (ImGui::IsItemHovered())
+		{
+			ImGui::SetTooltip("For maps of your own: compiles the whole map zone from the .map alone - collision, BSP, cells and portals,\nrender geometry and a light bake - into compiled\\<map>.ff and its load zone.");
+		}
+
+		if (ImGui::MenuItem("Build map, fast ( no light bake quality )", nullptr, false, s.open))
+		{
+			build_map(true);
+		}
 
 		if (ImGui::MenuItem("Compile map to a fastfile", nullptr, false, s.open))
 		{
@@ -1015,6 +1194,16 @@ namespace editor::ui
 		command::register_command("map_compile", [](args_t)
 		{
 			if (need_map()) { compile_map(); }
+		});
+
+		command::register_command("map_new", [](args_t args)
+		{
+			if (args.size() > 1) { new_map(args[1], true); } else { game::printf_to_console("usage: map_new <name>\n"); }
+		});
+
+		command::register_command("map_build", [](args_t args)
+		{
+			if (need_map()) { build_map(args.size() > 1 && args[1] == "fast"); }
 		});
 
 		command::register_command("map_close", [](args_t) { close_map(true); });
