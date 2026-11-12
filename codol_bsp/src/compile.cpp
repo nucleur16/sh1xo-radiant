@@ -102,7 +102,13 @@ namespace codol::bsp
 			out.radius = in.radius;
 			out.cosHalfFovOuter = in.cos_half_fov_outer;
 			out.cosHalfFovInner = in.cos_half_fov_inner;
-			out.cosHalfFovExpanded = in.cos_half_fov_outer;
+			// the cone the beam stays in however a script turns the light: the outer cone widened by "maxturn". Every
+			// light of the shipped maps that may not turn has the outer cone here; the four of zm_asylum_sh with
+			// maxturn 360 have -1. The client tests what a light's shadow map holds against this cone.
+			out.cosHalfFovExpanded = in.scriptable && in.rotation_limit < 0.9999f
+				? static_cast<float>(std::cos(std::min(3.14159265358979, std::acos(std::clamp(static_cast<double>(in.cos_half_fov_outer), -1.0, 1.0))
+					+ std::acos(std::clamp(static_cast<double>(in.rotation_limit), -1.0, 1.0)))))
+				: in.cos_half_fov_outer;
 			out.rotationLimit = in.rotation_limit;
 			out.translationLimit = in.translation_limit;
 		}

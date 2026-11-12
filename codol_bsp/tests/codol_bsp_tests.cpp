@@ -225,6 +225,140 @@ namespace
 			}
 			return -1.0f;
 		}
+		// the primary light the floor ( z = `height` ) names at a point; -1: no triangle there
+		int floor_light(const float x, const float y, const float height = 0.0f) const
+		{
+			const std::vector<c1::GfxWorldVertex> vertices = world.vertices();
+			const std::vector<std::uint16_t> indices = world.indices();
+			for (const zone::WorldSurface& surface : world.surfaces)
+			{
+				for (std::uint32_t t = 0; t < surface.raw.triCount; t++)
+				{
+					const c1::GfxWorldVertex* v[3];
+					bool flat = true;
+					for (int k = 0; k < 3; k++)
+					{
+						v[k] = &vertices[surface.raw.firstVertex + indices[surface.raw.baseIndex + 3 * t + static_cast<std::uint32_t>(k)]];
+						flat = flat && std::fabs(v[k]->xyz[2] - height) < 0.01f;
+					}
+					const float d = (v[1]->xyz[1] - v[2]->xyz[1]) * (v[0]->xyz[0] - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (v[0]->xyz[1] - v[2]->xyz[1]);
+					if (!flat || std::fabs(d) < 1e-6f)
+					{
+						continue;
+					}
+					const float a = ((v[1]->xyz[1] - v[2]->xyz[1]) * (x - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					const float b = ((v[2]->xyz[1] - v[0]->xyz[1]) * (x - v[2]->xyz[0]) + (v[0]->xyz[0] - v[2]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					if (a >= 0 && b >= 0 && a + b <= 1)
+					{
+						return surface.raw.primaryLightIndex;
+					}
+				}
+			}
+			return -1;
+		}
+		// whether the primary lightmap has a lit texel at a point of the floor ( within a luxel of it )
+		bool primary_lit_on_floor(const float x, const float y, const float height = 0.0f) const
+		{
+			const std::vector<c1::GfxWorldVertex> vertices = world.vertices();
+			const std::vector<std::uint16_t> indices = world.indices();
+			for (const zone::WorldSurface& surface : world.surfaces)
+			{
+				for (std::uint32_t t = 0; t < surface.raw.triCount; t++)
+				{
+					const c1::GfxWorldVertex* v[3];
+					bool flat = true;
+					for (int k = 0; k < 3; k++)
+					{
+						v[k] = &vertices[surface.raw.firstVertex + indices[surface.raw.baseIndex + 3 * t + static_cast<std::uint32_t>(k)]];
+						flat = flat && std::fabs(v[k]->xyz[2] - height) < 0.01f;
+					}
+					const float d = (v[1]->xyz[1] - v[2]->xyz[1]) * (v[0]->xyz[0] - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (v[0]->xyz[1] - v[2]->xyz[1]);
+					if (!flat || std::fabs(d) < 1e-6f)
+					{
+						continue;
+					}
+					const float a = ((v[1]->xyz[1] - v[2]->xyz[1]) * (x - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					const float b = ((v[2]->xyz[1] - v[0]->xyz[1]) * (x - v[2]->xyz[0]) + (v[0]->xyz[0] - v[2]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					if (a < 0 || b < 0 || a + b > 1)
+					{
+						continue;
+					}
+					const float u = a * v[0]->lmapCoord[0] + b * v[1]->lmapCoord[0] + (1 - a - b) * v[2]->lmapCoord[0],
+						w = a * v[0]->lmapCoord[1] + b * v[1]->lmapCoord[1] + (1 - a - b) * v[2]->lmapCoord[1];
+					const int pw = primary.raw.width, ph = primary.raw.height;
+					const int px = std::clamp(static_cast<int>(u * static_cast<float>(pw)), 1, pw - 2), py = std::clamp(static_cast<int>(w * static_cast<float>(ph)), 1, ph - 2);
+					for (int dy = -1; dy <= 1; dy++)
+					{
+						for (int dx = -1; dx <= 1; dx++)
+						{
+							if (primary.pixels[static_cast<std::size_t>(py + dy) * static_cast<std::size_t>(pw) + static_cast<std::size_t>(px + dx)] > 128)
+							{
+								return true;
+							}
+						}
+					}
+					return false;
+				}
+			}
+			return false;
+		}
+		// the hulls of a primary light's region as the zone holds them
+		struct hull
+		{
+			float mid[9], half[9];
+			std::vector<std::array<float, 5>> axes;		// direction, mid, half
+
+			// a point relative to the light
+			bool holds(const float x, const float y, const float zz) const
+			{
+				const float v[9] = { x, y, zz, x + y, x - y, x + zz, x - zz, y + zz, y - zz };
+				for (int a = 0; a < 9; a++)
+				{
+					if (std::fabs(v[a] - mid[a]) > half[a])
+					{
+						return false;
+					}
+				}
+				for (const std::array<float, 5>& a : axes)
+				{
+					if (std::fabs(x * a[0] + y * a[1] + zz * a[2] - a[3]) > a[4])
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+		};
+		std::vector<hull> region(const std::size_t primary_light) const
+		{
+			std::vector<hull> out;
+			std::uint32_t region_at = 0;
+			std::memcpy(&region_at, world.raw._unk416 + 36, 4);
+			if (!region_at || primary_light >= world.raw.primaryLightCount)
+			{
+				return out;
+			}
+			const std::vector<std::uint32_t> regions = z.get_array<std::uint32_t>(region_at, 2u * world.raw.primaryLightCount);
+			for (std::uint32_t k = 0; k < regions[primary_light * 2] && regions[primary_light * 2 + 1]; k++)
+			{
+				const zone::zaddr at = regions[primary_light * 2 + 1] + k * 80;
+				const std::vector<float> ranges = z.get_array<float>(at, 18);
+				const std::vector<std::uint32_t> tail = z.get_array<std::uint32_t>(at + 72, 2);
+				hull h;
+				std::copy(ranges.begin(), ranges.begin() + 9, h.mid);
+				std::copy(ranges.begin() + 9, ranges.end(), h.half);
+				if (tail[0] && tail[1])
+				{
+					const std::vector<float> axes = z.get_array<float>(tail[1], 5u * tail[0]);
+					for (std::uint32_t a = 0; a < tail[0]; a++)
+					{
+						h.axes.push_back({ axes[a * 5], axes[a * 5 + 1], axes[a * 5 + 2], axes[a * 5 + 3], axes[a * 5 + 4] });
+					}
+				}
+				out.push_back(h);
+			}
+			return out;
+		}
 		std::string rawfile(const std::string& name) const
 		{
 			zone::RawFileView view;
@@ -934,6 +1068,9 @@ int main(const int argc, char** argv)
 		{
 			CHECK(omni_light.lights[2].type == 3 && omni_light.lights[2].exponent == 0 && std::fabs(omni_light.lights[2].radius - 600.0f) < 0.01f);
 			CHECK(std::fabs(omni_light.lights[2].cosHalfFovOuter - 0.5f) < 0.001f && omni_light.lights[2].canUseShadowMap == 1);
+			// the cone of an omni light is where what moves throws a shadow: wide by default, full up to 105 degrees
+			CHECK(std::fabs(omni_light.lights[2].cosHalfFovInner - 0.6088f) < 0.001f);
+			CHECK(std::fabs(omni_light.lights[2].dir[2] - 1.0f) < 0.001f);
 		}
 	}
 
@@ -958,6 +1095,8 @@ int main(const int argc, char** argv)
 			// the records: the second light may turn 30 degrees and move 16 units, and names the other definition
 			CHECK(light.lights[2].rotationLimit == 1.0f && light.lights[2].translationLimit == 0.0f);
 			CHECK(std::fabs(light.lights[3].rotationLimit - 0.8660f) < 0.001f && light.lights[3].translationLimit == 16.0f);
+			// the "expanded" cone is the outer one widened by maxturn ( 45 + 30 degrees ); the outer one for a light that may not turn
+			CHECK(light.lights[2].cosHalfFovExpanded == light.lights[2].cosHalfFovOuter && std::fabs(light.lights[3].cosHalfFovExpanded - 0.2588f) < 0.001f);
 			CHECK(light.lights[3].defName && light.z.c_string(light.lights[3].defName) == std::string_view("light_point_quadratic"));
 			// the definitions and their strips: 34 texels each from 1 and 35, the first texel of a strip a copy of the second
 			const zone::zaddr linear = light.z.find_asset(c1::ASSET_TYPE_LIGHT_DEF, "light_point_linear"), quadratic = light.z.find_asset(c1::ASSET_TYPE_LIGHT_DEF, "light_point_quadratic");
@@ -1009,7 +1148,11 @@ int main(const int argc, char** argv)
 			}
 			CHECK(!floor_materials[2].empty() && floor_materials[2] == floor_materials[3]);
 			// each light's pieces lie on its side of the room, and they meet in the middle
-			CHECK(floor_x[2][0] < -300 && floor_x[2][1] <= 32 && floor_x[3][0] >= -32 && floor_x[3][1] > 300 && std::fabs(floor_x[2][1] - floor_x[3][0]) < 0.01);
+			CHECK(floor_x[2][0] < -300 && floor_x[3][1] > 300);
+			CHECK(light.floor_light(-400, 10) == 2 && light.floor_light(-20, 10) == 2 && light.floor_light(20, 10) == 3 && light.floor_light(400, 10) == 3);
+			// the second light may turn ( 30 degrees ) and move: a corner of the floor its cone does not reach as compiled,
+			// and the first light's neither, is the second light's
+			CHECK(light.floor_light(300, 400) == 3 && light.floor_light(-300, 440) != 2);
 			// the scriptable light is an entity of the map, its first key the index of its primary light
 			zone::MapEntsView ents;
 			CHECK(zone::read_map_ents(light.z, zone::find_map_ents(light.z), ents));
@@ -1073,6 +1216,92 @@ int main(const int argc, char** argv)
 		CHECK(write_light_map(out / "maps", "odd_def", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"spawnflags\" \"1\"\n\"def\" \"light_point_nowhere\"\n}\n"));
 		const compiled odd = compile(out, game, "odd_def");
 		CHECK(odd.ok && std::any_of(odd.rep.warnings.begin(), odd.rep.warnings.end(), [](const std::string& w) { return w.find("'light_point_nowhere' is in no zone") != std::string::npos; }));
+	}
+
+	// ---- light: a light a script may MOVE ( maxmove ). What it could reach in another position and nothing else lights
+	// names it and is in its region - the same lamp without maxmove ends at its cone
+	{
+		const auto lamp = [](const char* limits)
+		{
+			return std::string("{\n\"classname\" \"light\"\n\"origin\" \"-220 0 230\"\n\"spawnflags\" \"6\"\n\"radius\" \"480\"\n\"intensity\" \"1.5\"\n"
+				"\"fov_outer\" \"90\"\n\"fov_inner\" \"40\"\n\"exponent\" \"1\"\n\"angles\" \"90 0 0\"\n\"targetname\" \"lamp\"\n") + limits + "}\n";
+		};
+		CHECK(write_light_map(out / "maps", "fixed_lamp", "\"sunlight\" \"0\"", lamp("")));
+		CHECK(write_light_map(out / "maps", "moved_lamp", "\"sunlight\" \"0\"", lamp("\"maxmove\" \"300\"\n")));
+		CHECK(write_light_map(out / "maps", "turned_lamp", "\"sunlight\" \"0\"", lamp("\"maxturn\" \"180\"\n")));
+		const compiled fixed = compile(out, game, "fixed_lamp"), moved = compile(out, game, "moved_lamp"), turned = compile(out, game, "turned_lamp");
+		check_zone(moved, game, out / "maps" / "moved_lamp.map");
+		check_zone(turned, game, out / "maps" / "turned_lamp.map");
+		CHECK(has_note(moved.rep, "may be moved 300 units and turned 0 degrees") && !has_note(fixed.rep, "may be moved"));
+		const zone_light a(fixed.file, game), b(moved.file, game), c(turned.file, game);
+		CHECK(a.ok && b.ok && c.ok && a.lights.size() == 3 && b.lights.size() == 3 && c.lights.size() == 3);
+		if (a.ok && b.ok && c.ok && a.lights.size() == 3 && b.lights.size() == 3 && c.lights.size() == 3)
+		{
+			// under the lamp the floor names it either way
+			CHECK(a.floor_light(-220, 30) == 2 && b.floor_light(-220, 30) == 2 && c.floor_light(-220, 30) == 2);
+			// 520 units to the side: beyond the cone ( 230 units around the point under the lamp ) - the fixed lamp's floor
+			// names no light there, the movable one's does; a corner of the room that no position of the cone reaches does not
+			CHECK(a.floor_light(300, 30) == 0 && b.floor_light(300, 30) == 2);
+			CHECK(b.floor_light(480, 440) == 0);
+			// a lamp that may turn all around lights whatever is within its radius ( 480 ): the floor 380 units to the side
+			CHECK(a.floor_light(160, 30) == 0 && c.floor_light(160, 30) == 2 && c.floor_light(480, 440) == 0);
+			// the records: limits and the expanded cone ( -1 for a light that may turn all around, as zm_asylum_sh's )
+			CHECK(b.lights[2].translationLimit == 300.0f && b.lights[2].rotationLimit == 1.0f && b.lights[2].cosHalfFovExpanded == b.lights[2].cosHalfFovOuter);
+			CHECK(c.lights[2].translationLimit == 0.0f && std::fabs(c.lights[2].rotationLimit + 1.0f) < 0.001f && std::fabs(c.lights[2].cosHalfFovExpanded + 1.0f) < 0.001f);
+			// the regions hold what the lamp can reach: the floor 520 units to the side only for the one that may move
+			const std::vector<zone_light::hull> ha = a.region(2), hb = b.region(2);
+			CHECK(ha.size() == 1 && hb.size() == 1);
+			if (ha.size() == 1 && hb.size() == 1)
+			{
+				CHECK(ha[0].holds(0, 0, -220) && hb[0].holds(0, 0, -220));
+				CHECK(!ha[0].holds(520, 30, -226) && hb[0].holds(520, 30, -226));
+			}
+			// the primary lightmap of the floor that only the moved lamp reaches is its visibility from where it was
+			// compiled: lit texels there
+			CHECK(b.primary_lit_on_floor(300, 30));
+		}
+	}
+
+	// ---- light: a primary light that shines through doorways. Its region has a hull per cell, and the hull of a cell
+	// the light is not in has planes through the light and the edges of a portal: what lies beside the beam through
+	// the doorway is outside
+	{
+		std::ifstream in(out / "maps" / "two_rooms.map", std::ios::binary);
+		std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		text += "{\n\"classname\" \"light\"\n\"origin\" \"-400 0 80\"\n\"spawnflags\" \"1\"\n\"radius\" \"1500\"\n\"intensity\" \"2\"\n}\n";
+		std::ofstream(out / "maps" / "door_light.map", std::ios::binary) << text;
+		const compiled c = compile(out, game, "door_light");
+		check_zone(c, game, out / "maps" / "door_light.map");
+		CHECK(c.rep.cells == 3 && has_note(c.rep, "through the light and a portal edge") && !has_note(c.rep, "( 0 through the light and a portal edge )"));
+		const zone_light light(c.file, game);
+		CHECK(light.ok && light.lights.size() == 3);
+		if (light.ok && light.lights.size() == 3)
+		{
+			const std::vector<zone_light::hull> hulls = light.region(2);
+			CHECK(hulls.size() == 3);
+			// planes whose range starts at the light, in the hulls of the other cells only
+			std::size_t through_first = 0, through_further = 0;
+			for (std::size_t k = 0; k < hulls.size(); k++)
+			{
+				for (const std::array<float, 5>& axis : hulls[k].axes)
+				{
+					const bool through = std::fabs(axis[3] - axis[4]) < 0.01f && std::fabs(std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]) - 1.0f) < 0.001f
+						&& std::fabs(std::fabs(axis[0]) - 0.57735f) > 0.01f;
+					(k == 0 ? through_first : through_further) += through;
+				}
+			}
+			CHECK(through_first == 0 && through_further >= 2);
+			const auto in_region = [&](const float x, const float y, const float zz)
+			{
+				return std::any_of(hulls.begin(), hulls.end(), [&](const zone_light::hull& h) { return h.holds(x + 400.0f, y, zz - 80.0f); });
+			};
+			// the light's own room; the far room in the beam through both doorways; the far room beside the beam, right
+			// behind the wall with the second doorway ( inside the nine ranges of that hull, outside the portal's planes )
+			CHECK(in_region(-600, 200, 40) && in_region(700, 20, 40));
+			// one floor brush lies under both rooms and the corridor: it is the light's where the light reaches, in every room
+			CHECK(light.floor_light(-600, 100) == 2 && light.floor_light(0, 20) == 2 && light.floor_light(700, 20) == 2 && light.floor_light(300, 300) != 2);
+			CHECK(!in_region(500, 150, 40) && !in_region(500, -150, 40));
+		}
 	}
 
 	// ---- T-junctions: the test maps with crates on floors, doorways and terrain have none left

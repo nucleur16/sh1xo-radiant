@@ -166,7 +166,7 @@ namespace editor::ui
 			if (outer <= 0)
 			{
 				outer = l.primary_omni ? 120.0f : 90.0f;
-				inner = l.primary_omni && inner <= 0 ? 60.0f : inner;
+				inner = l.primary_omni && inner <= 0 ? 105.0f : inner;		// codol_bsp OMNI_DEFAULT_FOV_INNER
 			}
 
 			outer = std::min(outer, 179.0f);
@@ -964,7 +964,12 @@ namespace editor::ui
 
 			if (l.primary_omni)
 			{
-				summary = "Primary omni light: lights all around at run time. Its shadow map looks down ( 120 degrees ).";
+				// the game's omni shaders blend the shadow map in by the light's cone ( codol_bsp/README.md, seventh round )
+				char text[240];
+				std::snprintf(text, sizeof(text), "Primary omni light: lights all around at run time. Players and models throw shadows "
+					"only inside its cone - %.0f degrees, full inside %.0f, looking %s.", l.outer, l.inner,
+					l.forward.z < -0.99f ? "straight down" : "where it is aimed");
+				summary = text;
 			}
 			else if (l.primary_spot)
 			{
