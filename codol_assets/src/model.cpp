@@ -200,6 +200,123 @@ namespace codol::assets
 		return out;
 	}
 
+	CompiledCollisionTree build_collision_tree(const std::span<const c1::GfxPackedVertex> vertices, const std::span<const std::uint16_t> indices, const std::uint32_t first,
+		const std::uint32_t count)
+	{
+		CompiledCollisionTree tree;
+		if (count == 0 || first + count > 0x8000u || (first + count) * 3 > indices.size())
+		{
+			return tree;
+		}
+		float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+		for (std::uint32_t t = first; t < first + count; t++)
+		{
+			for (int c = 0; c < 3; c++)
+			{
+				const c1::GfxPackedVertex& v = vertices[indices[t * 3 + static_cast<std::uint32_t>(c)]];
+				for (int a = 0; a < 3; a++)
+				{
+					lo[a] = std::min(lo[a], v.xyz[a]);
+					hi[a] = std::max(hi[a], v.xyz[a]);
+				}
+			}
+		}
+		for (int a = 0; a < 3; a++)
+		{
+			tree.trans[a] = -lo[a];
+			tree.scale[a] = 65535.0f / std::max(hi[a] - lo[a], 1e-3f);
+		}
+		struct Box
+		{
+			float lo[3], hi[3];
+		};
+		std::vector<Box> boxes(count);
+		for (std::uint32_t t = 0; t < count; t++)
+		{
+			Box& b = boxes[t];
+			for (int a = 0; a < 3; a++)
+			{
+				b.lo[a] = 1e30f;
+				b.hi[a] = -1e30f;
+			}
+			for (int c = 0; c < 3; c++)
+			{
+				const c1::GfxPackedVertex& v = vertices[indices[(first + t) * 3 + static_cast<std::uint32_t>(c)]];
+				for (int a = 0; a < 3; a++)
+				{
+					const float unit = std::clamp((v.xyz[a] + tree.trans[a]) * tree.scale[a], 0.0f, 65535.0f);
+					b.lo[a] = std::min(b.lo[a], unit);
+					b.hi[a] = std::max(b.hi[a], unit);
+				}
+			}
+		}
+		// breadth first, so that the children of a node lie together and behind it; a node of up to 16 triangles is a leaf
+		// node, a larger one is halved along the longest axis of its triangles' centres
+		std::vector<std::vector<std::uint32_t>> pending;
+		pending.emplace_back(count);
+		for (std::uint32_t t = 0; t < count; t++)
+		{
+			pending[0][t] = t;
+		}
+		tree.nodes.emplace_back();
+		for (std::size_t n = 0; n < tree.nodes.size(); n++)
+		{
+			std::vector<std::uint32_t> list = std::move(pending[n]);
+			float nlo[3] = { 65535.0f, 65535.0f, 65535.0f }, nhi[3] = { 0, 0, 0 }, clo[3] = { 1e30f, 1e30f, 1e30f }, chi[3] = { -1e30f, -1e30f, -1e30f };
+			for (const std::uint32_t t : list)
+			{
+				for (int a = 0; a < 3; a++)
+				{
+					nlo[a] = std::min(nlo[a], boxes[t].lo[a]);
+					nhi[a] = std::max(nhi[a], boxes[t].hi[a]);
+					clo[a] = std::min(clo[a], boxes[t].lo[a] + boxes[t].hi[a]);
+					chi[a] = std::max(chi[a], boxes[t].lo[a] + boxes[t].hi[a]);
+				}
+			}
+			for (int a = 0; a < 3; a++)
+			{
+				tree.nodes[n].mins[a] = static_cast<std::uint16_t>(std::floor(nlo[a]));
+				tree.nodes[n].maxs[a] = static_cast<std::uint16_t>(std::min(std::ceil(nhi[a]), 65535.0f));
+			}
+			if (list.size() <= 16)
+			{
+				tree.nodes[n].childBegin = static_cast<std::uint16_t>(tree.leafs.size());
+				tree.nodes[n].childCount = static_cast<std::uint16_t>(0x8000u | list.size());
+				for (const std::uint32_t t : list)
+				{
+					tree.leafs.push_back(static_cast<std::uint16_t>(first + t));
+				}
+				continue;
+			}
+			int axis = 0;
+			for (int a = 1; a < 3; a++)
+			{
+				if (chi[a] - clo[a] > chi[axis] - clo[axis])
+				{
+					axis = a;
+				}
+			}
+			std::stable_sort(list.begin(), list.end(), [&](const std::uint32_t x, const std::uint32_t y)
+			{
+				return boxes[x].lo[axis] + boxes[x].hi[axis] < boxes[y].lo[axis] + boxes[y].hi[axis];
+			});
+			const std::size_t half = list.size() / 2;
+			tree.nodes[n].childBegin = static_cast<std::uint16_t>(tree.nodes.size());
+			tree.nodes[n].childCount = 2;
+			tree.nodes.emplace_back();
+			tree.nodes.emplace_back();
+			pending.emplace_back(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(half));
+			pending.emplace_back(list.begin() + static_cast<std::ptrdiff_t>(half), list.end());
+		}
+		// the root spans tree space ( every shipped root does )
+		for (int a = 0; a < 3; a++)
+		{
+			tree.nodes[0].mins[a] = 0;
+			tree.nodes[0].maxs[a] = 65535;
+		}
+		return tree;
+	}
+
 	Status compile_model(const ModelOptions& options, CompiledModel& out)
 	try
 	{
@@ -626,6 +743,19 @@ namespace codol::assets
 						triangleAt = triangleEnd;
 					}
 					h.vertListCount = static_cast<std::uint32_t>(surface.rigid.size());
+					// a model bullets can hit gets the collision tree of every rigid list of LOD 0: the client projects the
+					// bullet mark through it, and crashes when it is missing
+					if (l == 0 && options.collisionLod >= 0)
+					{
+						for (const c1::XRigidVertList& list : surface.rigid)
+						{
+							surface.trees.push_back(build_collision_tree(surface.vertices, surface.indices, list.triOffset, list.triCount));
+							if (surface.trees.back().nodes.empty() && list.triCount)
+							{
+								out.notes.push_back("LOD 0: a rigid list that reaches beyond triangle 32768 gets no collision tree; bullet marks on it crash the client - split the surface");
+							}
+						}
+					}
 				}
 				for (int k = 0; k < 8; k++)
 				{

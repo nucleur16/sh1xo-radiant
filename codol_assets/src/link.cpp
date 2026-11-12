@@ -429,7 +429,41 @@ namespace codol::assets
 				pieces.add_array(s.vertices);
 				if (!s.rigid.empty())
 				{
-					pieces.add_array(s.rigid);
+					std::vector<c1::XRigidVertList> lists = s.rigid;
+					for (std::size_t k = 0; k < lists.size(); k++)
+					{
+						lists[k].collisionTree = k < s.trees.size() && !s.trees[k].nodes.empty() ? c1::ZPTR_INLINE : 0;
+					}
+					pieces.add_array(lists);
+					// per list with a tree: header, nodes, leafs ( the order the game's loader reads them in )
+					for (std::size_t k = 0; k < lists.size(); k++)
+					{
+						if (!lists[k].collisionTree)
+						{
+							continue;
+						}
+						const CompiledCollisionTree& tree = s.trees[k];
+						struct TreeHeader
+						{
+							float trans[3], scale[3];
+							std::uint32_t nodeCount, nodes, leafCount, leafs;
+						};
+						static_assert(sizeof(TreeHeader) == 40);
+						TreeHeader th{};
+						std::memcpy(th.trans, tree.trans, sizeof(th.trans));
+						std::memcpy(th.scale, tree.scale, sizeof(th.scale));
+						th.nodeCount = static_cast<std::uint32_t>(tree.nodes.size());
+						th.nodes = c1::ZPTR_INLINE;
+						th.leafCount = static_cast<std::uint32_t>(tree.leafs.size());
+						th.leafs = tree.leafs.empty() ? 0 : c1::ZPTR_INLINE;
+						pieces.add(th);
+						pieces.add_array(tree.nodes);
+						if (!tree.leafs.empty())
+						{
+							pieces.add_array(tree.leafs);
+						}
+						memory += static_cast<std::uint32_t>(sizeof(th) + tree.nodes.size() * 16 + tree.leafs.size() * 2);
+					}
 				}
 				pieces.add_array(s.indices);
 				memory += static_cast<std::uint32_t>(s.vertices.size() * 32 + s.indices.size() * 2 + s.blend.size() * 2 + s.rigid.size() * 12 + sizeof(c1::XSurface));
