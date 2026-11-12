@@ -1719,7 +1719,16 @@ namespace ggui
 		{
 			m->next_spawn = false;
 
-			if (!s.renderer.spawn_camera(++s.spawn_index, cam))
+			if (s.stage)
+			{
+				// the renderer only knows the stage: the spawn points of the document
+				if (!s.document_spawn_camera(++s.spawn_index))
+				{
+					s.spawn_index = 0;
+					s.document_spawn_camera(0);
+				}
+			}
+			else if (!s.renderer.spawn_camera(++s.spawn_index, cam))
 			{
 				s.spawn_index = 0;
 				s.renderer.spawn_camera(0, cam);
@@ -1731,7 +1740,24 @@ namespace ggui
 			m->overview = false;
 
 			float3 center, half;
-			if (s.renderer.world_bounds(center, half))
+			edit::bounds box;
+			bool have = false;
+
+			if (s.stage)
+			{
+				if (s.document_bounds(box))
+				{
+					center = { static_cast<float>((box.mins.x + box.maxs.x) * 0.5), static_cast<float>((box.mins.y + box.maxs.y) * 0.5), static_cast<float>((box.mins.z + box.maxs.z) * 0.5) };
+					half = { static_cast<float>((box.maxs.x - box.mins.x) * 0.5), static_cast<float>((box.maxs.y - box.mins.y) * 0.5), static_cast<float>((box.maxs.z - box.mins.z) * 0.5) };
+					have = true;
+				}
+			}
+			else
+			{
+				have = s.renderer.world_bounds(center, half);
+			}
+
+			if (have)
 			{
 				const float reach = std::max(half.x, half.y) / std::tan(m->fov * 0.5f * editor::DEG);
 				cam.origin = { center.x, center.y, center.z + half.z + reach };

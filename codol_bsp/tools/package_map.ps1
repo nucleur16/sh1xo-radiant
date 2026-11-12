@@ -29,8 +29,14 @@ param([Parameter(Mandatory)][string]$Map, [Parameter(Mandatory)][string]$Name, [
 # -Extra: further codol_bsp arguments. Nothing is written outside <Out>; the install is only read.
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
-if (-not $Bsp) { $Bsp = "$root\build\codol_bsp\Release\codol_bsp.exe" }
-if (-not $Assetc) { $Assetc = "$root\build\codol_assets\Release\codol_assetc.exe" }
+# the tools: as given, else where the READMEs build them ( build\codol_bsp, build\codol_assets_x64 ), else next to the editor
+$find = {
+  param($name, $places)
+  foreach ($p in $places) { if (Test-Path "$root\$p\$name") { return "$root\$p\$name" } }
+  throw "$name is not built ( looked in $($places -join ', ') below $root )"
+}
+if (-not $Bsp) { $Bsp = & $find 'codol_bsp.exe' @('build\codol_bsp\Release', 'build-editor\Release') }
+if (-not $Assetc) { $Assetc = & $find 'codol_assetc.exe' @('build\codol_assets\Release', 'build\codol_assets_x64\Release', 'build-editor\Release') }
 foreach ($tool in $Bsp, $Assetc) { if (-not (Test-Path $tool)) { throw "$tool is not built" } }
 if ($Name -notmatch '^[a-z0-9_]+$') { throw 'the map name may only hold a-z, 0-9 and _' }
 if (-not $DisplayName) { $DisplayName = $Name }
@@ -176,6 +182,10 @@ if ($archives.Count) {
 Set-Content "$presence\INSTALL.txt" -Encoding ASCII -Value @"
 $Name - where the files go ( <game> = the Call of Duty Online 1.1.1.13 folder, <server> = CoD4x_Server )
 
+CoDOL Radiant does all of this for a game folder and a script folder you name: File > Install the built map ..
+( console: map_install game=<game> scripts=<script folder> list ). It keeps a backup of every file it replaces
+( <file>.pre-$Name ), and Uninstall ( map_uninstall ) puts everything back. By hand:
+
 1. the zones
      zone\$Name.ff, zone\${Name}_load.ff  ->  <game>\usermaps\$Name\        ( client and server read usermaps\<map>\ )
    The client has to be started as codoMP_client_shipRetail.exe with the install's Kernel33.dll ( unsigned zones ).
@@ -187,8 +197,10 @@ $Name - where the files go ( <game> = the Call of Duty Online 1.1.1.13 folder, <
    Without the level script the map still runs ( "no level script" ), without minimap setup.
 $projectNote
 3. the create-room list ( map pool row, arena entry, localized name )
-   These three live in one patch zone, client_shipRetail\patch\usermaps_patch.ff, which the install's own script
-   rebuilds from the folders under usermaps\:
+   The client uses the first zone of client_shipRetail\patch\ that holds mp/comaplist.csv: codol_common.ff where
+   the lobby's build made one, else usermaps_patch.ff. The editor's install adds the three things to that zone
+   ( step "list" above ). For usermaps_patch.ff the install's own script does the same from the folders under
+   usermaps\:
      python <game>\usermaps\build_usermaps_patch.py
    It finds usermaps\$Name\$Name.ff and adds by itself: a row of mp/comaplist.csv ( ID $Name, TYPE pvp, 4 - 18
    players, on for every build token ), an entry of mp/basemaps.arena ( environment urban ) and the localize key

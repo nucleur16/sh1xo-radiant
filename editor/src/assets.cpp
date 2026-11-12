@@ -2996,7 +2996,8 @@ namespace editor::assets
 
 	bool undrawn_in_game(const std::string& material)
 	{
-		if (material.rfind("wc/", 0) != 0 || !get_scene().renderer.loaded())
+		// a map of your own ( drawn in the stage ) is built whole by File > Build map: every material goes into its zone
+		if (material.rfind("wc/", 0) != 0 || !get_scene().renderer.loaded() || get_scene().stage)
 		{
 			return false;
 		}

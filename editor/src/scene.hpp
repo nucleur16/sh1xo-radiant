@@ -211,6 +211,11 @@ namespace editor
 		// first position a ray hits: the map, else a point `fallback` units along it
 		[[nodiscard]] edit::vec3 ray_target(const float3& origin, const float3& direction, float fallback = 300.0f) const;
 		void look_at_selection();
+		// The brushes of the document: their box. `spawn` >= 0: the camera of the n-th spawn like entity of the
+		// document ( intermission first ); false when there is none. For a map in the stage, whose renderer knows
+		// only the stage.
+		[[nodiscard]] bool document_bounds(edit::bounds& box) const;
+		bool document_spawn_camera(int spawn);
 
 		[[nodiscard]] static double model_scale(const edit::entity& e);
 		[[nodiscard]] ImU32 class_color(std::string_view classname) const;

@@ -378,6 +378,28 @@ namespace editor
 
 		// look at the map, not at the stage's box
 		edit::bounds box;
+
+		if (document_bounds(box))
+		{
+			const double reach = std::max({ box.maxs.x - box.mins.x, box.maxs.y - box.mins.y, box.maxs.z - box.mins.z, 256.0 });
+			cam.origin = { static_cast<float>((box.mins.x + box.maxs.x) * 0.5 - reach * 0.7), static_cast<float>((box.mins.y + box.maxs.y) * 0.5 - reach * 0.7),
+				static_cast<float>(box.maxs.z + reach * 0.5) };
+			cam.pitch = 35.0f;
+			cam.yaw = 45.0f;
+		}
+		else
+		{
+			cam.origin = { -384.0f, -384.0f, 320.0f };
+			cam.pitch = 30.0f;
+			cam.yaw = 45.0f;
+		}
+
+		cam.roll = 0.0f;
+		return true;
+	}
+
+	bool scene::document_bounds(edit::bounds& box) const
+	{
 		for (const object_id id : doc.entities())
 		{
 			if (const auto* e = doc.find_entity(id))
@@ -395,21 +417,39 @@ namespace editor
 			}
 		}
 
-		if (box.valid())
+		return box.valid();
+	}
+
+	bool scene::document_spawn_camera(const int spawn)
+	{
+		std::vector<const edit::entity*> spawns;
+
+		// the intermission first, then the spawn points
+		for (const bool want_intermission : { true, false })
 		{
-			const double reach = std::max({ box.maxs.x - box.mins.x, box.maxs.y - box.mins.y, box.maxs.z - box.mins.z, 256.0 });
-			cam.origin = { static_cast<float>((box.mins.x + box.maxs.x) * 0.5 - reach * 0.7), static_cast<float>((box.mins.y + box.maxs.y) * 0.5 - reach * 0.7),
-				static_cast<float>(box.maxs.z + reach * 0.5) };
-			cam.pitch = 35.0f;
-			cam.yaw = 45.0f;
-		}
-		else
-		{
-			cam.origin = { -384.0f, -384.0f, 320.0f };
-			cam.pitch = 30.0f;
-			cam.yaw = 45.0f;
+			for (const object_id id : doc.entities())
+			{
+				const auto* e = doc.find_entity(id);
+				const std::string_view cls = e ? e->classname() : std::string_view();
+				const bool intermission = cls == "mp_global_intermission";
+
+				if (e && (want_intermission ? intermission : (cls.rfind("mp_", 0) == 0 && cls.find("spawn") != std::string_view::npos)))
+				{
+					spawns.push_back(e);
+				}
+			}
 		}
 
+		if (spawn < 0 || static_cast<std::size_t>(spawn) >= spawns.size())
+		{
+			return false;
+		}
+
+		const auto origin = spawns[static_cast<std::size_t>(spawn)]->origin();
+		const auto angles = spawns[static_cast<std::size_t>(spawn)]->angles();
+		cam.origin = { static_cast<float>(origin.x), static_cast<float>(origin.y), static_cast<float>(origin.z + 60.0) };
+		cam.pitch = static_cast<float>(angles.x);
+		cam.yaw = static_cast<float>(angles.y);
 		cam.roll = 0.0f;
 		return true;
 	}

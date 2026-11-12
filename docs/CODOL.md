@@ -41,7 +41,7 @@ needed. What it is made of:
 
 | CoD4 mod tools | here | what it does today |
 |---|---|---|
-| Radiant | `CoDOLRadiant.exe` | open a map of the install, edit entities / models / brushes in 3D and 2D views with undo, save as `.map` |
+| Radiant | `CoDOLRadiant.exe` | open a map of the install or one of your own, edit entities / models / brushes in 3D and 2D views with undo, light entities with a panel of their own, save as `.map` |
 | `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce, light grid, reflection probes ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
 | editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. It patches the shipped zone; no light bake. |
 | Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials, models, animations, sounds and effects: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export`, `xanim_export`, soundalias `.csv` + `.wav`, `.efx` -> native assets in `mod\<map>\<map>_assets.ff`. Materials and models are shown by the editor at once; animations, sounds and effects are for the level script of the built map. See [Your own assets](#your-own-assets). |
@@ -61,6 +61,12 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
    ( `mp_dm_spawn`, `mp_tdm_spawn_*` .. ), one `mp_global_intermission`, `node_pathnode`s for bots. The map has to be
    closed ( no way from an entity to the void ) or stand in a sky box; the build reports a leak with its position.
 
+   **The 3D view.** A map of your own has no zone of the game to be drawn in, so the editor draws it in a *stage*:
+   an empty world that `codol_bsp` compiles from the light keys of the map's worldspawn ( a second or two, kept in
+   `compiled\cache\stage\` per set of keys ). Brushes are drawn with their materials, models where their entities
+   stand, lit by the sun, sky and ambient light the map will have. It is not the light bake: lights and shadows of
+   brushes are what File > Build map makes.
+
    **Light.** A `light` is created with `radius 600`, `intensity 1`, `_color 1 1 1`; it reaches as far as its
    radius and is down to a quarter at half of it. `spawnflags 2` ( `PRIMARY_SPOT`, with `fov_outer` / `fov_inner` /
    `exponent` and `angles` or a `target` ) or `1` ( `PRIMARY_OMNI` ) makes it a primary light: the game lights the
@@ -68,6 +74,28 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
    `suncolor`, `sunlight`, `ambient` with `_color`, `skylight` with `skycolor`; without them a map has a sun of
    1.3 from `-50 40 0`, an ambient light of 0.1 and a sky light of 0.4. All keys with their defaults:
    `codol_bsp/README.md`, "Light keys".
+
+   Nobody has to type these keys. With a light selected the **Entity** window has a **Light** section: colour
+   ( a swatch that opens a picker ), intensity, radius, the kind ( baked / primary omni / primary spot ), "no shadow
+   map" ( `spawnflags 8` ), "scriptable" ( `spawnflags 4`, with `maxturn` / `maxmove` ), the falloff ( `def` ), and
+   for a spot the outer and inner angle, the exponent and where it points - pitch and yaw, or a target picked from
+   the targetnames of the map. With nothing selected the window shows **Light of the map**: sun, sun colour and
+   direction ( with a small compass: from above, from the side ), sky light and ambient light of the worldspawn; a
+   field whose key is not set shows the compiler's default and says so, the `x` behind a field takes the key away
+   again. Fields that are dragged change the map while the mouse is down and are one undo step. "Show in 3D"
+   appears when the light keys differ from those the stage was built with, and builds the stage again.
+
+   While a light is selected the 3D view and the 2D views draw **where it reaches**: three circles of its radius
+   ( and one at half of it ) for a light that shines all around, the cone of a spot - outer and inner angle, cut
+   off at the radius, with its axis - in the colour of the light. The cone is computed the way `codol_bsp` reads
+   the keys ( a target wins over the angles and gives a cone of 64 units around it unless `fov_outer` is set ), so
+   what is drawn is what the bake uses. The classes `light_spot` and `light_omni` ( the primary lights of the
+   shipped maps ) get the same section.
+
+   "scriptable" with `maxturn` / `maxmove`, the classes `light_spot` / `light_omni` and falloff definitions other
+   than `light_point_linear` are read by the compiler's light work that was written alongside this panel
+   ( `codol_bsp/README.md`, "Light keys", says what the compiler you have reads; it prints `light keys: ..` with
+   every build ). A compiler that does not know one of them ignores the key - the panel still writes it.
 3. **Edit > Add gameplay entities** adds what the game's scripts ask of every multiplayer map and the map does not
    have yet: the care package with its collision ( without it `_airdrop.gsc` throws a script error at every map
    start ) and a helicopter path ( `heli_start`, `heli_loop_start` .. ). The build names what is missing.
@@ -86,11 +114,47 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
    effect and model of the project's zone, the animtrees and the animlist of the animations, and the files of the
    project's `scripts\` folder as rawfiles. See [In the built map](#in-the-built-map).
 
-5. **File > Install the built map into the game** copies the zones to `<install>\usermaps\<map>\`, the sound
-   archive to `<install>\main\` and the scripts to the server's script folder ( File > Settings ). Start the lobby
-   with `CODOL_FORCE_MAP=<map>` to play it; `presence\INSTALL.txt` describes the create-room list.
+5. **File > Install the built map ..** asks where to: the game folder ( the install of File > Settings is filled
+   in ), the server's script folder, and whether the map goes into the create-room list.
 
-Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`, `map_install [zone folder] [script folder]`.
+   | from `compiled\<map>\` | to |
+   |---|---|
+   | `zone\*.ff` | `<game>\usermaps\<map>\` |
+   | `main\zz_*_sounds.iwd` | `<game>\main\` |
+   | `scripts\..` | the script folder |
+   | `presence\comaplist_row.csv`, `basemaps_arena_entry.txt`, `localize.txt` | the create-room list of `<game>`, with "Add to the create-room list" |
+
+   * A file that is in the way and differs is kept once as `<file>.pre-<map>` before it is replaced; a file that
+     is the same already is left alone - installing twice changes nothing ( "unchanged" in the console ).
+   * Everything written is noted in `compiled\<map>\work\installed.txt`. **Uninstall** ( the same window, or
+     `map_uninstall` ) undoes exactly that: files that were new are deleted, replaced files get their backup back,
+     the map comes out of the list, `usermaps\<map>\` goes when it is empty.
+   * **The create-room list** is three things ( the install's `usermaps\build_usermaps_patch.py` describes how the
+     client reads them ): a row of the string table `mp/comaplist.csv` ( the map pool ), an entry of the rawfile
+     `mp/basemaps.arena` ( the lobby scene ) and a localize entry for the name. The client keeps the first asset of
+     a name it links and links the zones of `client_shipRetail\patch\` first, so the list is whichever zone of that
+     folder holds `mp/comaplist.csv` - in the install of this machine `codol_common.ff`. The editor reads that zone
+     with `codol_zone`, adds the row ( NUMBER and SEQUENCE: the next free ones ), the arena entry and the name,
+     writes the zone again, reads it back and only then puts it in place. Without such a zone it makes
+     `usermaps_patch.ff` from the stock list of `client_shipRetail\chinese\( patch_ )code_post_gfx_mp.ff`. A row
+     for the map that the editor did not write is left alone. On uninstall the entries are taken out of the list as
+     it is then; when that leaves what the backup held, the backup itself goes back and the file is byte for byte
+     what it was.
+   * `map_list [game folder]` prints which zone is the list, its last rows and how many arena entries it has.
+   * Without the list a map is played by starting the lobby with `CODOL_FORCE_MAP=<map>`.
+
+   What was checked, and what was not: on copies of the list zones under `build-editor\installtest\` - the list
+   in `codol_common.ff` ( 96 -> 97 rows, 112 -> 113 arena entries, the name ), a list made from the stock zones
+   ( 60 -> 61 rows ), a folder without either ( refused, with what is missing ); a second install wrote nothing;
+   uninstall gave back files with the hashes they had, `codol_common.ff` included. **Not checked: the client or the
+   lobby with a list written this way** - the tests did not start them. And one thing the editor cannot know: a
+   lobby whose own build makes `codol_common.ff` again ( its sources are not part of the install ) drops the row
+   with it; the lasting place for a map is then that build's map table, for which `presence\INSTALL.txt` and the
+   three files of `presence\` are the input.
+
+Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`, `map_install [zone folder] [script folder]` ( the
+folders of File > Settings when none is given ), `map_install game=<folder> [scripts=<folder>] [zones=<folder>]
+[list]`, `map_install window`, `map_uninstall [map]`, `map_list [game folder]`.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
 where the work goes.
 
@@ -131,26 +195,54 @@ unused ( an image no material names ), as is ( a script file ) - and has **Build
 again on a worker thread ( `codol_assets`: `compile_image`, `compile_material`, `compile_model`, `compile_anim`,
 `build_sound_aliases`, `compile_fx`, `AssetLinker` ) into a new zone; the editor stays usable. The renderer then
 takes the zone without loading the map again ( `map_renderer::register_zone` ), and every mesh and placed model is
-made again from it. Animations, sounds and effects are built and listed but not shown or played by the editor.
+made again from it. A click on a line shows the asset in the **Preview** window ( below ); effects are built and
+listed but not shown.
 
 | what | where | command |
 |---|---|---|
 | material from images | Materials > **New material ..**, Assets window, or drop image files on the editor window ( `_n` / `_nml` / `_normal` and `_s` / `_spc` / `_spec` at the end of a name fill the normal and specular map ) | `asset_new_material <name> <kind> <colour map> [normal=<file>] [specular=<file>] [surface=<type>] [overwrite]` |
 | model | Models > **Import model ..**, or drop `.xmodel_export` files | `asset_import_model <name> <lod0>[@dist] [<lod1>[@dist] ..] [collision=<lod>] [mtl:<export material>=<material>] [overwrite]` |
 | materials of a CoD4 `.gdt` | Materials > **GDT ..**, or drop a `.gdt` | `asset_gdt <file> [root=<folder the image paths start from>] [overwrite] [all \| <material> ..]` ( without a choice: the list ) |
-| animation | Assets > **Import animation ..**, or drop an `.xanim_export` | `asset_import_anim <file.xanim_export> [name=<name>] [model=<model of the project \| file.xmodel_export>] [type=relative\|delta\|delta3d] [loop] [tree=<animtree>] [overwrite]` |
-| sound aliases | Assets > **Sounds ..**, or drop a soundaliases `.csv`: the csv is copied with the sound files, curves and speaker maps it names ( from `sound\` and `soundaliases\` around it ) | `asset_import_sounds <file.csv> [root=<folder with sound\ and soundaliases\>] [overwrite]` |
-| effect | Assets > **Effect ..**, or drop an `.efx`; it is named by its place below an `fx` folder ( `..\fx\misc\x.efx`: `misc/x` ), else `<project>/<file>` | `asset_import_fx <file.efx> [name=<folder/name>] [overwrite]` |
+| animation | Assets > **Import animation ..** ( file, name, model, type, looping, animtree ), or drop an `.xanim_export` | `asset_import_anim <file.xanim_export> [name=<name>] [model=<model of the project \| file.xmodel_export>] [type=relative\|delta\|delta3d] [loop] [tree=<animtree>] [overwrite]` |
+| sound aliases | Assets > **Sounds ..** ( the csv, the folder that holds `sound\` and `soundaliases\`, overwrite ), or drop a soundaliases `.csv`: the csv is copied with the sound files, curves and speaker maps it names ( from `sound\` and `soundaliases\` around it ) | `asset_import_sounds <file.csv> [root=<folder with sound\ and soundaliases\>] [overwrite]` |
+| effect | Assets > **Effect ..** ( the file, a name of your own, overwrite ), or drop an `.efx`; it is named by its place below an `fx` folder ( `..\fx\misc\x.efx`: `misc/x` ), else `<project>/<file>` | `asset_import_fx <file.efx> [name=<folder/name>] [overwrite]` |
 | level script | Assets > **Level script**: makes `scripts\maps\mp\<map>.gsc` with what the compiler would generate, to start from | `asset_level_script [<file.gsc>]` ( with a file: a copy of it ) |
 | build, list | Assets window | `asset_build`, `asset_list`, `asset_rescan`, `asset_status`, `asset_project [name]` |
 | check the zone | | `asset_verify` ( `codol_assetc --verify`: the game's loaders read the zone, it is written again and compared ) |
-| the windows, for unattended runs | | `asset_dialog material \| model \| anim [file] \| gdt [file] \| close`, `asset_drop <file> ..` ( what dropping the files does ), `ed_windows a` |
+| look at it, listen to it | a click in the Assets, Models or Materials window | `asset_preview model <xmodel> \| material <name> \| image <file> \| anim <name> [model] \| sounds <csv> \| frame <n> \| play \| pause \| orbit <yaw> <pitch> [zoom] \| status \| close`, `asset_play <alias> [zone \| file.ff]`, `asset_play stop` |
+| the windows, for unattended runs | | `asset_dialog material \| model \| anim [file] \| sounds [file] \| fx [file] \| gdt [file] \| close`, `asset_drop <file> ..` ( what dropping the files does ), `ed_windows a` ( `p`: the Preview window ) |
 
 Material kinds ( the technique set follows from the kind and the maps given, as `codol_assets` `techset_for` has it ):
 `world`, `world_alpha` ( alpha tested ), `world_blend`, `decal`, `world_unlit` become `wc/<name>`; `model`,
 `model_alpha`, `model_blend`, `model_unlit` become `mc/<name>`; `2d`. The material is the material of new brushes
 right away and is applied like any other ( browser, `tex_set` ). A model is placed from the Models browser or with
 `ed_place`; `ed_model_class misc_model` makes new model entities static models of the compiled map.
+
+#### The Preview window
+
+**View > Preview**, or a click: on a model in the Models window, a right click on a material in the Materials
+window ( a left click too while the window is open ), on any line of the Assets window. A double click still uses
+the asset. The pictures are drawn by the renderer of the open map into a target of their own; the camera turns
+with the left mouse button and zooms with the wheel.
+
+| what | what is shown |
+|---|---|
+| model ( of the game or of the project ) | the model as the game draws it, its size in units, **Place in the map** |
+| material | a cube drawn with the material's own technique set and shaders, lit by the sun of the map; its colour map with its size; technique set, zone; **Use for new brushes**, **Apply to the selection** |
+| image ( a source file of the project ) | the picture as `codol_assets` decodes it ( PNG, TGA, DDS ), size, alpha channel, whether its size is one the compiler takes; **New material from it ..** |
+| animation | the animation on its model, with a **timeline**: Play / Pause, the frame ( drag it ), speed, Loop, length and frame rate, the note tracks as marks on the timeline and as a list; another model of the project can stand in. After a build the picture is made from the zone: the `XAnimParts` and the `XModel` are read back out of `<project>_assets.ff` ( `codol_zone`, `read_raw_anim`, `decode_anim`, `extract_model_lod` ), so what plays is the animation as the game gets it, compression included. Before the first build it is made from the `xanim_export` and the `xmodel_export`, and the window says which of the two it shows. The mesh is skinned in the editor ( every vertex by its bone weights ) and drawn with the model's materials. |
+| sound aliases ( a csv of the project ) | every row with its file; **Play** plays the `.wav` of the row ( WinMM; an `.mp3` through MCI ), a row whose file is not in the project is a sound of the game. **Play from zone**: an alias name and a zone - empty for the project's zone, a zone of the game ( `mp_rust` .. ) or a `.ff` file -: the alias and its loaded sound are read out of the fastfile, IMA ADPCM is decoded by `codol_assets`, and that is played. |
+
+Checked ( pictures in `build-editor\shots\` of the test run ): a shipped model and a project model, a shipped
+world material and a project model material on the cube, a PNG, the two-bone test animation at frames 0, 20 and 30
+( the lid moves ), the csv's rows; `asset_play` of a project alias from its `.wav` and from the built zone, and of
+three aliases of shipped `mp_rust.ff` ( 32 and 44.1 kHz IMA ADPCM, decoded ). Not there: effects; streamed sounds
+of the game ( files of its archives ); animations of the game on models of the game ( `asset_preview anim` takes
+animations of the project ); a model with more than one LOD shows LOD 0 in the animation. The test machine has no
+audio device to listen with: that Windows accepted the wave data is what was seen.
+
+`codol_view`: a mesh drawn with the technique set of a model material ( `mc_..` ) uses packed model vertices now.
+With world vertices such a mesh came out in one flat colour - a brush with a model material did too.
 
 **In the compiled map** ( File > Compile map ). The project's zone is passed to `codol_mapc` as a `--donor`:
 
@@ -245,8 +337,8 @@ from the text of `maps\mp\<map>_fx.gsc` and `maps\createfx\<map>_fx.gsc`: leave 
 their exact form.
 
 Not there: deleting or renaming an asset from the editor ( delete the files, Rescan ), editing a material's
-definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import windows, playing an animation, a sound
-or an effect in the editor, streamed images ( `.iwi` in an `.iwd` ), per image options ( format, `flipy` ), the less
+definition in a window ( edit the `.mtl`, Build ), a preview inside the import windows ( import, then click the
+line ), showing an effect in the editor, streamed images ( `.iwi` in an `.iwd` ), per image options ( format, `flipy` ), the less
 common animation options ( `deltapart`, `assettype`, tolerances: `codol_assetc --xanim` has them ), copying the
 effects an effect emits on import ( put them into `fx\` by hand ). The shipped animtrees ( `animated_props` .. ) are
 not extended: give your animations a tree of their own. Sounds and effects of a map edited with File > Compile map
@@ -276,19 +368,24 @@ Be aware of these before planning work around this branch:
   colour of the materials; no T-junction repair. See "Limits" in `codol_bsp/README.md`.
 - **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
   players do not: put clip brushes around models.
-- **Nobody has seen an animation of your own move or heard a sound of your own.** The Assets window builds them
-  and File > Build map puts them into the map with their animtrees, animlist and your level script; a dedicated
-  server runs a level script that uses them without a script error, and the client loads such a map and draws its
-  effect ( [In the built map](#in-the-built-map) ). But script model animations do not move in the client on the
-  test server - shipped ones do not either -, the test machine has no audio, the editor does not play them, and
-  streamed sounds need their `.iwd` in the game's `main\` folder ( the client started with one there; whether it
-  played the file is not known ).
+- **Nobody has seen an animation of your own move in the game or heard a sound of your own there.** The editor
+  plays both ( the Preview window: the compiled animation read back from the project's zone, the alias' loaded
+  sound decoded from it ), the Assets window builds them and File > Build map puts them into the map with their
+  animtrees, animlist and your level script; a dedicated server runs a level script that uses them without a
+  script error, and the client loads such a map and draws its effect ( [In the built map](#in-the-built-map) ).
+  But script model animations do not move in the client on the test server - shipped ones do not either -, the
+  test machine has no audio, and streamed sounds need their `.iwd` in the game's `main\` folder ( the client
+  started with one there; whether it played the file is not known ).
 - **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
   of deleted brushes and does not re-bake light. For that, build the map from scratch.
 - **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;
   terrain, patches and decals of a shipped map exist only as render surfaces and are not in the imported `.map`.
-- **The create-room list is not installed for you.** The build writes the files; `presence\INSTALL.txt` says which
-  script of the install takes them in. `CODOL_FORCE_MAP=<map>` on the lobby plays a map without the list.
+- **The create-room list: written, not seen in the client.** File > Install the built map .. adds the map to the
+  list zone of a game folder and takes it out again ( [A map of your own](#a-map-of-your-own), step 5 ); the zone
+  reads back as written, but no client or lobby was started with it. `CODOL_FORCE_MAP=<map>` on the lobby plays a
+  map without the list.
+- **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
+  worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
 - **Entity overrides are mp only.** The server applies `<map>.d3dbsp.ents` in mp matches; co-op and
   zombies compose their own entities.
 - The sections below this one describe the radiant plugin ( `iw3r.dll` in CoD4 radiant ), which the standalone
@@ -432,7 +529,8 @@ The rcon packet is `\xff\xff\xff\xffrcon "<password>" <command>` to `127.0.0.1:<
 Other dvars: `codol_reload_on_save`, `codol_rcon_log`, `codol_rcon_password` (not saved).
 
 For unattended testing: `CODOL_STARTUP_CMDS="cmd;wait 5;cmd"` runs console commands once the UI is
-up, `CODOL_AUTOSHOT=<file.png>` saves the rendered UI frame to that file every two seconds ( the standalone
+up ( words split on spaces, `"quoted words"` kept together: `ed_key angles "60 200 0"`; up to 32 k characters ),
+`CODOL_AUTOSHOT=<file.png>` saves the rendered UI frame to that file every two seconds ( the standalone
 editor also has `ed_shot <file.png>`: the next frame, at a moment the command list picks ), and
 `CODOL_NO_MONO_FONT=1` skips loading the monospace editor font.
 
