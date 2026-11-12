@@ -73,7 +73,11 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
 
    Materials and models of the map's asset project ( next section ) are taken into the zone.
 
-Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`.
+5. **File > Install the built map into the game** copies the zones to `<install>\usermaps\<map>\` and the level
+   scripts to the server's script folder ( File > Settings ). Start the lobby with `CODOL_FORCE_MAP=<map>` to play it;
+   `presence\INSTALL.txt` describes the create-room list.
+
+Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`, `map_install [zone folder] [script folder]`.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
 where the work goes.
 

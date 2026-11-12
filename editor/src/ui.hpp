@@ -103,6 +103,7 @@ namespace editor::ui
 	void new_map(const std::string& name, bool force = false);
 	void build_map(bool fast);
 	void add_gameplay_entities();
+	void install_map(const std::string& zone_to, const std::string& scripts_to);
 	void close_map(bool force = false);
 	void exit_editor();
 
