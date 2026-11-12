@@ -84,6 +84,33 @@ namespace codol::bsp::test
 		spawn(doc, "mp_global_intermission", { centre.x, centre.y - reach * 0.8, floor + 120 }, 90);
 	}
 
+	// path nodes on a grid: what the server's bots walk on ( it links node_pathnode entities itself )
+	inline void path_nodes(edit::document& doc, const vec3& mins, const vec3& maxs, const double step, const double z)
+	{
+		for (double x = mins.x; x <= maxs.x; x += step)
+		{
+			for (double y = mins.y; y <= maxs.y; y += step)
+			{
+				doc.create_point_entity("node_pathnode", { x, y, z });
+			}
+		}
+	}
+
+	// What the game's killstreak script asks every map for ( maps/mp/killstreaks/_airdrop.gsc ): a care package model
+	// that targets its collision, a brush model. The script takes both away at the start of a match.
+	inline void airdrop_prefab(edit::document& doc, const vec3& at)
+	{
+		const edit::object_id box = doc.create_box({ at.x - 29, at.y - 15, at.z }, { at.x + 29, at.y + 15, at.z + 30 }, "clip");
+		doc.deselect_all();
+		doc.select(box);
+		const std::vector<std::pair<std::string, std::string>> collision = { { "targetname", "airdrop_collision" }, { "script_gameobjectname", "airdrop_pallet" } };
+		doc.create_brush_entity("script_brushmodel", collision);
+		doc.deselect_all();
+		const std::vector<std::pair<std::string, std::string>> crate = { { "model", "com_plasticcase_green_big_us_dirt" }, { "targetname", "care_package" },
+			{ "target", "airdrop_collision" } };
+		doc.create_point_entity("script_model", { at.x, at.y, at.z }, crate);
+	}
+
 	// M1: a hollow room, floor 1024 x 1024, 320 high, a few crates, spawn points, a light
 	inline void make_box_room(edit::document& doc, const materials& m = {})
 	{
@@ -106,6 +133,8 @@ namespace codol::bsp::test
 		doc.set_detail(true);
 		doc.deselect_all();
 		game_entities(doc, { 0, 0, 0 }, 384, 0);
+		airdrop_prefab(doc, { -440, -440, 0 });
+		path_nodes(doc, { -416, -416, 0 }, { 416, 416, 0 }, 104, 16);
 		const std::vector<std::pair<std::string, std::string>> light = { { "_color", "1 0.85 0.6" }, { "radius", "400" }, { "intensity", "1.5" } };
 		doc.create_point_entity("light", { 300, -300, 200 }, light);
 	}

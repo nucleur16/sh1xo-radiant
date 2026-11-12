@@ -356,6 +356,38 @@ namespace codol::bsp
 		write_options.exactFileSize = opts.exact_size;
 		check(zone::write_fastfile(opts.out, zone_bytes, key, write_options), "writing " + opts.out.string());
 		rep.file_bytes = static_cast<std::size_t>(std::filesystem::file_size(opts.out, ec));
+
+		// <map>_load.ff: what the client loads in front of the map to draw the loading screen. The shipped ones hold
+		// the materials $levelbriefing and $defeatbackdrop ( with the technique set "2d" ) and a rawfile; the
+		// materials are taken from a shipped load zone, so the picture is that map's until the map brings its own.
+		if (opts.load_zone)
+		{
+			const std::string map_name = !opts.name.empty() ? opts.name : opts.out.stem().string();
+			const std::filesystem::path load_file = !opts.load_out.empty() ? opts.load_out
+				: std::filesystem::absolute(opts.out).parent_path() / (map_name + "_load.ff");
+			catalog cat;
+			std::filesystem::path folder = opts.cache.empty() ? std::filesystem::absolute(opts.out).parent_path() : opts.cache;
+			cat.load(folder / "codol_bsp_catalog.txt", opts.install);
+			ZoneEditor editor;
+			check(editor.create(map_name + "_load"), "creating the load zone");
+			asset_importer importer(editor, key, opts.install, opts.donors, cat);
+			for (const char* material : { "$defeatbackdrop", "$levelbriefing" })
+			{
+				std::string why;
+				if (!importer.material(material, &why).valid())
+				{
+					rep.warnings.push_back(std::string("load zone: material ") + material + " not found: " + why);
+				}
+			}
+			const std::string text = "codol_bsp " + map_name + "\n";
+			check(editor.set_rawfile(map_name + "_load", { reinterpret_cast<const std::uint8_t*>(text.data()), text.size() }, true), "load zone rawfile");
+			std::vector<std::uint8_t> load_bytes;
+			check(editor.write(load_bytes), "laying out the load zone");
+			zone::FastFileWriteOptions load_options;
+			load_options.compression = opts.level;
+			check(zone::write_fastfile(load_file, load_bytes, key, load_options), "writing " + load_file.string());
+			rep.notes.push_back("load zone: " + load_file.string());
+		}
 		rep.seconds = total.seconds();
 		return true;
 	}
