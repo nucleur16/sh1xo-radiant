@@ -430,11 +430,12 @@ is written the same way:
   0 .. 8 of them ).
 * the header: `primaryLightCount`, the entity shadow visibility array ( run time ).
 
-In the client ( `shots\c4spot_a`, `c4spot_b`, `c4omni_b` ): the spot's cone on floor and wall with the colour of
-the light, the baked shadows of a brush and of a static model in it, the model lit from the light's side; the
-same for the omni light. **Not seen: a player's shadow in such a light** - neither on the compiled map nor under
-the spot of shipped mp_vacant ( `c4vac_c`, `c4vac_d` ), where the floor in the shadow's place is at the end of the
-light's reach; whether this client draws spot shadow maps at all was not established. What is missing compared to
+In the client ( `shots\c4spot_a`, `c4spot_b`, `c4side_a`, `c4side_c`, `c4omni_b` ): the spot's cone on floor and
+wall with the colour of the light, the baked shadows of a brush and of a static model in it, the model and the
+player's weapon lit from the light's side; the same for the omni light. **Not seen: a player's shadow in such a
+light** - not on the compiled maps ( `c4side_a`: in the beam, the light behind ) and not made out under the spots
+of shipped mp_vacant ( `c4vac_c`, `c4vac_d`, `c4vac2_sheet` ); whether this client draws spot shadow maps at all
+was not established. What is missing compared to
 the game's compiler is listed under [Limits](#limits-and-what-is-not-done).
 
 ### Vision file, sun flare
@@ -632,7 +633,8 @@ map. Pictures: `build-editor\bsptest\shots\` ( `<name>_s.png` ), the maps and th
 | **the editor's room** ( `mp_edroom`: closed room of 512 units, one `light` without keys, a worldspawn without light keys ) | before: nearly black ( `ed2_a` ). Two causes: the lightmaps held linear light, which the shaders square; and the missing worldspawn keys were read as 0 instead of their defaults ( no ambient light ). After: floor, walls and ceiling lit, brightest under the light, the crate's baked shadow | `c4ed_a`, `c4ed_b` |
 | **a primary spot** ( `mp_c4spot`: `spawnflags 2`, `fov_outer 100`, `fov_inner 50`, `exponent 1`, pointing down, colour 1 0.9 0.7, plus a baked blue light ) | the warm cone on the floor and up the wall, the baked shadow of the brush crate and of a static model in it, the model lit from above | `c4spot_a`, `c4spot_b` |
 | **a primary omni light** ( `mp_c4omni`: `spawnflags 1` ) | the whole room lit by it at run time, the crate's shadow from its visibility in the primary lightmap, the static model lit | `c4omni_a`, `c4omni_b` |
-| a player's shadow in a primary light | not seen on the compiled map ( `c4spot_d` ); not seen under the spot of shipped mp_vacant either ( `c4vac_c`, `c4vac_d` ) | |
+| **a primary spot from the side** ( `mp_c4side`: on a wall at 96 units, `angles 12 0 0`, `fov_outer 80`, radius 800 ) | the beam across the room: floor, far wall and the static model in it lit, the rest of the room dim; the baked shadows of the crate ( on the far wall ) and of the model; the view model bright when the player stands in the beam | `c4side_a`, `c4side_c` |
+| a player's shadow in a primary light | **not seen**: standing in the sideways beam with the light behind, the floor ahead shows the crate's baked shadow and none of the player ( `c4side_a` ). Under the spots of shipped mp_vacant no player shadow could be made out either ( `c4vac_c`, `c4vac_d`, `c4vac2_sheet` ) - the floor there is too uneven to tell, so whether this client draws spot shadow maps at all is open | |
 | **the yard with the new bake** ( `mp_c4fx` ) | the same scene as in the third round with the light in the game's units: shadows lit by the sky, the bounce visible; the sky light halved against the first try of this round ( `c4fx2_over`: too bright a shade ) to what shipped mp_vacant holds | `c4fx3_over` ( third round: `cv1_overview` ) |
 | **vision file** | the log line "couldn't open 'vision/<map>.vision'" is gone; a mapper's file next to the `.map` ( contrast 1.25, more glow ) changes the picture against the default | `c4fx_props` / `c4fx2_props` |
 | **sun flare** | the sun stands in the sky where the worldspawn puts it, with its glow | `c4fx_sun` ( third round: `cv5_sky` ) |

@@ -16,7 +16,10 @@ foreach ($what in 'client', 'lobby', 'server') {
   if ($what -eq 'client') { $stopped_client = $true }
   Remove-Item $f
 }
-# the frame dump d3d9.dll start_client.ps1 put next to the client ( a file of the harness, not a link into the install )
+# the frame dump d3d9.dll start_client.ps1 put next to the client ( a file of the harness, not a link into the install ).
+# A client that was just stopped is still in the process list for a moment: wait for it to go ( a client somebody
+# else started stays, and so does the dll )
+for ($wait = 0; $stopped_client -and $wait -lt 30 -and (Get-Process codoMP_client_shipRetail -ErrorAction SilentlyContinue); $wait++) { Start-Sleep -Milliseconds 200 }
 if (-not (Get-Process codoMP_client_shipRetail -ErrorAction SilentlyContinue)) {
   # the client holds the dll for a moment after it is stopped: try until it is gone
   for ($try = 0; $try -lt 20; $try++) {
