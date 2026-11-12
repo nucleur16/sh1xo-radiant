@@ -15,7 +15,8 @@ Depends on `codol_zone` ( zones ), `codol_edit` ( the map document ), `codol_map
 `codol_dedrun`: collision installed, bots play ) and by the real client ( `codoMP_client_shipRetail.exe` with the
 install's Kernel33 ), under a map name no stock map has, with no change to Kernel33, lobby or server: see
 [In the game](#in-the-game). Cells / portals and the light bake were verified with `codol_viewtool` ( which runs the
-game's shaders ); their client run is described there too. What is approximate or missing is listed under
+game's shaders ); in the client such maps load and play, but there is no picture of them from the client ( the only
+client pictures are of the box room before the bake existed ). What is approximate or missing is listed under
 [Limits](#limits-and-what-is-not-done) - the main ones: static models are not compiled into the world, patches
 collide through brushes instead of terrain triangles, reflection probes are flat colours, no T-junction repair.
 
@@ -276,6 +277,8 @@ stops the server ).
 | box room, server, `developer 1` | `CoDOL native collision installed: maps/mp/mp_boxroom.d3dbsp, 2 leaves ..`, common world 3 lights, glass 0 pieces. `codol_sweepprobe`: floor at z 0.125, walls at +-496.875 ( 512 - 15 - 0.125 ), ceiling 249.875 + 70, crate top 64.125, stacked crates 128.125, crate side 112.875 + 15, low crate 32.125 |
 | box room, server, 8 bots, 100 s | all 8 play, 104 kills; the only new error lines: two path nodes of the test map inside crates |
 | box room, client ( name `mp_boxroom` ) | Multiplayer -> Start -> Search -> Ready enters the map; spawned; walking into the -x wall stops at x -497; dropped onto the crate: z 64; onto the stacked crates: z 128; shots fired at a crate ( impact effect ) |
+| content map, client ( name `mp_content`; baked light, 2 cells with a portal brush, patch, door, trigger, script_model ) | enters the map and stays connected; dropped onto the patch platform: z 24; walking into the door ( brush model ) stops at x 43 ( face at 28 + 15 ); walking through the doorway ( the portal ) reaches room 1. **No picture**: every capture of the game window was black during this run ( also of the menus; the cause - probably the display being off - was not established ), so how the baked light and the sky look in the client is not known |
+| two rooms, client ( `devmap mp_tworooms` over rcon while connected ) | the client follows the map change; walking from room A through the corridor into room B ( x -500 -> 651 ) crosses all five cells, the wall beside the doorway stops the player at x -271. No picture ( as above ) |
 | mp_rust's collision brushes as a map ( 3226 brushes ), server, 8 bots | collision installed, 747 leaves; bots play ( 30 kills in 100 s; the map has no terrain, so some path nodes are unconnected ) |
 | 144 rooms ( 1421 brushes, 106 cells ), server, 8 bots, 100 s | collision installed, 309 leaves; all 8 play, 109 kills; new error lines: path nodes of the test map ( 6 in crates, 1 unconnected ) |
 
