@@ -21,6 +21,16 @@
 //   codol_asset_verify sound-extract <zone.ff> <C1.exe> <out dir> [<name part>]   the sounds of a zone as a source tree
 //   codol_asset_verify sound-zone <zone.ff> <C1.exe> <out.ff> [<max lists>]       the sounds of a zone compiled, linked, loaded
 //                                                 with the game's loaders and compared
+//   codol_asset_verify fx-roundtrip <install> <C1.exe> [given|decide] [<zone name part>]
+//                                                 shipped effect -> .efx text -> compile; match rate per field group. decide:
+//                                                 the compiler picks the sample counts instead of taking the stored ones
+//   codol_asset_verify fx-source <install> <C1.exe> <fx source folder> [<name part>]
+//                                                 the shipped effects that have an .efx of their name there: that file compiled
+//                                                 against the shipped effect
+//   codol_asset_verify fx-link <install> <C1.exe> <library cache> [<every n-th>] [<out.ff>]
+//                                                 shipped effects recompiled, linked into one zone, loaded with the game's
+//                                                 loaders and compared
+//   codol_asset_verify fx-extract <zone.ff> <C1.exe> <effect> <out.efx>        a shipped effect as .efx
 
 #include "verify.hpp"
 
@@ -338,6 +348,22 @@ int main(const int argc, char** argv)
 	if (command == "sound-zone" && argc >= 5)
 	{
 		return sound_zone(argv[2], argv[3], argv[4], argc > 5 ? std::atoi(argv[5]) : 0);
+	}
+	if (command == "fx-roundtrip" && argc >= 4)
+	{
+		return fx_roundtrip(argv[2], argv[3], !(argc > 4 && std::string(argv[4]) == "decide"), argc > 5 ? argv[5] : "");
+	}
+	if (command == "fx-source" && argc >= 5)
+	{
+		return fx_source(argv[2], argv[3], argv[4], argc > 5 ? argv[5] : "");
+	}
+	if (command == "fx-link" && argc >= 5)
+	{
+		return fx_link(argv[2], argv[3], argv[4], argc > 5 ? std::max(1, std::atoi(argv[5])) : 1, argc > 6 ? argv[6] : "");
+	}
+	if (command == "fx-extract" && argc == 6)
+	{
+		return fx_extract(argv[2], argv[3], argv[4], argv[5]);
 	}
 	std::fprintf(stderr, "usage: see the head of asset_verify.cpp\n");
 	return 2;

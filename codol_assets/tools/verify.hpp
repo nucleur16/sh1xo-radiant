@@ -46,3 +46,9 @@ int anim_model_roundtrip(const std::filesystem::path& install, const std::filesy
 int anim_extract(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::string& name, const std::filesystem::path& outDir);
 int anim_compare(const std::filesystem::path& zoneA, const std::string& nameA, const std::filesystem::path& zoneB, const std::string& nameB, const std::filesystem::path& exe,
 	float rotationTolerance, float translationTolerance);
+
+// verify_fx.cpp
+int fx_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, bool hints, const std::string& filter);
+int fx_source(const std::filesystem::path& install, const std::filesystem::path& exe, const std::filesystem::path& fxRoot, const std::string& filter);
+int fx_link(const std::filesystem::path& install, const std::filesystem::path& exe, const std::filesystem::path& cache, int every, const std::filesystem::path& zoneOut);
+int fx_extract(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::string& name, const std::filesystem::path& out);

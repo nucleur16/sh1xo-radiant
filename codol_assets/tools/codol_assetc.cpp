@@ -22,10 +22,15 @@
 //     --rawfile <name>=<file>
 //     --soundalias <file.csv>        sound aliases; loaded .wav files, curves and speaker maps from the tree around it
 //     --sound-root <dir>             the folder that holds sound/ and soundaliases/ ( default: next to / above the csv )
+//     --fx <name>=<file.efx>         an effect ( name as loadfx takes it: misc/my_effect ); effects it emits are read from
+//                                    <name>.efx files of the same fx folder
+//     --fx-atlas <file>              texture atlas table of the shipped materials ( default <out dir>/codol_fxatlas.txt; made
+//                                    on first use, half a minute )
 //
 //   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
 //     loads the file with the game's loaders, writes it again ( must be identical ), lists what is in it
 
+#include "codol_assets/fx.hpp"
 #include "codol_assets/link.hpp"
 #include "codol_render/texture.hpp"
 #include "codol_zone/assets.hpp"
@@ -297,6 +302,24 @@ namespace
 					notes.c_str());
 				bad += status ? 0 : 1;
 			}
+			else if (e.type == c1::ASSET_TYPE_FX)
+			{
+				CompiledFx fx;
+				const bool ok = read_fx(zone, e.header, fx);
+				std::set<std::string> visuals;
+				for (const FxElem& elem : fx.elems)
+				{
+					visuals.insert(elem.visuals.begin(), elem.visuals.end());
+				}
+				std::string list;
+				for (const std::string& v : visuals)
+				{
+					list += " " + v;
+				}
+				std::printf("  fx        %-40s %zu elements ( %d looping, %d one shot, %d emission ), %d bytes, visuals:%s%s\n", name.c_str(), fx.elems.size(), fx.countLooping,
+					fx.countOneShot, fx.countEmission, fx.totalSize, list.c_str(), ok && fx.totalSize == fx_total_size(fx) ? "" : "  DOES NOT READ");
+				bad += ok && fx.totalSize == fx_total_size(fx) ? 0 : 1;
+			}
 			else
 			{
 				std::printf("  %-9s %s\n", z::asset_type_name(e.type).c_str(), name.c_str());
@@ -313,6 +336,8 @@ int main(const int argc, char** argv)
 	std::vector<std::string> images, materials, models, rawfiles;
 	std::vector<std::string> anims, soundAliases;
 	fs::path soundRoot;
+	std::vector<std::string> effects;
+	fs::path fxAtlasFile;
 	bool nameGiven = false;
 	for (int k = 1; k < argc; k++)
 	{
@@ -336,6 +361,8 @@ int main(const int argc, char** argv)
 		else if (a == "--xanim") anims.push_back(value());
 		else if (a == "--soundalias") soundAliases.push_back(value());
 		else if (a == "--sound-root") soundRoot = value();
+		else if (a == "--fx") effects.push_back(value());
+		else if (a == "--fx-atlas") fxAtlasFile = value();
 		else if (a == "--verify") verifyFile = value();
 		else return fail("unknown option " + a + " ( usage: see the head of codol_assetc.cpp or the README )");
 	}
@@ -711,6 +738,47 @@ int main(const int argc, char** argv)
 		for (const std::string& note : compiled.notes)
 		{
 			std::printf("  xanim %s: %s\n", compiled.raw.name.c_str(), note.c_str());
+		}
+	}
+
+	// ---- effects: after the materials and models they draw
+	FxAtlasLibrary fxAtlas;
+	for (const std::string& spec : effects)
+	{
+		const std::size_t equal = spec.find('=');
+		if (equal == std::string::npos || equal == 0)
+		{
+			return fail("--fx wants <name>=<file.efx>");
+		}
+		const std::string name = spec.substr(0, equal);
+		const fs::path file = spec.substr(equal + 1);
+		if (fxAtlas.size() == 0)
+		{
+			if (const Status s = fxAtlas.open(link.install, linker.key(), fxAtlasFile.empty() ? out.parent_path() / "codol_fxatlas.txt" : fxAtlasFile); !s)
+			{
+				return fail(s.message);
+			}
+		}
+		EditorEffect effect;
+		CompiledFx fx;
+		if (const Status s = load_efx(file, effect); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = compile_fx(name, effect, fx, fx_compile_options(linker.editor(), fxAtlas, fx_source_root(file, name))); !s)
+		{
+			return fail(s.message);
+		}
+		std::vector<std::string> notes = fx.notes;
+		if (const Status s = link_fx(linker.editor(), fx, &notes); !s)
+		{
+			return fail(s.message);
+		}
+		std::printf("fx %s: %zu elements ( %d looping, %d one shot, %d emission ), %d bytes\n", name.c_str(), fx.elems.size(), fx.countLooping, fx.countOneShot,
+			fx.countEmission, fx.totalSize);
+		for (const std::string& note : notes)
+		{
+			std::printf("  %s\n", note.c_str());
 		}
 	}
 

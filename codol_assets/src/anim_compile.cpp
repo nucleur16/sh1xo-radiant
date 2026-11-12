@@ -198,14 +198,17 @@ namespace codol::assets
 			{
 				// what the game makes of the two keys: the straight line between them, brought back to unit length
 				const float t = static_cast<float>(f - a) / static_cast<float>(b - a);
-				float lerp[4] = {}, length = 0;
+				float lerp[4] = {}, length = 0, dot = 0;
 				for (std::size_t c = first; c < 4; c++)
 				{
 					lerp[c] = static_cast<float>(q[a][c]) + (static_cast<float>(q[b][c]) - static_cast<float>(q[a][c])) * t;
 					length += lerp[c] * lerp[c];
+					dot += static_cast<float>(q[a][c]) * static_cast<float>(q[b][c]);
 				}
 				length = std::sqrt(length);
-				if (length < 1.0f)
+				// two keys of a track are never on opposite sides ( none of the 319169 shipped tracks has such a pair ): a
+				// turn of more than half a circle keeps a key in between
+				if (length < 1.0f || dot <= 0)
 				{
 					return false;
 				}
