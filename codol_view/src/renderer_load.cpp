@@ -353,6 +353,26 @@ namespace codol::view
 		return material.asset().state && material.asset().state->blends(technique_type);
 	}
 
+	// development aid: CODOL_VIEW_DUMP_SHADERS=<folder> writes the byte code of every shader a pass plan is made for
+	// ( <material>__<technique set>__t<technique>_p<pass>__<stage>_<shader>.bin ), to be disassembled with D3DDisassemble
+	static void dump_shader(const shader_blob& blob, std::string name)
+	{
+		const char* dir = std::getenv("CODOL_VIEW_DUMP_SHADERS");
+		if (!dir)
+		{
+			return;
+		}
+		for (char& c : name)
+		{
+			c = std::strchr("/\\*:?\"<>|", c) ? '_' : c;
+		}
+		if (std::FILE* f = std::fopen((std::string(dir) + "/" + name + ".bin").c_str(), "wb"))
+		{
+			std::fwrite(blob.code.data(), 1, blob.code.size(), f);
+			std::fclose(f);
+		}
+	}
+
 	pass_plan* map_renderer::impl::plan_of(const material_draw& material, const int technique_type, const int pass_index)
 	{
 		// GameMapRenderer.cs:1660-1679 ( PlanOf ), :1492-1508 ( ArgumentNames ), RenderAssetLibrary.cs:513-550
@@ -405,6 +425,7 @@ namespace codol::view
 				}
 				plan.vertex_shader = shader.get();
 				vertex_program = program_of(vs);
+				dump_shader(*vs, set.name + "__t" + std::to_string(technique_type) + "_p" + std::to_string(pass_index) + "__vs_" + vs->name);
 			}
 			if (ps)
 			{
@@ -415,6 +436,7 @@ namespace codol::view
 				}
 				plan.pixel_shader = shader.get();
 				pixel_program = program_of(ps);
+				dump_shader(*ps, set.name + "__t" + std::to_string(technique_type) + "_p" + std::to_string(pass_index) + "__ps_" + ps->name);
 			}
 			plan.complete = plan.vertex_shader && plan.pixel_shader && plan.declaration;
 			plan.names.resize(pass.arguments.size());

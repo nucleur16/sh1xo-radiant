@@ -53,6 +53,8 @@ int main(const int argc, char** argv)
 		else if (arg == "--verbose") { opts.verbose = true; }
 		else if (arg == "--minimap") { opts.minimap = value(); }
 		else if (arg == "--scripts") { opts.scripts_out = value(); }
+		else if (arg == "--vision") { opts.vision = value(); }
+		else if (arg == "--sun") { opts.sun = value(); }
 		else
 		{
 			std::fprintf(stderr, "unknown argument %s\n", arg.c_str());
@@ -89,7 +91,8 @@ int main(const int argc, char** argv)
 		std::fprintf(stderr,
 			"codol_bsp --map <file.map> --exe <C1.exe> --install <install dir> --out <mapname.ff> [--name <mapname>]\n"
 			"          [--report <file>] [--zone-out <file>] [--cache <dir>] [--donor <zone.ff>]... [--rawfile <name>=<file>]...\n"
-			"          [--fast | --quality n] [--no-light] [--no-vis] [--no-load] [--level 0..9]\n"
+			"          [--assets <project zone.ff>]... [--minimap <picture.tga>] [--scripts <folder>] [--vision <file>] [--sun <file>]\n"
+			"          [--fast | --quality n] [--no-light] [--no-vis] [--no-load] [--level 0..9] [--exact-size <bytes>]\n"
 			"codol_bsp --check <map.ff> --exe <C1.exe>\n");
 		return 2;
 	}

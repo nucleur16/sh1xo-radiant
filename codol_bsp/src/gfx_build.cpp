@@ -545,6 +545,38 @@ namespace codol::bsp
 		// no sun flare: hasValidData 0, both materials null. The block's last three floats are the direction towards the
 		// sun ( in the shipped maps the direction of ComWorld light 1 ): written, the rest is zero
 		std::memcpy(b.chunks[head].bytes.data() + offsetof(c1::GfxWorld, sun) + 84, w.sun_dir, sizeof(w.sun_dir));
+		if (w.flare.valid)
+		{
+			// The sun block as the shipped maps have it ( codol_bsp_probe sun, against their sun/<map>.sun ): valid, the
+			// two materials, the sprite's size, the flare's sizes halved, angles as cosines, times in milliseconds, the
+			// direction towards the sun.
+			const sun_flare& f = w.flare;
+			const std::size_t sun = offsetof(c1::GfxWorld, sun);
+			const auto cosine = [](const float degrees) { return std::cos(degrees * 3.14159265f / 180.0f); };
+			const auto ms = [](const float seconds) { return static_cast<std::int32_t>(std::lround(seconds * 1000.0f)); };
+			b.chunks[head].bytes[sun] = 1;
+			point_ref(b, head, sun + 4, f.sprite_ref);
+			point_ref(b, head, sun + 8, f.flare_ref);
+			b.put(head, sun + 12, f.sprite_size);
+			b.put(head, sun + 16, f.flare_min_size * 0.5f);
+			b.put(head, sun + 20, cosine(f.flare_min_angle));
+			b.put(head, sun + 24, f.flare_max_size * 0.5f);
+			b.put(head, sun + 28, cosine(f.flare_max_angle));
+			b.put(head, sun + 32, f.flare_max_alpha);
+			b.put(head, sun + 36, ms(f.flare_fadein));
+			b.put(head, sun + 40, ms(f.flare_fadeout));
+			b.put(head, sun + 44, cosine(f.blind_min_angle));
+			b.put(head, sun + 48, cosine(f.blind_max_angle));
+			b.put(head, sun + 52, f.blind_max_darken);
+			b.put(head, sun + 56, ms(f.blind_fadein));
+			b.put(head, sun + 60, ms(f.blind_fadeout));
+			b.put(head, sun + 64, cosine(f.glare_min_angle));
+			b.put(head, sun + 68, cosine(f.glare_max_angle));
+			b.put(head, sun + 72, f.glare_max_lighten);
+			b.put(head, sun + 76, ms(f.glare_fadein));
+			b.put(head, sun + 80, ms(f.glare_fadeout));
+			std::memcpy(b.chunks[head].bytes.data() + sun + 84, f.direction, sizeof(f.direction));
+		}
 
 		// ---- outdoor image ( height of what is open to the sky, for weather effects ) and its lookup matrix
 		{
@@ -600,8 +632,31 @@ namespace codol::bsp
 					b.add_array(light_models[l]);
 				}
 			}
+			// the regions: per light its hulls ( Load_GfxLightRegion: the array, then per region its hulls, per hull its
+			// axes - none here: the nine ranges are all a hull has )
+			std::vector<GfxLightRegion> regions(light_count);
+			for (std::uint32_t l = 0; l < light_count; l++)
+			{
+				const std::size_t hulls = l < rw.light_regions.size() ? rw.light_regions[l].size() : 0;
+				regions[l].hullCount = static_cast<std::uint32_t>(hulls);
+				regions[l].hulls = hulls ? FOLLOWS : 0;
+			}
 			b.follows(head, W_LIGHT_REGION);
-			b.add_array(std::vector<GfxLightRegion>(light_count));
+			b.add_array(regions);
+			for (std::uint32_t l = 0; l < light_count; l++)
+			{
+				if (!regions[l].hullCount)
+				{
+					continue;
+				}
+				std::vector<GfxLightRegionHull> hulls(regions[l].hullCount);
+				for (std::size_t k = 0; k < hulls.size(); k++)
+				{
+					std::memcpy(hulls[k].kdopMidPoint, rw.light_regions[l][k].mid, sizeof(hulls[k].kdopMidPoint));
+					std::memcpy(hulls[k].kdopHalfSize, rw.light_regions[l][k].half, sizeof(hulls[k].kdopHalfSize));
+				}
+				b.add_array(hulls);
+			}
 		}
 
 		// ---- dpvs

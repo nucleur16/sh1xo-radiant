@@ -103,6 +103,14 @@ namespace codol::bsp::gfx
 		c1::zptr hulls;
 	};
 
+	struct GfxLightRegionHull
+	{
+		float kdopMidPoint[9];
+		float kdopHalfSize[9];
+		std::uint32_t axisCount;
+		c1::zptr axis;							// GfxLightRegionAxis: dir[3], midPoint, halfSize
+	};
+
 	struct MaterialMemory
 	{
 		c1::zptr material;
@@ -130,7 +138,7 @@ namespace codol::bsp::gfx
 
 	static_assert(sizeof(GfxSky) == 16 && sizeof(GfxAabbTree) == 44 && sizeof(GfxPortal) == 60 && sizeof(GfxLightGrid) == 56);
 	static_assert(sizeof(GfxLightGridEntry) == 4 && sizeof(GfxLightGridColors) == 168 && sizeof(GfxLightGridRow) == 12);
-	static_assert(sizeof(GfxShadowGeometry) == 12 && sizeof(GfxLightRegion) == 8 && sizeof(ComPrimaryLight) == 68);
+	static_assert(sizeof(GfxShadowGeometry) == 12 && sizeof(GfxLightRegion) == 8 && sizeof(ComPrimaryLight) == 68 && sizeof(GfxLightRegionHull) == 80);
 
 	// GfxWorld header fields without a name in c1::GfxWorld
 	inline constexpr std::uint32_t W_SORT_KEYS = 36;				// lit decal, effect decal, effect auto, distortion
