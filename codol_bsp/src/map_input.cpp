@@ -99,17 +99,42 @@ namespace codol::bsp
 		{
 			const std::string copy(text);
 			const char* at = copy.c_str();
-			for (int k = 0; k < count; k++)
+			// a text without ( enough ) numbers leaves `out` as it is: the caller's default stays. ( It used to write a 0
+			// first - a worldspawn without light keys had no sun, no sky and no ambient light at all. )
+			float values[4] = {};
+			for (int k = 0; k < count && k < 4; k++)
 			{
 				char* end = nullptr;
-				out[k] = std::strtof(at, &end);
+				values[k] = std::strtof(at, &end);
 				if (end == at)
 				{
 					return false;
 				}
 				at = end;
 			}
+			std::copy(values, values + std::min(count, 4), out);
 			return true;
+		}
+
+		// a light without a "radius": far enough for a room ( radiant's own default of 200 leaves a room of 512 units
+		// dark at the walls )
+		constexpr float DEFAULT_LIGHT_RADIUS = 600.0f;
+
+		// What a surface under the open sky receives of "skycolor" x "skylight": half. Measured on mp_vacant, whose sun lit
+		// surfaces hold ( 0.30 0.60 0.75 ) of light without the sun ( codol_bsp_probe lights: upper layer 118 184 206, lower
+		// 97 82 77 ) under skycolor 0.35 0.75 1 x skylight 1.3 and an ambient light of 0.15 x ( 0.71 0.71 1 ).
+		constexpr float SKY_SCALE = 0.5f;
+
+		// "_color", "suncolor": the hue of a light. The largest part counts as 1 ( 0.1 0.1 0.1 is white ), as radiant's
+		// light entity says and as the suns of the shipped maps show ( mp_vacant: suncolor 0.84 0.81 0.58, sunlight 1.6,
+		// ComWorld colour 1.600 1.543 1.105 )
+		void normalize_color(float color[3])
+		{
+			const float largest = std::max({ color[0], color[1], color[2] });
+			for (int k = 0; k < 3; k++)
+			{
+				color[k] = largest > 1e-6f ? std::max(color[k], 0.0f) / largest : 1.0f;
+			}
 		}
 
 		void angles_forward(const float pitch, const float yaw, float out[3])
@@ -182,41 +207,111 @@ namespace codol::bsp
 
 			if (out.classname == "light")
 			{
+				// The keys of radiant's light entity ( README, "Light keys" ). "_color" gives the hue - its largest part
+				// counts as 1 -, "intensity" the brightness.
 				map_light light;
 				light.type = 3;
+				light.primary = false;
 				float color[3] = { 1, 1, 1 }, value = 1;
 				parse_floats(out.value("_color", "1 1 1"), color, 3);
 				parse_floats(out.value("intensity", "1"), &value, 1);
+				normalize_color(color);
 				for (int k = 0; k < 3; k++)
 				{
-					light.color[k] = color[k] * value;
+					light.color[k] = color[k] * std::max(value, 0.0f);
 				}
 				light.origin[0] = static_cast<float>(out.origin.x);
 				light.origin[1] = static_cast<float>(out.origin.y);
 				light.origin[2] = static_cast<float>(out.origin.z);
-				parse_floats(out.value("radius", "300"), &light.radius, 1);
+				light.radius = DEFAULT_LIGHT_RADIUS;
+				parse_floats(out.value("radius", ""), &light.radius, 1);
+				light.radius = std::max(light.radius, 1.0f);
 				if (const std::string_view def = out.value("def"); !def.empty())
 				{
 					light.def = std::string(def);
 				}
-				float outer = 0;
-				if (parse_floats(out.value("fov_outer", ""), &outer, 1) && outer > 0)
+				float flags = 0;
+				parse_floats(out.value("spawnflags", "0"), &flags, 1);
+				const int spawnflags = static_cast<int>(flags);
+				// where it points: at its target, else along its angles; straight down without either
+				float forward[3] = { 0, 0, -1 };
+				float outer = 0, inner = 0, exponent = 0;
+				bool aimed = false;
+				if (const std::string_view target = out.value("target"); !target.empty())
 				{
-					float inner = outer * 0.5f;
-					parse_floats(out.value("fov_inner", ""), &inner, 1);
-					light.type = 2;
-					light.cos_half_fov_outer = std::cos(outer * 0.5f * 3.14159265f / 180.0f);
-					light.cos_half_fov_inner = std::cos(std::min(inner, outer) * 0.5f * 3.14159265f / 180.0f);
+					for (const edit::object_id other_id : doc.entities())
+					{
+						const edit::entity* other = doc.find_entity(other_id);
+						if (!other || other == e)
+						{
+							continue;
+						}
+						bool named = false;
+						for (const auto& [k, v] : other->pairs)
+						{
+							named = named || (k == "targetname" && v == target);
+						}
+						const vec3 to = other->origin() - out.origin;
+						const double distance = length(to);
+						if (named && distance > 1e-3)
+						{
+							forward[0] = static_cast<float>(to.x / distance);
+							forward[1] = static_cast<float>(to.y / distance);
+							forward[2] = static_cast<float>(to.z / distance);
+							// a circle of 64 units around the target, as radiant draws it
+							outer = static_cast<float>(2.0 * std::atan(64.0 / distance) * 180.0 / 3.14159265358979);
+							aimed = true;
+							break;
+						}
+					}
+				}
+				else if (!out.value("angles").empty())
+				{
 					const vec3 angles = e->angles();
-					float forward[3];
 					angles_forward(static_cast<float>(angles.x), static_cast<float>(angles.y), forward);
+					aimed = true;
+				}
+				const bool has_fov = parse_floats(out.value("fov_outer", ""), &outer, 1) && outer > 0;
+				parse_floats(out.value("fov_inner", ""), &inner, 1);
+				parse_floats(out.value("exponent", ""), &exponent, 1);
+				const bool primary_omni = (spawnflags & 1) != 0, primary_spot = (spawnflags & 2) != 0 && !primary_omni;
+				const bool spot = primary_spot || (!primary_omni && (has_fov || (aimed && outer > 0)));
+				if (spot || primary_omni)
+				{
+					if (outer <= 0)
+					{
+						outer = primary_omni ? 120.0f : 90.0f;
+						inner = primary_omni && inner <= 0 ? 60.0f : inner;
+					}
+					outer = std::min(outer, 179.0f);
+					inner = std::clamp(inner, 0.0f, outer);
+					light.type = spot ? 2 : 3;
+					light.cone = spot;
+					light.cos_half_fov_outer = std::cos(outer * 0.5f * 3.14159265f / 180.0f);
+					light.cos_half_fov_inner = std::cos(inner * 0.5f * 3.14159265f / 180.0f);
+					light.exponent = std::clamp(static_cast<int>(exponent), 0, 255);
 					for (int k = 0; k < 3; k++)
 					{
 						light.dir[k] = -forward[k];
 					}
 				}
-				w.bake_lights.push_back(light);
+				else
+				{
+					light.dir[0] = light.dir[1] = 0;
+					light.dir[2] = 1;
+					light.cos_half_fov_outer = 0.5f;
+					light.cos_half_fov_inner = 0.866f;
+				}
+				// PRIMARY_NOSHADOWMAP, and a cone too wide for one shadow map ( radiant: "implied by fov_outer > 120" )
+				light.can_shadow = !(spawnflags & 8) && outer <= 120.0f;
+				light.primary = primary_omni || primary_spot;
 				rep.lights++;
+				if (light.primary && w.lights.size() >= 255)
+				{
+					rep.warnings.push_back("light: more than 253 primary lights; the light at " + std::string(out.value("origin")) + " is baked only");
+					light.primary = false;
+				}
+				(light.primary ? w.lights : w.bake_lights).push_back(light);
 				continue;		// not part of the entity string
 			}
 
@@ -368,25 +463,36 @@ namespace codol::bsp
 		}
 		rep.entities = w.entities.size();
 
-		// the sun and the ambient light, from the worldspawn keys the shipped maps carry
+		// the sun, the sky and the ambient light, from the worldspawn keys the shipped maps carry ( README, "Light keys" )
 		const map_entity& ws = w.entities[0];
-		float direction[3] = { -50, 40, 0 }, color[3] = { 1, 0.95f, 0.85f }, sunlight = 1.3f, ambient = 0.1f, sky_color[3] = { 0.8f, 0.9f, 1.0f }, skylight = 0.4f;
+		float direction[3] = { -50, 40, 0 }, color[3] = { 1, 0.95f, 0.85f }, sunlight = 1.3f, ambient = 0.1f, ambient_color[3] = { 1, 1, 1 },
+			sky_color[3] = { 0.8f, 0.9f, 1.0f }, skylight = 0.4f;
 		parse_floats(ws.value("sundirection", ""), direction, 3);
 		parse_floats(ws.value("suncolor", ""), color, 3);
 		parse_floats(ws.value("sunlight", ""), &sunlight, 1);
 		parse_floats(ws.value("ambient", ""), &ambient, 1);
+		parse_floats(ws.value("_color", ""), ambient_color, 3);
 		parse_floats(ws.value("skycolor", ""), sky_color, 3);
 		parse_floats(ws.value("skylight", ""), &skylight, 1);
+		normalize_color(color);
+		normalize_color(ambient_color);
+		normalize_color(sky_color);
+		sunlight = std::max(sunlight, 0.0f);
+		ambient = std::max(ambient, 0.0f);
+		skylight = std::max(skylight, 0.0f);
 		angles_forward(direction[0], direction[1], w.sun_dir);
 		for (int k = 0; k < 3; k++)
 		{
 			w.sun_color[k] = color[k] * sunlight;
-			w.ambient[k] = ambient + sky_color[k] * skylight;
-			w.ambient_light[k] = ambient;
-			w.sky_light[k] = sky_color[k] * skylight;
+			w.ambient[k] = ambient_color[k] * ambient + sky_color[k] * skylight * SKY_SCALE;
+			w.ambient_light[k] = ambient_color[k] * ambient;
+			w.sky_light[k] = sky_color[k] * skylight * SKY_SCALE;
 			w.lights[1].color[k] = w.sun_color[k];
 			w.lights[1].dir[k] = w.sun_dir[k];
 		}
+		rep.notes.push_back(format("light keys: sun ( %.2f %.2f %.2f ) from ( %.3f %.3f %.3f ), ambient ( %.3f %.3f %.3f ), sky ( %.2f %.2f %.2f ); %zu light entities, %zu of them primary",
+			w.sun_color[0], w.sun_color[1], w.sun_color[2], w.sun_dir[0], w.sun_dir[1], w.sun_dir[2], w.ambient_light[0], w.ambient_light[1], w.ambient_light[2],
+			w.sky_light[0], w.sky_light[1], w.sky_light[2], w.bake_lights.size() + w.lights.size() - 2, w.lights.size() - 2));
 
 		for (const map_brush& b : w.brushes)
 		{

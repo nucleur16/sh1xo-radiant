@@ -46,7 +46,7 @@ file(GLOB CODOL_BSP_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.
 add_library(codol_bsp STATIC ${CODOL_BSP_SOURCES})
 target_include_directories(codol_bsp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_include_directories(codol_bsp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(codol_bsp PUBLIC codol_zone codol_edit codol_mapc)
+target_link_libraries(codol_bsp PUBLIC codol_zone codol_edit codol_mapc PRIVATE codol_render)
 codol_bsp_options(codol_bsp)
 
 if(CODOL_BSP_BUILD_TOOLS)

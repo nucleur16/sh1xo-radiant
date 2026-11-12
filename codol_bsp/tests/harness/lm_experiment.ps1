@@ -2,7 +2,8 @@ param([string]$Scratch = 'D:\CoD\iw3xo-radiant-codol\build-editor\bsptest', [str
       [string[]]$Only = @())
 # How the game's lit shaders combine the two layers of the secondary lightmap and the primary lightmap: the box room is
 # compiled with constant lightmaps ( CODOL_BSP_LM_TEST ) and rendered by codol_viewtool, which runs those shaders. The
-# average colour of a patch of floor is printed per case.
+# average colour of a patch of floor is printed per case. ( What the shaders do was later read from the shaders themselves:
+# light.cpp, head. The alpha channels are the direction of the lower layer's light: 255 / 255 is far off the normal. )
 $Build = (Resolve-Path "$PSScriptRoot\..\..\..\build\codol_bsp").Path
 Add-Type -AssemblyName System.Drawing
 $cases = [ordered]@{
@@ -18,7 +19,7 @@ $cases = [ordered]@{
 foreach ($k in $cases.Keys) {
   if ($Only.Count -and $Only -notcontains $k) { continue }
   $env:CODOL_BSP_LM_TEST = $cases[$k]
-  & "$Build\Release\codol_bsp.exe" --map "$Scratch\maps\box_room.map" --exe "$Game\C1.exe" --install $Game --out "$Scratch\lm\$k\mp_boxroom.ff" --cache $Scratch --no-load | Out-Null
+  & "$Build\Release\codol_bsp.exe" --map "$Scratch\maps\box_room.map" --exe "$Game\C1.exe" --install $Game --out "$Scratch\lm\$k\mp_boxroom.ff" --cache $Scratch --no-load --no-light | Out-Null
   & "$Build\codol_mapc\codol_view\Release\codol_viewtool.exe" render --game $Game --map mp_boxroom --zone-dirs "$Scratch\lm\$k" --out "$Scratch\png\lm_$k.png" --size 480x270 --pos 0,0,150 --angles 60,45 --no-shadows | Out-Null
   $bmp = New-Object System.Drawing.Bitmap "$Scratch\png\lm_$k.png"
   $sumR = 0; $sumG = 0; $sumB = 0; $n = 0

@@ -1,6 +1,8 @@
 // The compile: document -> world -> the map assets -> zone -> fast file.
 
 #include "world.hpp"
+#include "codol_render/iwd.hpp"
+#include "codol_render/iwi.hpp"
 #include "gfx_layout.hpp"
 
 #include <fstream>
@@ -93,8 +95,8 @@ namespace codol::bsp
 			{
 				continue;		// the sun: colour and direction only, as in the shipped maps
 			}
-			out.canUseShadowMap = 1;
-			out.exponent = 1;
+			out.canUseShadowMap = in.can_shadow ? 1 : 0;
+			out.exponent = static_cast<std::uint8_t>(in.exponent);
 			std::memcpy(out.origin, in.origin, sizeof(out.origin));
 			out.radius = in.radius;
 			out.cosHalfFovOuter = in.cos_half_fov_outer;
@@ -136,25 +138,127 @@ namespace codol::bsp
 		check(ctx.editor.add_built_asset(c1::ASSET_TYPE_FXWORLD, ctx.w.bsp_name, b.chunks), "adding the FxWorld");
 	}
 
+	namespace
+	{
+		// The falloff picture of light_point_linear, images/falloff_linear.iwi in the install's image archives: one row
+		// of brightness from the light's origin to its radius. The game's map compiler lays it into row 0 of the
+		// secondary lightmaps, where the shaders of the primary lights read it; so does this one, and the bake uses
+		// the same curve for the lights it bakes. Kept in a small file next to the catalog ( the archives take a
+		// moment to open ).
+		void load_falloff(compile_context& ctx)
+		{
+			world& w = ctx.w;
+			std::filesystem::path folder = ctx.opts.cache;
+			if (folder.empty())
+			{
+				folder = ctx.opts.out.empty() ? std::filesystem::current_path() : std::filesystem::absolute(ctx.opts.out).parent_path();
+			}
+			const std::filesystem::path cache = folder / "codol_bsp_falloff.txt";
+			const std::string tag = "falloff_linear " + ctx.opts.install.generic_string();
+			{
+				std::ifstream in(cache);
+				std::string line;
+				if (in && std::getline(in, line) && line == tag)
+				{
+					std::array<float, 32> values{};
+					std::size_t n = 0;
+					while (n < values.size() && in >> values[n])
+					{
+						n++;
+					}
+					if (n == values.size())
+					{
+						w.light_falloff = values;
+						w.light_falloff_source = "images/falloff_linear.iwi ( " + cache.filename().string() + " )";
+						return;
+					}
+				}
+			}
+			render::iwd_key key{};
+			std::string error;
+			std::vector<std::uint8_t> file;
+			if (!render::derive_iwd_key(ctx.opts.exe, key, &error))
+			{
+				ctx.rep.warnings.push_back("light: the falloff picture was not read ( " + error + " ): lights fall off along a straight line");
+				return;
+			}
+			std::vector<std::filesystem::path> directories{ ctx.opts.install / "main" };
+			std::error_code ec;
+			if (std::filesystem::is_directory(ctx.opts.install / "main_shared", ec))
+			{
+				directories.push_back(ctx.opts.install / "main_shared");
+			}
+			const std::unique_ptr<render::iwd_archive_set> set = render::iwd_archive_set::open(directories, &key, "images/falloff_");
+			render::iwi_file image;
+			if (!set || !set->read("images/falloff_linear.iwi", file, &error) || !render::parse_iwi(file, image, &error))
+			{
+				ctx.rep.warnings.push_back("light: the falloff picture images/falloff_linear.iwi was not read ( " + error + " ): lights fall off along a straight line");
+				return;
+			}
+			const render::iwi_surface* surface = image.surface(0, 0);
+			const int width = image.header.width;
+			const std::size_t bytes = image.header.format == render::iwi_format::luminance8 || image.header.format == render::iwi_format::alpha8 ? 1
+				: image.header.format == render::iwi_format::rgba32 ? 4 : image.header.format == render::iwi_format::rgb24 ? 3 : 0;
+			if (!surface || !bytes || width < 1 || surface->size < bytes * static_cast<std::size_t>(width))
+			{
+				ctx.rep.warnings.push_back(std::string("light: the falloff picture has a format this compiler does not read ( ") + render::iwi_format_name(image.header.format)
+					+ " ): lights fall off along a straight line");
+				return;
+			}
+			// the first row, brought to 32 texels ( the mean of what a texel covers )
+			for (int k = 0; k < 32; k++)
+			{
+				const int first = k * width / 32, last = std::max(first + 1, (k + 1) * width / 32);
+				double sum = 0;
+				for (int x = first; x < last; x++)
+				{
+					sum += file[surface->offset + static_cast<std::size_t>(std::min(x, width - 1)) * bytes];
+				}
+				w.light_falloff[static_cast<std::size_t>(k)] = static_cast<float>(sum / (last - first) / 255.0);
+			}
+			w.light_falloff_source = format("images/falloff_linear.iwi ( %d x %d, %s )", width, image.header.height, render::iwi_format_name(image.header.format));
+			std::ofstream out(cache, std::ios::trunc);
+			out << tag << "\n";
+			for (const float v : w.light_falloff)
+			{
+				out << v << "\n";
+			}
+		}
+	}
+
 	// The light definitions the primary lights name. A GfxLightDef is a name, an attenuation image and where its
 	// lookup starts in the light map's lookup strip; the image lives in the game's common zones and is named here
 	// ( ",falloff_linear" ). Only light_point_linear is known to this compiler: 0x62 / 1 are that definition's values
 	// in every shipped map.
 	void build_light_defs(compile_context& ctx)
 	{
-		std::set<std::string> defs;
-		for (map_light& light : ctx.w.lights)
+		std::set<std::string> defs, unknown;
+		for (int pass = 0; pass < 2; pass++)
 		{
-			if (light.type < 2)
+			for (map_light& light : pass == 0 ? ctx.w.lights : ctx.w.bake_lights)
 			{
-				continue;
+				if (light.type < 2)
+				{
+					continue;
+				}
+				if (light.def != "light_point_linear")
+				{
+					if (unknown.insert(light.def).second)
+					{
+						ctx.rep.warnings.push_back("light: definition '" + light.def + "' is not known, light_point_linear is used");
+					}
+					light.def = "light_point_linear";
+				}
+				if (pass == 0)
+				{
+					defs.insert(light.def);
+				}
 			}
-			if (light.def != "light_point_linear")
-			{
-				ctx.rep.warnings.push_back("light: definition '" + light.def + "' is not known, light_point_linear is used");
-				light.def = "light_point_linear";
-			}
-			defs.insert(light.def);
+		}
+		if (ctx.opts.light && ctx.w.lights.size() + ctx.w.bake_lights.size() > 2)
+		{
+			load_falloff(ctx);
+			ctx.rep.notes.push_back("light: falloff of the light entities: " + ctx.w.light_falloff_source);
 		}
 		for (const std::string& def : defs)
 		{
@@ -235,18 +339,21 @@ namespace codol::bsp
 
 	namespace
 	{
-		// The scripts a map brings: the effect list ( maps/mp/<map>_fx.gsc: loadfx per effect, then the placement ),
-		// the placement ( maps/createfx/<map>_fx.gsc, in the form the game's createfx tool writes ) and the level
-		// script. The two effect scripts are rawfiles of the zone when the map places effects or sounds, or when the
-		// scripts are asked for; the level script is only written to the folder: the dedicated server reads level
-		// scripts from its script folders, never from a zone.
+		// The scripts a map brings: the effect list ( maps/mp/<map>_fx.gsc: loadfx per effect ), the placement
+		// ( maps/createfx/<map>_fx.gsc ) and the level script.
+		//
+		// The two effect files are not only scripts: THE CLIENT READS THEIR TEXT when a level starts and makes the
+		// effects and looping sounds itself. It wants them as the game's createfx tool writes them - the placement has
+		// to begin with the line "//_createfx generated. Do not touch!!" ( anything else: "Unexpected text .. when
+		// trying to find .. in map's effect file", and the client places nothing ). So both files have the shape of
+		// the shipped ones ( mp_vacant, mp_rust, mp_nuked ), line for line, and like there the server only runs the
+		// placement in a developer build that asks for server side effects - otherwise every effect would be there
+		// twice. The two effect scripts are rawfiles of every zone - the client asks for both when a level starts and
+		// logs "file not found" without them -; the level script is only written to the folder: the dedicated server
+		// reads level scripts from its script folders, never from a zone.
 		void write_scripts(compile_context& ctx)
 		{
 			const world& w = ctx.w;
-			if (w.fx.empty() && ctx.opts.scripts_out.empty())
-			{
-				return;
-			}
 			const auto id_of = [](const std::string& fx)
 			{
 				std::string id = fx.substr(fx.find_last_of('/') == std::string::npos ? 0 : fx.find_last_of('/') + 1);
@@ -257,7 +364,7 @@ namespace codol::bsp
 				return id;
 			};
 			std::map<std::string, std::string> effects;		// id -> effect
-			std::string placement = "//_createfx generated by codol_bsp. Do not touch!!\n#include common_scripts\\utility;\n#include common_scripts\\_createfx;\nmain()\n{\n";
+			std::string placement = "//_createfx generated. Do not touch!!\n#include common_scripts\\utility;\n#include common_scripts\\_createfx;\nmain()\n{\n";
 			placement += format("\t// CreateFX entities placed: %zu\n", w.fx.size());
 			std::size_t sounds = 0;
 			for (const map_fx& fx : w.fx)
@@ -284,12 +391,28 @@ namespace codol::bsp
 				placement += "\n";
 			}
 			placement += "}\n";
-			std::string list = "// generated by codol_bsp from the script_fx / script_sound entities of the map\nmain()\n{\n";
+			std::string list = "main()\n{\n\n";
 			for (const auto& [id, effect] : effects)
 			{
 				list += format("\tlevel._effect[ \"%s\" ] = loadfx( \"%s\" );\n", id.c_str(), effect.c_str());
 			}
-			list += "\n\tmaps\\createfx\\" + w.name + "_fx::main();\n}\n";
+			list += "\n/#\n\tif ( common_scripts\\utility::shouldRunServerSideEffects() )\n\t\tmaps\\createfx\\" + w.name + "_fx::main();\n#/\n}\n";
+			// line ends as in the shipped files
+			const auto crlf = [](const std::string& text)
+			{
+				std::string out;
+				for (const char c : text)
+				{
+					if (c == '\n')
+					{
+						out += '\r';
+					}
+					out += c;
+				}
+				return out;
+			};
+			placement = crlf(placement);
+			list = crlf(list);
 			std::string level = "// generated by codol_bsp: the level script of " + w.name + "\n#include maps\\mp\\_utility;\n\nmain()\n{\n\tmaps\\mp\\" + w.name
 				+ "_fx::main();\n\n\tmaps\\mp\\_load::main();\n\n";
 			if (!ctx.opts.minimap.empty())
@@ -388,6 +511,7 @@ namespace codol::bsp
 		// the animation list the server asks every map for; empty
 		check(editor.set_rawfile("animlists/" + w.name + ".animlist", {}, false), "adding the animation list");
 		build_light_defs(ctx);
+		build_vision_and_sun(ctx);
 		build_com_world(ctx);
 		build_fx_world(ctx);
 		asset_builder clip = build_clip_map(ctx);

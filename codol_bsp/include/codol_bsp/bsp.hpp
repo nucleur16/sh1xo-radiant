@@ -45,6 +45,10 @@ namespace codol::bsp
 		// dedicated server reads it from its script folder ), maps/mp/<mapname>_fx.gsc and
 		// maps/createfx/<mapname>_fx.gsc ( both also compiled into the zone as rawfiles )
 		std::filesystem::path scripts_out;
+		// optional: the map's vision file ( glow, film tweaks ) and sun file ( sprite, flare, glare ), with the settings
+		// named ( r_glow .. ) or numbered as the game's files have them. Default: <map name>.vision / .sun next to
+		// the .map; without one a default vision file is written, and a default flare for a map with a sun and a sky.
+		std::filesystem::path vision, sun;
 		bool verbose = false;
 	};
 

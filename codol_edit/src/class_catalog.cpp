@@ -48,7 +48,7 @@ namespace codol::edit
 			{ "info_player_start", { -16, -16, 0 }, { 16, 16, 72 }, { 0.2f, 1.0f, 0.2f }, "Player start." },
 			{ "mp_global_intermission", { -16, -16, -16 }, { 16, 16, 16 }, { 0.0f, 0.5f, 1.0f }, "Camera position of the intermission / of spectators before the first spawn." },
 			{ "mp_*spawn*", { -16, -16, 0 }, { 16, 16, 72 }, { 0.2f, 0.6f, 1.0f }, "Multiplayer spawn point ( player hull, origin at the feet )." },
-			{ "light", { -8, -8, -8 }, { 8, 8, 8 }, { 1.0f, 1.0f, 0.3f }, "Light source ( baked into the map; in a shipped zone the entity is only a marker )." },
+			{ "light", { -8, -8, -8 }, { 8, 8, 8 }, { 1.0f, 1.0f, 0.3f }, "Light source: radius, intensity, _color. Baked into the map; with spawnflags 1 ( PRIMARY_OMNI ) or 2 ( PRIMARY_SPOT ) a primary light, lit at run time. In a shipped zone the entity is only a marker." },
 			{ "script_origin", { -8, -8, -8 }, { 8, 8, 8 }, { 0.6f, 0.6f, 0.6f }, "Position for scripts." },
 			{ "script_struct", { -8, -8, -8 }, { 8, 8, 8 }, { 0.9f, 0.3f, 0.9f }, "Position / data for scripts." },
 			{ "script_model", { -8, -8, -8 }, { 8, 8, 8 }, { 0.3f, 0.9f, 0.9f }, "Model placed for scripts; the box should come from the model ( entity box callback )." },

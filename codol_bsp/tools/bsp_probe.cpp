@@ -12,6 +12,7 @@
 #include "codol_zone/assets.hpp"
 #include "codol_zone/zone_editor.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -314,6 +315,376 @@ int main(int argc, char** argv)
 					l, c.type, c.canUseShadowMap, c.exponent, c.unused, c.color[0], c.color[1], c.color[2], c.dir[0], c.dir[1], c.dir[2], c.origin[0], c.origin[1], c.origin[2], c.radius,
 					c.cosHalfFovOuter, c.cosHalfFovInner, c.cosHalfFovExpanded, c.rotationLimit, c.translationLimit, c.defName ? std::string(z.c_string(c.defName)).c_str() : "-");
 			}
+		}
+		return 0;
+	}
+	if (mode == "lights")
+	{
+		// codol_bsp_probe lights <zone.ff> <C1.exe> [out dir]: the primary lights of a map with what hangs on each -
+		// the ComWorld record, the shadow geometry, the light region's hulls, the surfaces that name it and how bright
+		// their lightmap texels are -, and the brightness of the lightmap pages ( written as .tga with an out dir )
+		zone::Zone z;
+		if (const zone::Status s = z.open(argv[2], key); !s)
+		{
+			std::printf("%s\n", s.message.c_str());
+			return 1;
+		}
+		zone::GfxWorldView world;
+		if (!zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world))
+		{
+			return 1;
+		}
+		const c1::GfxWorld& h = world.raw;
+		const std::string out_dir = argc > 4 ? argv[4] : "";
+		const auto save = [&](const std::string& name, const int w, const int hh, const std::uint8_t* px, const int channels)
+		{
+			if (out_dir.empty())
+			{
+				return;
+			}
+			if (std::FILE* f = std::fopen((out_dir + "/" + name).c_str(), "wb"))
+			{
+				std::uint8_t head[18] = {};
+				head[2] = 2;
+				head[12] = static_cast<std::uint8_t>(w);
+				head[13] = static_cast<std::uint8_t>(w >> 8);
+				head[14] = static_cast<std::uint8_t>(hh);
+				head[15] = static_cast<std::uint8_t>(hh >> 8);
+				head[16] = 24;
+				head[17] = 0x20;
+				std::fwrite(head, 1, 18, f);
+				for (int k = 0; k < w * hh; k++)
+				{
+					const std::uint8_t bgr[3] = { px[k * channels], px[k * channels + (channels > 1 ? 1 : 0)], px[k * channels + (channels > 1 ? 2 : 0)] };
+					std::fwrite(bgr, 1, 3, f);
+				}
+				std::fclose(f);
+			}
+		};
+		struct page
+		{
+			zone::ImageView primary, secondary;
+		};
+		std::vector<page> pages;
+		if (h.draw.lightmapCount > 0)
+		{
+			const auto pointers = z.get_array<zone::zaddr>(h.draw.lightmaps, 2u * static_cast<std::size_t>(h.draw.lightmapCount));
+			for (std::size_t i = 0; i + 1 < pointers.size(); i += 2)
+			{
+				page p;
+				zone::read_image(z, pointers[i], p.primary);
+				zone::read_image(z, pointers[i + 1], p.secondary);
+				const int sw = p.secondary.raw.width, sh = p.secondary.raw.height, pw = p.primary.raw.width, ph = p.primary.raw.height;
+				std::printf("lightmap %zu: primary %s %d x %d format %u ( %zu bytes ), secondary %s %d x %d format %u ( %zu bytes )\n", i / 2, std::string(p.primary.name).c_str(), pw, ph,
+					p.primary.loadDef.format, p.primary.pixels.size(), std::string(p.secondary.name).c_str(), sw, sh, p.secondary.loadDef.format, p.secondary.pixels.size());
+				if (p.secondary.pixels.size() >= static_cast<std::size_t>(sw) * sh * 4)
+				{
+					for (int layer = 0; layer < 2; layer++)
+					{
+						double sum[4] = {};
+						std::size_t lit = 0;
+						std::vector<int> lum;
+						const std::uint8_t* px = p.secondary.pixels.data() + static_cast<std::size_t>(layer) * sw * (sh / 2) * 4;
+						for (int k = 0; k < sw * (sh / 2); k++)
+						{
+							if (px[k * 4] || px[k * 4 + 1] || px[k * 4 + 2])
+							{
+								lit++;
+								for (int c = 0; c < 4; c++)
+								{
+									sum[c] += px[k * 4 + c];
+								}
+								lum.push_back((px[k * 4] + px[k * 4 + 1] + px[k * 4 + 2]) / 3);
+							}
+						}
+						std::sort(lum.begin(), lum.end());
+						const auto pct = [&](const double q) { return lum.empty() ? 0 : lum[static_cast<std::size_t>(q * static_cast<double>(lum.size() - 1))]; };
+						std::printf("  secondary %s layer: %zu of %d texels not black; mean b g r a %.1f %.1f %.1f %.1f; brightness 10%% %d, 50%% %d, 90%% %d, 99%% %d\n", layer ? "lower" : "upper",
+							lit, sw * (sh / 2), sum[0] / std::max<std::size_t>(lit, 1), sum[1] / std::max<std::size_t>(lit, 1), sum[2] / std::max<std::size_t>(lit, 1),
+							sum[3] / std::max<std::size_t>(lit, 1), pct(0.1), pct(0.5), pct(0.9), pct(0.99));
+						save("lm" + std::to_string(i / 2) + (layer ? "_lower.tga" : "_upper.tga"), sw, sh / 2, px, 4);
+					}
+				}
+				if (p.primary.pixels.size() >= static_cast<std::size_t>(pw) * ph)
+				{
+					std::size_t hist[4] = {};
+					for (int k = 0; k < pw * ph; k++)
+					{
+						const std::uint8_t v = p.primary.pixels[static_cast<std::size_t>(k)];
+						hist[v == 0 ? 0 : v < 128 ? 1 : v < 255 ? 2 : 3]++;
+					}
+					std::printf("  primary: %zu texels 0, %zu below 128, %zu below 255, %zu 255\n", hist[0], hist[1], hist[2], hist[3]);
+					save("lm" + std::to_string(i / 2) + "_primary.tga", pw, ph, p.primary.pixels.data(), 1);
+				}
+				pages.push_back(p);
+			}
+		}
+		// per primary light: the surfaces that name it, and their lightmap texels at the vertices
+		struct per_light
+		{
+			int surfaces = 0, vertices = 0;
+			double upper[3] = {}, lower[3] = {}, primary = 0;
+			float lo[3] = { 1e9f, 1e9f, 1e9f }, hi[3] = { -1e9f, -1e9f, -1e9f };
+		};
+		std::map<int, per_light> by_light;
+		const std::vector<c1::GfxWorldVertex> verts = world.vertices();
+		const std::vector<std::uint16_t> all_indices = world.indices();
+		for (const zone::WorldSurface& ws : world.surfaces)
+		{
+			const c1::GfxSurface& surf = ws.raw;
+			per_light& pl = by_light[surf.primaryLightIndex];
+			pl.surfaces++;
+			if (std::getenv("PROBE_SURF") && surf.primaryLightIndex == std::atoi(std::getenv("PROBE_SURF")))
+			{
+				std::printf("surface %zu: first vertex %u count %u tris %u lightmap %u material %s\n", static_cast<std::size_t>(&ws - world.surfaces.data()), surf.firstVertex, surf.vertexCount,
+					surf.triCount, surf.lightmapIndex, std::string(ws.materialName).c_str());
+			}
+			if (surf.lightmapIndex >= pages.size())
+			{
+				continue;
+			}
+			const page& p = pages[surf.lightmapIndex];
+			const int sw = p.secondary.raw.width, sh = p.secondary.raw.height / 2, pw = p.primary.raw.width, ph = p.primary.raw.height;
+			if (p.secondary.pixels.size() < static_cast<std::size_t>(sw) * sh * 8 || p.primary.pixels.size() < static_cast<std::size_t>(pw) * ph)
+			{
+				continue;
+			}
+			// a surface's vertices are those its triangles name ( shipped surfaces share vertex blocks )
+			for (std::uint32_t i = surf.baseIndex; i < surf.baseIndex + 3u * surf.triCount && i < all_indices.size(); i++)
+			{
+				const std::uint32_t v = surf.firstVertex + all_indices[i];
+				if (v >= verts.size())
+				{
+					continue;
+				}
+				const float u = verts[v].lmapCoord[0], t = verts[v].lmapCoord[1];
+				const int x = std::clamp(static_cast<int>(u * static_cast<float>(sw)), 0, sw - 1), y = std::clamp(static_cast<int>(t * static_cast<float>(sh)), 0, sh - 1);
+				const std::uint8_t* up = p.secondary.pixels.data() + (static_cast<std::size_t>(y) * sw + x) * 4;
+				const std::uint8_t* low = up + static_cast<std::size_t>(sw) * sh * 4;
+				for (int c = 0; c < 3; c++)
+				{
+					pl.upper[c] += up[2 - c];
+					pl.lower[c] += low[2 - c];
+					pl.lo[c] = std::min(pl.lo[c], verts[v].xyz[c]);
+					pl.hi[c] = std::max(pl.hi[c], verts[v].xyz[c]);
+				}
+				pl.primary += p.primary.pixels[static_cast<std::size_t>(std::clamp(static_cast<int>(t * static_cast<float>(ph)), 0, ph - 1)) * pw
+					+ std::clamp(static_cast<int>(u * static_cast<float>(pw)), 0, pw - 1)];
+				pl.vertices++;
+			}
+		}
+		struct shadow_geometry
+		{
+			std::uint16_t surfaceCount, smodelCount;
+			std::uint32_t sortedSurfIndex, smodelIndex;
+		};
+		struct light_region
+		{
+			std::uint32_t hullCount, hulls;
+		};
+		struct region_hull
+		{
+			float mid[9], half[9];
+			std::uint32_t axisCount, axis;
+		};
+		struct region_axis
+		{
+			float dir[3], mid, half;
+		};
+		struct com_world
+		{
+			std::uint32_t name;
+			std::int32_t isInUse;
+			std::uint32_t count, lights;
+		};
+		struct com_light
+		{
+			std::uint8_t type, canUseShadowMap, exponent, unused;
+			float color[3], dir[3], origin[3], radius, cosHalfFovOuter, cosHalfFovInner, cosHalfFovExpanded, rotationLimit, translationLimit;
+			std::uint32_t defName;
+		};
+		std::uint32_t pointers[10];
+		std::memcpy(pointers, h._unk416, sizeof(pointers));
+		std::printf("header pointers 416: cellCasterBits %X cellHasSunLitSurfsBits %X sceneDynModel %X sceneDynBrush %X primaryLightEntityShadowVis %X dynEntShadowVis %X %X nonSunPrimaryLightForModelDynEnt %X shadowGeom %X lightRegion %X\n",
+			pointers[0], pointers[1], pointers[2], pointers[3], pointers[4], pointers[5], pointers[6], pointers[7], pointers[8], pointers[9]);
+		std::printf("lastSunPrimaryLightIndex %u primaryLightCount %u; dpvsDyn:", h.lastSunPrimaryLightIndex, h.primaryLightCount);
+		for (int k = 0; k < 52; k += 4)
+		{
+			std::uint32_t v;
+			std::memcpy(&v, h.dpvsDyn + k, 4);
+			std::printf(" %X", v);
+		}
+		std::printf("\n");
+		std::vector<shadow_geometry> geometry;
+		std::vector<light_region> regions;
+		if (pointers[8] && pointers[9])
+		{
+			geometry = z.get_array<shadow_geometry>(pointers[8], h.primaryLightCount);
+			regions = z.get_array<light_region>(pointers[9], h.primaryLightCount);
+		}
+		std::vector<com_light> lights;
+		if (const zone::zaddr at = zone::first_asset(z, c1::ASSET_TYPE_COMWORLD))
+		{
+			const com_world com = z.get<com_world>(at);
+			lights = z.get_array<com_light>(com.lights, com.count);
+		}
+		std::map<int, int> models_of;
+		for (const zone::WorldStaticModel& m : world.staticModels)
+		{
+			models_of[m.raw.primaryLightIndex]++;
+		}
+		const int detail = argc > 5 ? std::atoi(argv[5]) : 8;
+		for (std::size_t l = 0; l < lights.size(); l++)
+		{
+			const com_light& c = lights[l];
+			std::printf("light %zu: type %u canUseShadowMap %u exponent %u colour ( %.3f %.3f %.3f ) dir ( %.3f %.3f %.3f ) origin ( %.1f %.1f %.1f ) radius %.0f cos outer %.3f inner %.3f expanded %.3f limits %.2f %.2f def %s\n",
+				l, c.type, c.canUseShadowMap, c.exponent, c.color[0], c.color[1], c.color[2], c.dir[0], c.dir[1], c.dir[2], c.origin[0], c.origin[1], c.origin[2], c.radius,
+				c.cosHalfFovOuter, c.cosHalfFovInner, c.cosHalfFovExpanded, c.rotationLimit, c.translationLimit, c.defName ? std::string(z.c_string(c.defName)).c_str() : "-");
+			if (const auto it = by_light.find(static_cast<int>(l)); it != by_light.end() && it->second.vertices)
+			{
+				const per_light& pl = it->second;
+				const double n = pl.vertices;
+				std::printf("   %d surfaces name it ( %d static models ), box ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ); at their vertices: upper r g b %.0f %.0f %.0f, lower %.0f %.0f %.0f, primary %.0f\n",
+					pl.surfaces, models_of[static_cast<int>(l)], pl.lo[0], pl.lo[1], pl.lo[2], pl.hi[0], pl.hi[1], pl.hi[2], pl.upper[0] / n, pl.upper[1] / n, pl.upper[2] / n,
+					pl.lower[0] / n, pl.lower[1] / n, pl.lower[2] / n, pl.primary / n);
+			}
+			if (l < geometry.size())
+			{
+				const shadow_geometry& g = geometry[l];
+				std::printf("   shadow geometry: %u surfaces, %u static models", g.surfaceCount, g.smodelCount);
+				if (g.surfaceCount && g.sortedSurfIndex && static_cast<int>(l) < detail)
+				{
+					// how many of them name this light themselves, and which ranges they are in
+					const std::vector<std::uint16_t> list = z.get_array<std::uint16_t>(g.sortedSurfIndex, g.surfaceCount);
+					int own = 0, other = 0, none = 0, sorted = 1, opaque = 0;
+					float lo[3] = { 1e9f, 1e9f, 1e9f }, hi[3] = { -1e9f, -1e9f, -1e9f };
+					for (std::size_t k = 0; k < list.size(); k++)
+					{
+						sorted = sorted && (k == 0 || list[k] > list[k - 1]);
+						if (list[k] >= world.surfaces.size())
+						{
+							continue;
+						}
+						const c1::GfxSurface& surf = world.surfaces[list[k]].raw;
+						(surf.primaryLightIndex == l ? own : surf.primaryLightIndex == 0 ? none : other)++;
+						opaque += list[k] < h.dpvs.litOpaqueSurfsEnd;
+						for (std::uint32_t i = surf.baseIndex; i < surf.baseIndex + 3u * surf.triCount && i < all_indices.size(); i++)
+						{
+							const std::uint32_t v = surf.firstVertex + all_indices[i];
+							for (int a = 0; a < 3 && v < verts.size(); a++)
+							{
+								lo[a] = std::min(lo[a], verts[v].xyz[a]);
+								hi[a] = std::max(hi[a], verts[v].xyz[a]);
+							}
+						}
+					}
+					std::printf(" ( surfaces: %d name this light, %d none, %d another; %d lit opaque; ascending %d; box ( %.0f %.0f %.0f ) - ( %.0f %.0f %.0f ) )", own, none, other, opaque,
+						sorted, lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+				}
+				if (g.smodelCount && g.smodelIndex && static_cast<int>(l) < detail)
+				{
+					const std::vector<std::uint16_t> list = z.get_array<std::uint16_t>(g.smodelIndex, g.smodelCount);
+					int own = 0;
+					for (const std::uint16_t m : list)
+					{
+						own += m < world.staticModels.size() && world.staticModels[m].raw.primaryLightIndex == l;
+					}
+					std::printf(" ( static models: %d of them name this light )", own);
+				}
+				std::printf("\n");
+			}
+			if (l < regions.size() && regions[l].hullCount)
+			{
+				const std::vector<region_hull> hulls = z.get_array<region_hull>(regions[l].hulls, regions[l].hullCount);
+				for (std::size_t k = 0; k < hulls.size() && static_cast<int>(l) < detail; k++)
+				{
+					const region_hull& rh = hulls[k];
+					std::printf("   hull %zu: kdop mid", k);
+					for (int a = 0; a < 9; a++)
+					{
+						std::printf(" %.1f", rh.mid[a]);
+					}
+					std::printf(" half");
+					for (int a = 0; a < 9; a++)
+					{
+						std::printf(" %.1f", rh.half[a]);
+					}
+					std::printf("; %u axes\n", rh.axisCount);
+					if (rh.axisCount && rh.axis)
+					{
+						for (const region_axis& ax : z.get_array<region_axis>(rh.axis, rh.axisCount))
+						{
+							std::printf("      axis ( %.3f %.3f %.3f ) mid %.1f half %.1f\n", ax.dir[0], ax.dir[1], ax.dir[2], ax.mid, ax.half);
+						}
+					}
+				}
+				if (static_cast<int>(l) >= detail)
+				{
+					std::printf("   region: %u hulls\n", regions[l].hullCount);
+				}
+			}
+		}
+		// the light definitions: the falloff picture, and where its copy lies in row 0 of the secondary lightmaps
+		for (const zone::AssetRecord& record : z.all_assets())
+		{
+			if (record.type != c1::ASSET_TYPE_LIGHT_DEF)
+			{
+				continue;
+			}
+			const std::string_view def_name = z.c_string(z.get<zone::zaddr>(record.header));
+			zone::ImageView image;
+			zone::read_image(z, z.get<zone::zaddr>(record.header + 4), image);
+			const std::int32_t start = z.get<std::int32_t>(record.header + 12);
+			std::printf("light def %s: attenuation image %s %d x %d format %u ( %zu bytes inline ), sampler state 0x%02X, lmapLookupStart %d\n", std::string(def_name).c_str(),
+				std::string(image.name).c_str(), image.raw.width, image.raw.height, image.loadDef.format, image.pixels.size(), z.get<std::uint8_t>(record.header + 8), start);
+			if (!image.pixels.empty())
+			{
+				const std::size_t bpp = image.pixels.size() / std::max<std::size_t>(1, static_cast<std::size_t>(image.raw.width) * image.raw.height);
+				std::printf("   image row 0 ( first byte of each texel, %zu bytes per texel ):", bpp);
+				for (int x = 0; x < image.raw.width; x++)
+				{
+					std::printf(" %u", image.pixels[static_cast<std::size_t>(x) * std::max<std::size_t>(bpp, 1)]);
+				}
+				std::printf("\n");
+			}
+			for (std::size_t p = 0; p < pages.size() && p < 2; p++)
+			{
+				const int sw = pages[p].secondary.raw.width;
+				if (pages[p].secondary.pixels.size() < static_cast<std::size_t>(sw) * 8)
+				{
+					continue;
+				}
+				for (int row = 0; row < 2; row++)
+				{
+					std::printf("   lightmap %zu row %d from texel %d * width / 512 ( b g r a ):", p, row, start);
+					for (int x = start * sw / 512; x < (start + std::max<int>(image.raw.width, 32) + 2) * sw / 512 && x < sw; x++)
+					{
+						const std::uint8_t* t = pages[p].secondary.pixels.data() + (static_cast<std::size_t>(row) * sw + static_cast<std::size_t>(x)) * 4;
+						std::printf(" %u.%u.%u.%u", t[0], t[1], t[2], t[3]);
+					}
+					std::printf("\n");
+				}
+			}
+		}
+		// the light grid's entries by primary light
+		{
+			std::uint32_t entry_count = 0, entries_at = 0;
+			std::memcpy(&entry_count, h.lightGrid + 40, 4);
+			std::memcpy(&entries_at, h.lightGrid + 44, 4);
+			std::map<int, int> grid_lights;
+			if (entries_at)
+			{
+				for (const std::uint32_t e : z.get_array<std::uint32_t>(entries_at, entry_count))
+				{
+					grid_lights[static_cast<int>((e >> 16) & 0xFF)]++;
+				}
+			}
+			std::printf("light grid entries by primary light ( byte 2 ):");
+			for (const auto& [k, n] : grid_lights)
+			{
+				std::printf(" %d: %d,", k, n);
+			}
+			std::printf("\n");
 		}
 		return 0;
 	}

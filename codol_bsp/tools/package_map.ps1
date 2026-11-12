@@ -19,6 +19,8 @@ param([Parameter(Mandatory)][string]$Map, [Parameter(Mandatory)][string]$Name, [
 #     generated\animtrees\<tree>.atr     -> rawfile animtrees/<tree>.atr of the map zone   ( written by the asset build:
 #     generated\animlists\map.animlist   -> rawfile animlists/<Name>.animlist                the animtrees of its animations )
 #     scripts\<path>                     -> rawfile <path> of the map zone and <Out>\scripts\<path>
+#     vision\<Name>.vision               -> the map's vision file ( glow, film tweaks ); settings by name or number
+#     sun\<Name>.sun                     -> the map's sun flare ( codol_bsp --vision / --sun; README "Vision file, sun flare" )
 #     zz_*_sounds.iwd                    -> <Out>\main\
 #   The rule for scripts: a file of the project's scripts\ is taken as it is and goes in front of a generated file of
 #   the same path - the level script maps\mp\<Name>.gsc, the effect scripts, an animtree, the animlist. What the
@@ -42,6 +44,8 @@ $a = @('--map', $Map, '--exe', "$Game\C1.exe", '--install', $Game, '--out', "$zo
        '--report', "$work\$Name.report.txt", '--minimap', "$work\compass_map_$Name.tga", '--scripts', "$work\scripts")
 foreach ($z in $Assets) { $a += @('--assets', $z) }
 if ($Fast) { $a += '--fast' }
+if ($Project -and (Test-Path "$Project\vision\$Name.vision")) { $a += @('--vision', "$Project\vision\$Name.vision") }
+if ($Project -and (Test-Path "$Project\sun\$Name.sun")) { $a += @('--sun', "$Project\sun\$Name.sun") }
 & $Bsp @a @Extra | Select-Object -Last 2
 if ($LASTEXITCODE) { throw 'codol_bsp failed' }
 

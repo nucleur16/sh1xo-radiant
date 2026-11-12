@@ -2188,6 +2188,17 @@ namespace editor
 			return doc.create_brush_entity(classname);
 		}
 
+		if (classname == "light")
+		{
+			// a light comes with its keys, so that the mapper sees what there is to set: the values the compiler uses
+			// for a light without them ( codol_bsp README, "Light keys" ). spawnflags 1 / 2 make it a primary light.
+			std::vector<std::pair<std::string, std::string>> pairs;
+			pairs.emplace_back("radius", "600");
+			pairs.emplace_back("intensity", "1");
+			pairs.emplace_back("_color", "1 1 1");
+			return doc.create_point_entity(classname, origin, pairs);
+		}
+
 		return doc.create_point_entity(classname, origin);
 	}
 

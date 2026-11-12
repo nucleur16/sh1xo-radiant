@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <algorithm>
 #include <random>
 #include <set>
@@ -127,6 +128,184 @@ namespace
 			std::printf("%s: %s\n", map, error.c_str());
 		}
 		return c;
+	}
+
+	// ---- the light of a compiled zone, as the game reads it ( codol_bsp/src/light.cpp, head )
+	struct zone_light
+	{
+		zone::Zone z;
+		zone::GfxWorldView world;
+		zone::ImageView primary, secondary;		// lightmap 0
+		bool ok = false;
+
+		struct com_light
+		{
+			std::uint8_t type, canUseShadowMap, exponent, unused;
+			float color[3], dir[3], origin[3], radius, cosHalfFovOuter, cosHalfFovInner, cosHalfFovExpanded, rotationLimit, translationLimit;
+			std::uint32_t defName;
+		};
+		std::vector<com_light> lights;
+
+		zone_light(const fs::path& file, const fs::path& game)
+		{
+			zone::ClientKey key;
+			if (!key.load_from_exe(game / "C1.exe") || !z.open(file, key) || !zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), world)
+				|| world.raw.draw.lightmapCount < 1)
+			{
+				return;
+			}
+			const auto pointers = z.get_array<zone::zaddr>(world.raw.draw.lightmaps, 2);
+			ok = zone::read_image(z, pointers[0], primary) && zone::read_image(z, pointers[1], secondary) && !secondary.pixels.empty() && !primary.pixels.empty();
+			if (const zone::zaddr at = zone::first_asset(z, c1::ASSET_TYPE_COMWORLD))
+			{
+				lights = z.get_array<com_light>(z.get<std::uint32_t>(at + 12), z.get<std::uint32_t>(at + 8));
+			}
+		}
+		// a texel of a layer of the secondary lightmap ( b g r a )
+		const std::uint8_t* texel(const int layer, const int x, const int y) const
+		{
+			const int w = secondary.raw.width, h = secondary.raw.height / 2;
+			return secondary.pixels.data() + ((static_cast<std::size_t>(layer) * h + static_cast<std::size_t>(y)) * w + static_cast<std::size_t>(x)) * 4;
+		}
+		// the brightest texel of a layer below row 0
+		int brightest(const int layer) const
+		{
+			int most = 0;
+			for (int y = 1; y < secondary.raw.height / 2; y++)
+			{
+				for (int x = 0; x < secondary.raw.width; x++)
+				{
+					most = std::max<int>(most, texel(layer, x, y)[1]);
+				}
+			}
+			return most;
+		}
+		// the light the shader makes of a lightmap coordinate on a flat normal: ( upper + lower * cos )^2, green
+		float light_at(const float u, const float v) const
+		{
+			const int w = secondary.raw.width, h = secondary.raw.height / 2;
+			const int x = std::clamp(static_cast<int>(u * static_cast<float>(w)), 0, w - 1), y = std::clamp(static_cast<int>(v * static_cast<float>(h)), 0, h - 1);
+			const std::uint8_t* up = texel(0, x, y);
+			const std::uint8_t* low = texel(1, x, y);
+			const float dx = static_cast<float>(up[3]) / 255.0f * 4.08f - 2.08f, dy = static_cast<float>(low[3]) / 255.0f * 4.06451607f - 2.06451607f;
+			const float root = static_cast<float>(up[1]) / 255.0f + static_cast<float>(low[1]) / 255.0f / std::sqrt(dx * dx + dy * dy + 1.0f);
+			return root * root;
+		}
+		// the baked light at a point of the floor ( z = `height` ): the triangle of the world that lies there, its lightmap
+		// coordinates between its corners; -1: no triangle
+		float light_on_floor(const float x, const float y, const float height = 0.0f) const
+		{
+			const std::vector<c1::GfxWorldVertex> vertices = world.vertices();
+			const std::vector<std::uint16_t> indices = world.indices();
+			for (const zone::WorldSurface& surface : world.surfaces)
+			{
+				for (std::uint32_t t = 0; t < surface.raw.triCount; t++)
+				{
+					const c1::GfxWorldVertex* v[3];
+					bool flat = true;
+					for (int k = 0; k < 3; k++)
+					{
+						v[k] = &vertices[surface.raw.firstVertex + indices[surface.raw.baseIndex + 3 * t + static_cast<std::uint32_t>(k)]];
+						flat = flat && std::fabs(v[k]->xyz[2] - height) < 0.01f;
+					}
+					const float d = (v[1]->xyz[1] - v[2]->xyz[1]) * (v[0]->xyz[0] - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (v[0]->xyz[1] - v[2]->xyz[1]);
+					if (!flat || std::fabs(d) < 1e-6f)
+					{
+						continue;
+					}
+					const float a = ((v[1]->xyz[1] - v[2]->xyz[1]) * (x - v[2]->xyz[0]) + (v[2]->xyz[0] - v[1]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					const float b = ((v[2]->xyz[1] - v[0]->xyz[1]) * (x - v[2]->xyz[0]) + (v[0]->xyz[0] - v[2]->xyz[0]) * (y - v[2]->xyz[1])) / d;
+					if (a < 0 || b < 0 || a + b > 1)
+					{
+						continue;
+					}
+					return light_at(a * v[0]->lmapCoord[0] + b * v[1]->lmapCoord[0] + (1 - a - b) * v[2]->lmapCoord[0],
+						a * v[0]->lmapCoord[1] + b * v[1]->lmapCoord[1] + (1 - a - b) * v[2]->lmapCoord[1]);
+				}
+			}
+			return -1.0f;
+		}
+		std::string rawfile(const std::string& name) const
+		{
+			zone::RawFileView view;
+			std::vector<std::uint8_t> contents;
+			if (const zone::zaddr at = z.find_asset(c1::ASSET_TYPE_RAWFILE, name); at && zone::read_rawfile(z, at, view) && zone::rawfile_contents(view, contents))
+			{
+				return std::string(contents.begin(), contents.end());
+			}
+			return {};
+		}
+	};
+
+	// the box room's .map with other lights: the worldspawn's light keys and the light entities taken out, `entities` added
+	bool write_light_map(const fs::path& maps, const char* name, const std::string& worldspawn_keys, const std::string& entities)
+	{
+		std::ifstream in(maps / "box_room.map");
+		std::string line, text;
+		bool in_light = false;
+		std::vector<std::string> block;
+		int depth = 0;
+		bool keys_done = false;
+		while (std::getline(in, line))
+		{
+			if (!line.empty() && line.back() == '\r')
+			{
+				line.pop_back();
+			}
+			bool drop = false;
+			for (const char* key : { "\"sunlight\"", "\"suncolor\"", "\"sundirection\"", "\"ambient\"", "\"_color\"", "\"skylight\"", "\"skycolor\"" })
+			{
+				drop = drop || (depth == 1 && !keys_done && line.rfind(key, 0) == 0);
+			}
+			if (line == "{")
+			{
+				depth++;
+			}
+			else if (line == "}")
+			{
+				depth--;
+			}
+			if (depth == 1 && line == "{")
+			{
+				block.clear();
+				in_light = false;
+			}
+			if (line.find("\"classname\" \"light\"") == 0)
+			{
+				in_light = true;
+			}
+			if (drop)
+			{
+				continue;
+			}
+			block.push_back(line);
+			if (line.find("\"classname\" \"worldspawn\"") == 0)
+			{
+				block.push_back(worldspawn_keys);
+			}
+			if (depth == 0 && line == "}")
+			{
+				keys_done = true;
+				if (!in_light)
+				{
+					for (const std::string& b : block)
+					{
+						text += b + "\n";
+					}
+				}
+				block.clear();
+				in_light = false;
+			}
+			else if (depth == 0)
+			{
+				// between entities ( comments )
+				text += line + "\n";
+				block.clear();
+			}
+		}
+		std::ofstream out(maps / (std::string(name) + ".map"), std::ios::trunc);
+		out << text << entities;
+		return static_cast<bool>(out) && !text.empty();
 	}
 
 	// what every compiled zone has to satisfy
@@ -524,6 +703,201 @@ int main(const int argc, char** argv)
 	else
 	{
 		std::printf("no --assets: the modder material map and the yard are not compiled\n");
+	}
+
+	// ---- light: a room with one light entity without keys and a worldspawn without light keys is lit - the defaults
+	// apply ( they used to be overwritten with 0 ), and the lightmap holds what the game's shaders make that light of
+	{
+		CHECK(write_light_map(out / "maps", "plain_light", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n}\n"));
+		const compiled c = compile(out, game, "plain_light");
+		check_zone(c, game, out / "maps" / "plain_light.map");
+		CHECK(has_note(c.rep, "sun ( 1.30 1.23 1.11 )") && has_note(c.rep, "ambient ( 0.100 0.100 0.100 )"));
+		CHECK(has_note(c.rep, "1 light entities, 0 of them primary"));
+		const zone_light light(c.file, game);
+		CHECK(light.ok);
+		if (light.ok)
+		{
+			CHECK(light.lights.size() == 2 && light.lights[1].type == 1 && std::fabs(light.lights[1].color[0] - 1.3f) < 0.01f);
+			// both layers are used: light without a direction above, the light entity's from its direction below
+			CHECK(light.brightest(0) > 60 && light.brightest(1) > 60);
+			// the floor right under the light ( 200 units, radius 600: falloff about 0.45 ) is far brighter than the ambient
+			// light alone ( 0.1 ), and brighter than the floor in a corner of the room
+			const float under = light.light_on_floor(40, -60), corner = light.light_on_floor(-480, -480);
+			CHECK(under > 0.4f && under < 0.9f);
+			CHECK(corner > 0.1f && corner < under * 0.6f);
+			// the falloff curve of the light definition lies in row 0: full at the light, nothing at its radius, never rising
+			bool falling = light.texel(0, 1, 0)[1] == 255 && light.texel(0, 32, 0)[1] <= 8 && light.texel(0, 0, 0)[1] == 255;
+			for (int x = 2; x <= 32; x++)
+			{
+				falling = falling && light.texel(0, x, 0)[1] <= light.texel(0, x - 1, 0)[1];
+			}
+			CHECK(falling);
+			// the vision file every map gets, with the game's numbers for the settings
+			const std::string vision = light.rawfile("vision/mp_plain_light.vision");
+			CHECK(vision.rfind("511 \"1\"", 0) == 0 && vision.find("\n520 \"1\"") != std::string::npos && vision.find("r_") == std::string::npos);
+			// the two effect files the client reads as text, in the shape of the shipped ones ( also for a map without effects )
+			CHECK(light.rawfile("maps/createfx/mp_plain_light_fx.gsc").rfind("//_createfx generated. Do not touch!!\r\n#include common_scripts\\utility;\r\n", 0) == 0);
+			CHECK(light.rawfile("maps/mp/mp_plain_light_fx.gsc").rfind("main()\r\n{\r\n", 0) == 0);
+			CHECK(light.rawfile("maps/mp/mp_plain_light_fx.gsc").find("/#\r\n\tif ( common_scripts\\utility::shouldRunServerSideEffects() )\r\n\t\tmaps\\createfx\\mp_plain_light_fx::main();\r\n#/")
+				!= std::string::npos);
+		}
+	}
+
+	// ---- light: the worldspawn keys - _color is the colour of the ambient light, colours count by their largest part
+	{
+		CHECK(write_light_map(out / "maps", "ambient_light", "\"ambient\" \"0.4\"\n\"_color\" \"0.5 0.25 0.25\"\n\"sunlight\" \"2\"\n\"suncolor\" \"0.5 0.5 0.25\"\n\"sundirection\" \"-90 0 0\"", ""));
+		const compiled c = compile(out, game, "ambient_light");
+		CHECK(c.ok && has_note(c.rep, "sun ( 2.00 2.00 1.00 ) from ( -0.000 -0.000 1.000 )") && has_note(c.rep, "ambient ( 0.400 0.200 0.200 )"));
+		const zone_light light(c.file, game);
+		CHECK(light.ok);
+		if (light.ok)
+		{
+			// no light entity, a closed room: every lit texel is the ambient light and what bounces of it - red twice the green
+			const float u = 0, v = 0;
+			(void)u;
+			(void)v;
+			int reddest = 0, greenest = 0;
+			for (int y = 1; y < light.secondary.raw.height / 2; y++)
+			{
+				for (int x = 0; x < light.secondary.raw.width; x++)
+				{
+					reddest = std::max<int>(reddest, light.texel(0, x, y)[2]);
+					greenest = std::max<int>(greenest, light.texel(0, x, y)[1]);
+				}
+			}
+			// square roots: sqrt( 0.4 .. ) = 161 and up, sqrt( 0.2 .. ) = 114 and up
+			CHECK(reddest >= 161 && reddest < 215 && greenest >= 114 && greenest < 152);
+		}
+	}
+
+	// ---- light: a light entity with PRIMARY_SPOT is a primary light of the map
+	{
+		CHECK(write_light_map(out / "maps", "spot_light", "", "{\n\"classname\" \"light\"\n\"origin\" \"-300 300 230\"\n\"spawnflags\" \"2\"\n\"radius\" \"520\"\n\"intensity\" \"1.6\"\n"
+			"\"_color\" \"1 0.9 0.7\"\n\"fov_outer\" \"100\"\n\"fov_inner\" \"50\"\n\"exponent\" \"1\"\n\"angles\" \"90 0 0\"\n}\n"
+			"{\n\"classname\" \"light\"\n\"origin\" \"300 -300 200\"\n\"radius\" \"400\"\n}\n"));
+		const compiled c = compile(out, game, "spot_light");
+		check_zone(c, game, out / "maps" / "spot_light.map");
+		CHECK(c.rep.primary_lights == 3 && has_note(c.rep, "2 light entities, 1 of them primary") && has_note(c.rep, "primary light 2 ( spot at -300 300 230"));
+		const zone_light light(c.file, game);
+		CHECK(light.ok);
+		if (light.ok)
+		{
+			CHECK(light.lights.size() == 3);
+			if (light.lights.size() == 3)
+			{
+				const zone_light::com_light& spot = light.lights[2];
+				CHECK(spot.type == 2 && spot.canUseShadowMap == 1 && spot.exponent == 1 && std::fabs(spot.radius - 520.0f) < 0.01f);
+				CHECK(std::fabs(spot.color[0] - 1.6f) < 0.01f && std::fabs(spot.color[2] - 1.12f) < 0.01f);
+				CHECK(std::fabs(spot.dir[2] - 1.0f) < 0.01f);			// it shines down; the record holds the way back
+				CHECK(std::fabs(spot.cosHalfFovOuter - 0.6428f) < 0.001f && std::fabs(spot.cosHalfFovInner - 0.9063f) < 0.001f && spot.cosHalfFovExpanded == spot.cosHalfFovOuter);
+				CHECK(spot.rotationLimit == 1.0f && spot.defName && light.z.c_string(spot.defName) == std::string_view("light_point_linear"));
+			}
+			CHECK(light.z.find_asset(c1::ASSET_TYPE_LIGHT_DEF, "light_point_linear") != 0);
+			const c1::GfxWorld& h = light.world.raw;
+			CHECK(h.primaryLightCount == 3 && h.lastSunPrimaryLightIndex == 1);
+			// surfaces name it, and they are its shadow geometry
+			std::set<std::uint16_t> named;
+			for (std::size_t si = 0; si < light.world.surfaces.size(); si++)
+			{
+				if (light.world.surfaces[si].raw.primaryLightIndex == 2)
+				{
+					named.insert(static_cast<std::uint16_t>(si));
+				}
+			}
+			CHECK(!named.empty());
+			std::uint32_t geometry_at = 0, region_at = 0;
+			std::memcpy(&geometry_at, h._unk416 + 32, 4);
+			std::memcpy(&region_at, h._unk416 + 36, 4);
+			CHECK(geometry_at && region_at);
+			if (geometry_at && region_at)
+			{
+				const std::vector<std::uint32_t> geometry = light.z.get_array<std::uint32_t>(geometry_at, 9), regions = light.z.get_array<std::uint32_t>(region_at, 6);
+				const std::uint16_t surface_count = static_cast<std::uint16_t>(geometry[6] & 0xFFFF);
+				CHECK(surface_count == named.size() && geometry[7] != 0);
+				if (surface_count && geometry[7])
+				{
+					const std::vector<std::uint16_t> list = light.z.get_array<std::uint16_t>(geometry[7], surface_count);
+					CHECK(std::set<std::uint16_t>(list.begin(), list.end()) == named && std::is_sorted(list.begin(), list.end()));
+				}
+				CHECK((geometry[0] & 0xFFFF) == 0 && (geometry[3] & 0xFFFF) == 0);		// no surfaces for "none" and the sun, as in the shipped maps
+				CHECK(regions[0] == 0 && regions[2] == 0 && regions[4] == 1 && regions[5] != 0);
+				if (regions[4] == 1 && regions[5])
+				{
+					// one hull: nine ranges around the light. The floor under the light is inside, the far corner of the room is not
+					const std::vector<float> hull = light.z.get_array<float>(regions[5], 18);
+					const auto inside = [&](const float x, const float y, const float zz)
+					{
+						const float v[9] = { x, y, zz, x + y, x - y, x + zz, x - zz, y + zz, y - zz };
+						for (int a = 0; a < 9; a++)
+						{
+							if (std::fabs(v[a] - hull[static_cast<std::size_t>(a)]) > hull[9 + static_cast<std::size_t>(a)])
+							{
+								return false;
+							}
+						}
+						return true;
+					};
+					CHECK(inside(0, 0, -200) && inside(100, -80, -220) && inside(0, 0, 0));
+					CHECK(!inside(700, -700, -200) && !inside(0, 0, 200));
+				}
+			}
+			// its light is not in the secondary lightmap ( the shader adds it ) but its visibility is in the primary one
+			CHECK(std::count(light.primary.pixels.begin(), light.primary.pixels.end(), std::uint8_t{ 255 }) > 100);
+			const float under_spot = light.light_on_floor(-300, 300), under_baked = light.light_on_floor(300, -300);
+			CHECK(under_baked > 0.4f && under_spot > 0.1f && under_spot < under_baked * 0.6f);
+			// light grid points name it
+			std::uint32_t entry_count = 0, entries_at = 0;
+			std::memcpy(&entry_count, h.lightGrid + 40, 4);
+			std::memcpy(&entries_at, h.lightGrid + 44, 4);
+			int grid_points = 0;
+			for (const std::uint32_t e : light.z.get_array<std::uint32_t>(entries_at, entry_count))
+			{
+				grid_points += ((e >> 16) & 0xFF) == 2;
+			}
+			CHECK(grid_points > 20);
+		}
+		// the same light with PRIMARY_OMNI
+		CHECK(write_light_map(out / "maps", "omni_light", "", "{\n\"classname\" \"light\"\n\"origin\" \"0 0 200\"\n\"spawnflags\" \"1\"\n}\n"));
+		const compiled omni = compile(out, game, "omni_light");
+		check_zone(omni, game, out / "maps" / "omni_light.map");
+		const zone_light omni_light(omni.file, game);
+		CHECK(omni_light.ok && omni_light.lights.size() == 3);
+		if (omni_light.ok && omni_light.lights.size() == 3)
+		{
+			CHECK(omni_light.lights[2].type == 3 && omni_light.lights[2].exponent == 0 && std::fabs(omni_light.lights[2].radius - 600.0f) < 0.01f);
+			CHECK(std::fabs(omni_light.lights[2].cosHalfFovOuter - 0.5f) < 0.001f && omni_light.lights[2].canUseShadowMap == 1);
+		}
+	}
+
+	// ---- vision file and sun flare: a mapper's files next to the .map, settings by name; the default flare of a map with sun and sky
+	{
+		{
+			std::ofstream vision(out / "maps" / "sky_room.vision", std::ios::trunc);
+			vision << "// a comment\nr_glow \"0\"\nr_filmContrast 1.5\n522 \"1.25\"\nr_notASetting \"1\"\n";
+		}
+		const compiled c = compile(out, game, "sky_room");
+		std::error_code remove_error;
+		fs::remove(out / "maps" / "sky_room.vision", remove_error);
+		CHECK(c.ok && has_note(c.rep, "vision/mp_sky_room.vision with 3 settings") && has_note(c.rep, "sun: flare from the compiler's default"));
+		CHECK(std::any_of(c.rep.warnings.begin(), c.rep.warnings.end(), [](const std::string& w) { return w.find("r_notASetting") != std::string::npos; }));
+		const zone_light light(c.file, game);
+		CHECK(light.ok);
+		if (light.ok)
+		{
+			CHECK(light.rawfile("vision/mp_sky_room.vision") == "511 \"0\"\n522 \"1.5\"\n522 \"1.25\"\n");
+			CHECK(light.rawfile("sun/mp_sky_room.sun").rfind("1704 \"sun\"\n1705 \"16\"\n1706 \"sun_flare\"\n", 0) == 0);
+			// the sun block: valid, both materials, the sprite's size, the direction towards the sun of the ComWorld
+			const std::uint8_t* sun = light.world.raw.sun;
+			std::uint32_t sprite = 0, flare = 0;
+			float size = 0, direction[3] = {}, max_dot = 0;
+			std::memcpy(&sprite, sun + 4, 4);
+			std::memcpy(&flare, sun + 8, 4);
+			std::memcpy(&size, sun + 12, 4);
+			std::memcpy(&max_dot, sun + 28, 4);
+			std::memcpy(direction, sun + 84, 12);
+			CHECK(sun[0] == 1 && sprite != 0 && flare != 0 && sprite != flare && size == 16.0f && std::fabs(max_dot - 0.99939f) < 0.0001f);
+			CHECK(light.lights.size() >= 2 && std::fabs(direction[0] - light.lights[1].dir[0]) < 0.001f && std::fabs(direction[2] - light.lights[1].dir[2]) < 0.001f);
+		}
 	}
 
 	// ---- a larger map

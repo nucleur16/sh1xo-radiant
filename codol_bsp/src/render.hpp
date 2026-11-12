@@ -86,6 +86,13 @@ namespace codol::bsp
 		int reflection_probe = 1;
 	};
 
+	// a convex piece of a primary light's region: the ranges of what it lights along nine axes ( x, y, z, x + y, x - y,
+	// x + z, x - z, y + z, y - z ), relative to the light's origin
+	struct render_light_hull
+	{
+		float mid[9] = {}, half[9] = {};
+	};
+
 	struct render_model
 	{
 		box3 box;
@@ -107,6 +114,7 @@ namespace codol::bsp
 		zone_ref sky_image;
 		std::vector<render_smodel> smodels;
 		std::vector<std::vector<std::uint16_t>> light_surfaces;	// per primary light: the surfaces in its shadow geometry
+		std::vector<std::vector<render_light_hull>> light_regions;	// per primary light: the hulls of its region
 		std::uint32_t lit_opaque_end = 0, lit_trans_end = 0;
 	};
 

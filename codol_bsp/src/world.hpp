@@ -161,12 +161,15 @@ namespace codol::bsp
 	{
 		int type = 2;					// ComPrimaryLight type: 1 sun, 2 spot, 3 omni
 		float color[3] = { 1, 1, 1 };	// linear, with intensity
-		float dir[3] = { 0, 0, -1 };	// sun: towards the sun; spot: the way it shines, negated ( engine convention )
+		float dir[3] = { 0, 0, 1 };		// sun: towards the sun; spot: the way it shines, negated ( engine convention )
 		float origin[3] = {};
-		float radius = 300;
-		float cos_half_fov_outer = 0, cos_half_fov_inner = 0;
+		float radius = 600;
+		float cos_half_fov_outer = 0, cos_half_fov_inner = 1;
+		int exponent = 0;				// of the fade between the inner and the outer cone; 0: none, a hard edge
+		bool cone = false;				// lights only inside its outer cone ( a spot; a primary omni light has a cone for its shadow map only )
+		bool can_shadow = true;			// may have a shadow map
 		std::string def = "light_point_linear";
-		bool primary = true;
+		bool primary = true;			// a primary light of the ComWorld; false: baked into lightmaps and light grid only
 	};
 
 	// an effect or a looping sound placed in the map ( script_fx / script_sound ): a line of the createfx script
@@ -178,6 +181,20 @@ namespace codol::bsp
 		float delay = -15;				// < 0: a one shot effect that starts with the map ( the createfx convention ), else looped every `delay` seconds
 	};
 
+	// the sun's sprite and flare ( the sun block of the GfxWorld ), as a .sun file gives them: sizes, angles in
+	// degrees, times in seconds
+	struct sun_flare
+	{
+		bool valid = false;
+		std::string sprite, flare;			// materials
+		zone_ref sprite_ref, flare_ref;
+		float sprite_size = 16, flare_min_size = 0, flare_min_angle = 45, flare_max_size = 600, flare_max_angle = 2, flare_max_alpha = 0.5f;
+		float flare_fadein = 1, flare_fadeout = 1;
+		float blind_min_angle = 30, blind_max_angle = 5, blind_max_darken = 0, blind_fadein = 0.5f, blind_fadeout = 3;
+		float glare_min_angle = 30, glare_max_angle = 5, glare_max_lighten = 0, glare_fadein = 0.5f, glare_fadeout = 3;
+		float direction[3] = { 0, 0, 1 };	// towards the sun
+	};
+
 	// clipMap / GfxWorld plane array ( one array, stored by the GfxWorld )
 	struct plane_pool
 	{
@@ -186,6 +203,16 @@ namespace codol::bsp
 
 		std::uint32_t add(const double normal[3], double dist);
 	};
+
+	inline std::array<float, 32> straight_falloff()
+	{
+		std::array<float, 32> out{};
+		for (std::size_t k = 0; k < out.size(); k++)
+		{
+			out[k] = 1.0f - static_cast<float>(k) / 31.0f;
+		}
+		return out;
+	}
 
 	struct world
 	{
@@ -206,6 +233,11 @@ namespace codol::bsp
 		std::vector<map_fx> fx;
 		float minimap_mins[2] = {}, minimap_maxs[2] = {};	// the square the minimap picture shows ( north = + y up )
 		int model_count = 1;
+		// The falloff of the light definition ( light_point_linear ): 32 values from the light's origin to its radius, as
+		// the square roots the lightmap holds. Read from the game's falloff picture; without it a straight line.
+		std::array<float, 32> light_falloff = straight_falloff();
+		std::string light_falloff_source = "a straight line ( the game's picture was not read )";
+		sun_flare flare;
 		float sun_dir[3] = { 0.35f, 0.25f, 0.9f };		// towards the sun
 		float sun_color[3] = { 1.4f, 1.3f, 1.1f };
 		float ambient[3] = { 0.25f, 0.27f, 0.32f };		// ambient + sky light: what a flat ( --no-light ) map is lit with
@@ -243,6 +275,8 @@ namespace codol::bsp
 	void build_com_world(compile_context& ctx);
 	void build_fx_world(compile_context& ctx);
 	void build_light_defs(compile_context& ctx);
+	// the rawfiles vision/<map>.vision and sun/<map>.sun, and world::flare
+	void build_vision_and_sun(compile_context& ctx);
 	void build_gfx_world(compile_context& ctx);
 	void build_game_world(compile_context& ctx);
 	// the clip map as chunks; its pointers into other assets are symbolic ( REF_COM, REF_GFX ) until resolve_refs

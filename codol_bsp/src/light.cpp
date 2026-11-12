@@ -1,17 +1,34 @@
-// The light bake: lightmaps and the surfaces' lightmap coordinates, the light grid, reflection probes.
+// The light bake: lightmaps and the surfaces' lightmap coordinates, the light grid, reflection probes, and what the
+// primary lights of the map hang on ( which surface, grid point and static model has which, shadow geometry, regions ).
 //
-// How the game's lit shaders use the data was measured by rendering constant lightmaps with codol_viewtool, which
-// runs those shaders ( tests/harness/lm_experiment.ps1 ):
+// How the game's lit shaders use the data was read from the shaders themselves ( codol_viewtool with
+// CODOL_VIEW_DUMP_SHADERS, D3DDisassemble; lm_dfog_r0c0n0s0_sm3, lm_spot_dfog_.., lm_sm_sun_dfog_.., lp_dfog_.. ):
 //
-//   primary lightmap    L8, 2 x the resolution of a secondary layer: how much of the sun reaches the texel. The sun
-//                       itself is added by the shader ( ComWorld light 1 ), with the dynamic sun shadow on top.
-//   secondary lightmap  A8R8G8B8, two layers on top of each other. The upper layer ( rows 0 .. LM_H ) is the baked
-//                       light without the sun, linear: 255 comes out as about 0.86 of what full sun gives. The lower
-//                       layer adds much less and not linearly ( 64 -> 7, 255 -> 45 of 255 ); what it stands for was
-//                       not established and it is written black. Alpha has no effect.
+//   secondary lightmap  A8R8G8B8, two layers on top of each other, read at ( u, v / 2 ) and ( u, v / 2 + 1 / 2 ).
+//                         light = ( upper.rgb * Nz + lower.rgb * cos( D, N ) ) ^ 2
+//                       N is the normal of the normal map in tangent space, D the direction ( dx, dy, 1 ) with
+//                       dx = upper.a * 4.08 - 2.08 along the tangent and dy = lower.a * 4.0645 - 2.0645 along
+//                       cross( normal, tangent ) * binormal sign. So the upper layer is light without a direction, the
+//                       lower layer light from the direction the two alpha channels give, and both hold SQUARE ROOTS:
+//                       the shader squares the sum. ( Bytes written as linear light come out squared - a room lit by a
+//                       light entity was nearly black. )
+//   primary lightmap    L8, twice the resolution of a layer: how much of the surface's primary light reaches the
+//                       texel. The shader adds the light itself: colour * max( 0, N . L ) for the sun, colour *
+//                       falloff ^ 2 * cone * max( 0, N . L ) for a spot or omni light.
+//   falloff             a primary spot / omni light's falloff is read from ROW 0 of the secondary lightmap, at
+//                       u = ( lmapLookupStart + 32 * distance / radius ) / 512 ( lightFalloffPlacement ): the compiler
+//                       lays a copy of the light definition's falloff picture there, in every page.
+//   light grid          a colour byte is sqrt( light ) / 2: the model shaders double and square what they read.
+//   reflection probes   square roots as well.
 //
-// So: sun visibility goes to the primary image, everything else - ambient, sky light, the light entities with their
-// shadows - to the upper layer of the secondary image. Light entities are baked, they are not primary lights.
+// So everything here is computed in linear light and written as its square root. Per luxel the bake keeps what
+// arrives ( rgb ) and where it comes from ( the sum of luminance x direction ): light that comes from one side goes
+// to the lower layer with that direction, the rest to the upper layer; on a flat normal the two add up to exactly
+// what arrives.
+//
+// A surface names one primary light: the sun, or a light entity with PRIMARY_SPOT / PRIMARY_OMNI. Its light is not in
+// the secondary lightmap ( the shader adds it, with the dynamic shadows on top ); every other light that reaches the
+// surface is baked.
 
 #include "render.hpp"
 
@@ -29,6 +46,18 @@ namespace codol::bsp
 		std::uint8_t to_byte(const float v)
 		{
 			return static_cast<std::uint8_t>(std::clamp(std::lround(v * 255.0f), 0l, 255l));
+		}
+
+		// linear light as the byte the lightmaps and reflection probes hold: its square root
+		std::uint8_t root_byte(const float v)
+		{
+			return to_byte(std::sqrt(std::clamp(v, 0.0f, 1.0f)));
+		}
+
+		// linear light as a byte of a light grid colour: half its square root
+		std::uint8_t grid_byte(const float v)
+		{
+			return static_cast<std::uint8_t>(std::clamp(std::lround(std::sqrt(std::max(v, 0.0f)) * 127.5f), 0l, 255l));
 		}
 
 		// 64 x 64 cube map, 6 faces, 7 mip levels, one colour
@@ -465,6 +494,28 @@ namespace codol::bsp
 			}
 		};
 
+		double luminance(const float c[3])
+		{
+			return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
+		}
+
+		// The falloff of a light definition as the game's shaders read it: 32 texels in row 0 of the secondary lightmap,
+		// from the light's origin to its radius, read with a bilinear filter and squared.
+		struct falloff_curve
+		{
+			std::array<float, 32> texel{};
+
+			double at(const double t) const
+			{
+				const double x = std::clamp(t, 0.0, 1.0) * 32.0 - 0.5;
+				const int i = static_cast<int>(std::floor(x));
+				const double f = x - i;
+				const double a = texel[static_cast<std::size_t>(std::clamp(i, 0, 31))], b = texel[static_cast<std::size_t>(std::clamp(i + 1, 0, 31))];
+				const double v = a + (b - a) * f;
+				return v * v;
+			}
+		};
+
 		struct light_setup
 		{
 			const world& w;
@@ -472,12 +523,68 @@ namespace codol::bsp
 			vec3 sun;
 			std::vector<vec3> sky_directions;	// over the sphere
 			float sky_color[3] = {}, ambient[3] = {};
+			falloff_curve falloff;
+			// the light entities: the primary ones ( world::lights from index 2 ) first, then those that are only baked
+			std::vector<const map_light*> points;
+			std::vector<int> primary_of;		// per point: its primary light index, -1: baked only
 		};
 
-		// light that is not the sun, arriving at a point; with a normal: on a surface, without: at a point in space
-		void gather(const light_setup& s, const vec3& p, const vec3* normal, float out[3])
+		// How much of a light entity arrives at a point, before the angle of a surface and shadows: its falloff and its
+		// cone, as the game's spot light shader has them. 0: out of reach. `towards`: the unit vector to the light.
+		double light_reach(const light_setup& s, const map_light& light, const vec3& p, vec3& towards, double& distance)
+		{
+			const vec3 to = vec3{ light.origin[0], light.origin[1], light.origin[2] } - p;
+			distance = length(to);
+			if (distance >= light.radius || distance < 1e-3)
+			{
+				return 0;
+			}
+			towards = to * (1.0 / distance);
+			double scale = s.falloff.at(distance / light.radius);
+			if (light.cone)
+			{
+				// `dir` points back along the beam
+				const double c = dot(towards, vec3{ light.dir[0], light.dir[1], light.dir[2] });
+				if (c <= light.cos_half_fov_outer)
+				{
+					return 0;
+				}
+				if (light.exponent > 0 && c < light.cos_half_fov_inner)
+				{
+					scale *= std::pow((c - light.cos_half_fov_outer) / std::max(1e-6, static_cast<double>(light.cos_half_fov_inner - light.cos_half_fov_outer)), light.exponent);
+				}
+			}
+			return scale;
+		}
+
+		// light arriving at a point, and where it comes from
+		struct arriving
+		{
+			float e[3] = {};		// linear
+			double dir[3] = {};		// sum of luminance x direction
+
+			void add(const float color[3], const double scale, const vec3& from)
+			{
+				float c[3];
+				for (int k = 0; k < 3; k++)
+				{
+					c[k] = color[k] * static_cast<float>(scale);
+					e[k] += c[k];
+				}
+				const double lum = luminance(c);
+				dir[0] += lum * from.x;
+				dir[1] += lum * from.y;
+				dir[2] += lum * from.z;
+			}
+		};
+
+		// Light arriving at a point: ambient, sky, the light entities, the sun. With a normal: on a surface; without: at
+		// a point in space, where half of everything counts. `skip`: a primary light that is left out - the one the
+		// surface names, which the shader adds; 0: none.
+		void gather(const light_setup& s, const vec3& p, const vec3* normal, const int skip, arriving& out)
 		{
 			double sky = 0, weight = 0;
+			vec3 sky_from{ 0, 0, 0 };
 			for (const vec3& d : s.sky_directions)
 			{
 				const double c = normal ? dot(d, *normal) : 0.5;
@@ -489,48 +596,39 @@ namespace codol::bsp
 				if (s.rays.reaches_sky(p, d, !normal))
 				{
 					sky += c;
+					sky_from = sky_from + d * c;
 				}
 			}
-			const double sky_part = weight > 0 ? sky / weight : 0;
-			for (int k = 0; k < 3; k++)
+			// light without a direction counts as coming from all over the surface's side: its mean direction is 2 / 3 of the normal
+			const vec3 around = normal ? *normal * (2.0 / 3.0) : vec3{ 0, 0, 0 };
+			out.add(s.ambient, 1.0, around);
+			if (weight > 0 && sky > 0)
 			{
-				out[k] = s.ambient[k] + s.sky_color[k] * static_cast<float>(sky_part);
+				out.add(s.sky_color, sky / weight, sky_from * (1.0 / sky));
 			}
-			for (const map_light& light : s.w.bake_lights)
+			for (std::size_t i = 0; i < s.points.size(); i++)
 			{
-				const vec3 origin{ light.origin[0], light.origin[1], light.origin[2] };
-				const vec3 to = origin - p;
-				const double distance = length(to);
-				if (distance >= light.radius || distance < 1e-3)
+				if (skip > 0 && s.primary_of[i] == skip)
 				{
 					continue;
 				}
-				const vec3 l = to * (1.0 / distance);
-				double scale = (1.0 - distance / light.radius) * (normal ? dot(l, *normal) : 0.5);
-				if (scale <= 0)
+				const map_light& light = *s.points[i];
+				vec3 l;
+				double distance = 0;
+				double scale = light_reach(s, light, p, l, distance);
+				scale = scale > 0 ? scale * (normal ? dot(l, *normal) : 0.5) : 0;
+				if (scale <= 0 ||s.rays.blocked(p, vec3{ light.origin[0], light.origin[1], light.origin[2] }, !normal))
 				{
 					continue;
 				}
-				if (light.type == 2)
+				out.add(light.color, scale, l);
+			}
+			if (skip != 1 && luminance(s.w.sun_color) > 0)
+			{
+				const double scale = normal ? dot(s.sun, *normal) : 0.5;
+				if (scale > 0.01 && s.rays.reaches_sky(p, s.sun, !normal))
 				{
-					// a spot: `dir` points back along the beam
-					const double c = dot(l, vec3{ light.dir[0], light.dir[1], light.dir[2] });
-					if (c <= light.cos_half_fov_outer)
-					{
-						continue;
-					}
-					if (c < light.cos_half_fov_inner)
-					{
-						scale *= (c - light.cos_half_fov_outer) / std::max(1e-6, static_cast<double>(light.cos_half_fov_inner - light.cos_half_fov_outer));
-					}
-				}
-				if (s.rays.blocked(p, origin, !normal))
-				{
-					continue;
-				}
-				for (int k = 0; k < 3; k++)
-				{
-					out[k] += light.color[k] * static_cast<float>(scale);
+					out.add(s.w.sun_color, scale, s.sun);
 				}
 			}
 		}
@@ -567,7 +665,11 @@ namespace codol::bsp
 			int w = 0, h = 0, x = 0, y = 0;		// in luxels of a secondary layer; one luxel of padding all around
 			int page = 0;
 			std::size_t first = 0;				// its first luxel in the arrays of the bake
+			std::uint32_t first_vertex = 0;		// of its face, in the surface
 		};
+
+		// Row 0 of every page belongs to the falloff curves of the light definitions ( see the head of this file ).
+		constexpr int LM_FIRST_ROW = 1;
 
 		// Shelf packing into pages of LM_W x LM_H luxels. All charts of a surface go into one page ( a surface names one
 		// lightmap ); surfaces are placed tallest chart first, each into the first page that takes it. false: a surface
@@ -576,7 +678,7 @@ namespace codol::bsp
 		{
 			struct shelf
 			{
-				int x = 0, y = 0, height = 0;
+				int x = 0, y = LM_FIRST_ROW, height = 0;
 			};
 			std::vector<std::size_t> order;
 			std::vector<int> tallest(of_surface.size(), 0);
@@ -614,7 +716,7 @@ namespace codol::bsp
 					for (const std::size_t k : list)
 					{
 						const chart& c = charts[k];
-						if (c.w > LM_W || c.h > LM_H)
+						if (c.w > LM_W || c.h > LM_H - LM_FIRST_ROW)
 						{
 							return false;
 						}
@@ -635,7 +737,7 @@ namespace codol::bsp
 					}
 					if (!fits)
 					{
-						if (pages[p].x == 0 && pages[p].y == 0 && pages[p].height == 0)
+						if (pages[p].x == 0 && pages[p].y == LM_FIRST_ROW && pages[p].height == 0)
 						{
 							return false;		// not even an empty page takes the surface
 						}
@@ -691,10 +793,10 @@ namespace codol::bsp
 			for (std::size_t k = 0; k < lightmap.secondary.size(); k += 4)
 			{
 				const bool upper = k < lightmap.secondary.size() / 2;
-				lightmap.secondary[k] = upper ? to_byte(std::min(w.ambient[2], 1.0f)) : 0;
-				lightmap.secondary[k + 1] = upper ? to_byte(std::min(w.ambient[1], 1.0f)) : 0;
-				lightmap.secondary[k + 2] = upper ? to_byte(std::min(w.ambient[0], 1.0f)) : 0;
-				lightmap.secondary[k + 3] = 255;
+				lightmap.secondary[k] = upper ? root_byte(w.ambient[2]) : 0;
+				lightmap.secondary[k + 1] = upper ? root_byte(w.ambient[1]) : 0;
+				lightmap.secondary[k + 2] = upper ? root_byte(w.ambient[0]) : 0;
+				lightmap.secondary[k + 3] = 128;
 			}
 			if (const char* test = std::getenv("CODOL_BSP_LM_TEST"))
 			{
@@ -716,6 +818,37 @@ namespace codol::bsp
 		}
 	}
 
+	namespace
+	{
+		// the ranges of a set of points along the nine axes of a light region hull: x, y, z, x + y, x - y, x + z, x - z,
+		// y + z, y - z ( not normalised ), relative to the light's origin - what the hulls of the shipped maps hold
+		// ( codol_bsp_probe lights )
+		struct kdop
+		{
+			double lo[9], hi[9];
+			bool any = false;
+
+			kdop()
+			{
+				for (int a = 0; a < 9; a++)
+				{
+					lo[a] = 1e30;
+					hi[a] = -1e30;
+				}
+			}
+			void add(const vec3& p)
+			{
+				const double v[9] = { p.x, p.y, p.z, p.x + p.y, p.x - p.y, p.x + p.z, p.x - p.z, p.y + p.z, p.y - p.z };
+				for (int a = 0; a < 9; a++)
+				{
+					lo[a] = std::min(lo[a], v[a]);
+					hi[a] = std::max(hi[a], v[a]);
+				}
+				any = true;
+			}
+		};
+	}
+
 	void bake_lighting(compile_context& ctx, render_world& rw)
 	{
 		const world& w = ctx.w;
@@ -727,6 +860,26 @@ namespace codol::bsp
 			setup.sky_color[k] = w.sky_light[k];
 			setup.ambient[k] = w.ambient_light[k];
 		}
+		setup.falloff.texel = w.light_falloff;
+		if (std::getenv("CODOL_BSP_LIGHT_DEBUG"))
+		{
+			for (const map_light& b : w.bake_lights)
+			{
+				std::printf("bake light at %g %g %g radius %g colour %g %g %g cone %d type %d; falloff 0.5 %g\n", b.origin[0], b.origin[1], b.origin[2], b.radius, b.color[0], b.color[1],
+					b.color[2], b.cone, b.type, setup.falloff.at(0.5));
+			}
+		}
+		const std::size_t light_count = w.lights.size();
+		for (std::size_t l = 2; l < light_count; l++)
+		{
+			setup.points.push_back(&w.lights[l]);
+			setup.primary_of.push_back(static_cast<int>(l));
+		}
+		for (const map_light& light : w.bake_lights)
+		{
+			setup.points.push_back(&light);
+			setup.primary_of.push_back(-1);
+		}
 		// directions spread evenly over the sphere ( a Fibonacci spiral )
 		const int direction_count = ctx.opts.quality <= 0 ? 24 : ctx.opts.quality == 1 ? 64 : 64 * ctx.opts.quality;
 		for (int k = 0; k < direction_count; k++)
@@ -736,16 +889,69 @@ namespace codol::bsp
 		}
 
 		// What a surface throws back: half of what arrives ( the images of the materials are not read; a grey world ).
-		// The sun's light in lightmap units: full sun on a surface is about 1.2 times a lightmap value of 1
-		// ( lm_experiment ), so the sun colour counts 1 / 1.2.
-		constexpr float REFLECT = 0.5f, SUN_SCALE = 1.0f / 1.2f;
+		constexpr float REFLECT = 0.5f;
 		const int bounce_rays = ctx.opts.quality <= 0 ? 12 : ctx.opts.quality == 1 ? 24 : 48;
 		const int bounces = !ctx.opts.light ? 0 : ctx.opts.quality <= 1 ? 1 : 2;
+
+		const auto light_origin = [&](const int l) { return vec3{ w.lights[static_cast<std::size_t>(l)].origin[0], w.lights[static_cast<std::size_t>(l)].origin[1], w.lights[static_cast<std::size_t>(l)].origin[2] }; };
+		// what primary light `l` sends to a point of a surface, shadows aside; false: nothing
+		const auto primary_reach = [&](const int l, const vec3& p, const vec3& normal, float out[3])
+		{
+			double scale = 0;
+			const map_light& light = w.lights[static_cast<std::size_t>(l)];
+			if (l == 1)
+			{
+				scale = dot(normal, setup.sun);
+				scale = scale > 0.01 ? scale : 0;
+			}
+			else
+			{
+				vec3 towards;
+				double distance = 0;
+				scale = light_reach(setup, light, p, towards, distance);
+				scale = scale > 0 ? scale * dot(towards, normal) : 0;
+			}
+			for (int k = 0; k < 3; k++)
+			{
+				out[k] = light.color[k] * static_cast<float>(std::max(scale, 0.0));
+			}
+			return scale > 0;
+		};
+		const auto primary_visible = [&](const int l, const vec3& p, const bool one_sided)
+		{
+			return l == 1 ? rays.reaches_sky(p, setup.sun, one_sided) : !rays.blocked(p, light_origin(l), one_sided);
+		};
+		// the primary light of a point in space ( a light grid sample, a static model ): the one that gives it the most
+		// light; 0: none reaches it
+		const auto primary_at = [&](const vec3& p)
+		{
+			int best = 0;
+			double most = 0;
+			if (luminance(w.sun_color) > 0 && rays.reaches_sky(p, setup.sun, true))
+			{
+				best = 1;
+				most = luminance(w.sun_color);
+			}
+			for (std::size_t l = 2; l < light_count; l++)
+			{
+				vec3 towards;
+				double distance = 0;
+				const double lum = light_reach(setup, w.lights[l], p, towards, distance) * luminance(w.lights[l].color);
+				if (lum > most && !rays.blocked(p, light_origin(static_cast<int>(l)), true))
+				{
+					best = static_cast<int>(l);
+					most = lum;
+				}
+			}
+			return best;
+		};
+		std::vector<kdop> lit(light_count);				// per primary light: what it lights, relative to its origin
+		std::vector<std::size_t> named_surfaces(light_count, 0);
 
 		// per luxel of every chart: the light that arrives, and what the luxel throws back ( the source of the next bounce,
 		// of the light grid and of the reflection probes )
 		std::vector<chart> charts;
-		std::vector<float> direct, indirect, sun_part, emit;
+		std::vector<float> direct, indirect, primary_part, came_from, emit;	// 3 per luxel; `came_from`: the sum of luminance x direction
 		std::unordered_map<std::uint64_t, std::size_t> chart_of_face;		// ( brush, face ) -> a chart of it
 		const auto face_key = [](const int brush, const int face) { return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(brush)) << 32) | static_cast<std::uint32_t>(face); };
 		double luxel = ctx.opts.quality <= 0 ? 32.0 : ctx.opts.quality == 1 ? 16.0 : 8.0;
@@ -793,6 +999,7 @@ namespace codol::bsp
 					c.surface = static_cast<int>(si);
 					c.brush = rf.brush;
 					c.face = rf.face;
+					c.first_vertex = rf.first_vertex;
 					c.normal = cross(polygon[1] - polygon[0], polygon[2] - polygon[0]);
 					if (length(c.normal) < 1e-6)
 					{
@@ -844,14 +1051,15 @@ namespace codol::bsp
 				c.first = luxel_count;
 				luxel_count += static_cast<std::size_t>(c.w) * static_cast<std::size_t>(c.h);
 			}
-			ctx.rep.notes.push_back(format("light: %zu faces in %d lightmap page( s ), %zu luxels of %.1f units; %zu light entities, %d sky directions, %d bounce( s ) of %d rays",
-				charts.size(), page_count, luxel_count, luxel, w.bake_lights.size(), direction_count, bounces, bounce_rays));
-			// self check: no two charts share a luxel
+			ctx.rep.notes.push_back(format("light: %zu faces in %d lightmap page( s ), %zu luxels of %.1f units; %zu light entities ( %zu primary ), %d sky directions, %d bounce( s ) of %d rays",
+				charts.size(), page_count, luxel_count, luxel, setup.points.size(), light_count - 2, direction_count, bounces, bounce_rays));
+			// self check: no two charts share a luxel, none lies in the row of the falloff curves
 			{
 				std::vector<std::uint8_t> used(static_cast<std::size_t>(page_count) * LM_W * LM_H, 0);
 				bool overlap = false;
 				for (const chart& c : charts)
 				{
+					overlap = overlap || c.y < LM_FIRST_ROW;
 					for (int y = c.y; y < c.y + c.h && !overlap; y++)
 					{
 						for (int x = c.x; x < c.x + c.w; x++)
@@ -876,56 +1084,140 @@ namespace codol::bsp
 				lightmap.secondary.assign(static_cast<std::size_t>(LM_W) * LM_H * 2 * 4, 0);
 				for (std::size_t k = 3; k < lightmap.secondary.size(); k += 4)
 				{
-					lightmap.secondary[k] = 255;
+					lightmap.secondary[k] = 128;		// no direction: along the normal
 				}
 			}
 			direct.assign(luxel_count * 3, 0.0f);
 			indirect.assign(luxel_count * 3, 0.0f);
-			sun_part.assign(luxel_count, 0.0f);
+			primary_part.assign(luxel_count * 3, 0.0f);
+			came_from.assign(luxel_count * 3, 0.0f);
 			const auto position = [&](const chart& c, const double lx, const double ly)
 			{
 				// lx, ly: luxels from the chart's corner; the padding repeats the edge of the face
 				const double u = std::clamp(c.u_min + (lx - 1.0) * luxel, c.u_min, c.u_max), v = std::clamp(c.v_min + (ly - 1.0) * luxel, c.v_min, c.v_max);
 				return c.origin + c.u_axis * u + c.v_axis * v + c.normal * 1.0;
 			};
-			// direct light: sky, ambient and the light entities per luxel; the sun's visibility per primary texel
-			std::vector<std::uint8_t> sun_lit(charts.size(), 0);
+
+			// ---- the primary light of every surface: the one that gives it the most light. A surface names one; what
+			// the others send to it is baked into its lightmap like the light of any light entity.
+			std::vector<int> surface_light(rw.surfaces.size(), 0);
+			{
+				std::vector<double> reach(charts.size() * light_count, 0.0);
+				parallel_for(charts.size(), [&](const std::size_t index)
+				{
+					const chart& c = charts[index];
+					for (int y = 0; y < c.h; y++)
+					{
+						for (int x = 0; x < c.w; x++)
+						{
+							const vec3 p = position(c, x + 0.5, y + 0.5);
+							for (std::size_t l = 1; l < light_count; l++)
+							{
+								float e[3];
+								if (primary_reach(static_cast<int>(l), p, c.normal, e) && luminance(e) > 0 && primary_visible(static_cast<int>(l), p, false))
+								{
+									reach[index * light_count + l] += luminance(e);
+								}
+							}
+						}
+					}
+				});
+				for (std::size_t si = 0; si < rw.surfaces.size(); si++)
+				{
+					double most = 0;
+					for (std::size_t l = 1; l < light_count; l++)
+					{
+						double sum = 0;
+						for (const std::size_t ci : of_surface[si])
+						{
+							sum += reach[ci * light_count + l];
+						}
+						if (sum > most)
+						{
+							most = sum;
+							surface_light[si] = static_cast<int>(l);
+						}
+					}
+					named_surfaces[static_cast<std::size_t>(surface_light[si])]++;
+				}
+			}
+
+			// ---- direct light per luxel: ambient, sky and every light but the surface's primary one; the primary light's
+			// visibility per primary texel ( 2 x 2 per luxel )
+			std::vector<std::uint8_t> primary_lit(charts.size(), 0);
+			std::vector<kdop> chart_lit(charts.size());
 			parallel_for(charts.size(), [&](const std::size_t index)
 			{
 				const chart& c = charts[index];
+				const int light = surface_light[static_cast<std::size_t>(c.surface)];
 				std::vector<std::uint8_t>& primary = rw.lightmaps[static_cast<std::size_t>(c.page)].primary;
-				const double facing = dot(c.normal, setup.sun);
+				const vec3 origin = light >= 2 ? light_origin(light) : vec3{ 0, 0, 0 };
 				for (int y = 0; y < c.h; y++)
 				{
 					for (int x = 0; x < c.w; x++)
 					{
 						const std::size_t at = c.first + static_cast<std::size_t>(y) * static_cast<std::size_t>(c.w) + static_cast<std::size_t>(x);
-						gather(setup, position(c, x + 0.5, y + 0.5), &c.normal, &direct[at * 3]);
+						const vec3 p = position(c, x + 0.5, y + 0.5);
+						arriving a;
+						gather(setup, p, &c.normal, light, a);
+						for (int k = 0; k < 3; k++)
+						{
+							direct[at * 3 + static_cast<std::size_t>(k)] = a.e[k];
+							came_from[at * 3 + static_cast<std::size_t>(k)] = static_cast<float>(a.dir[k]);
+						}
+						if (light == 0)
+						{
+							continue;
+						}
 						int lit_texels = 0;
 						for (int sy = 0; sy < 2; sy++)
 						{
 							for (int sx = 0; sx < 2; sx++)
 							{
-								const bool lit = facing > 0.01 && rays.reaches_sky(position(c, x + 0.25 + 0.5 * sx, y + 0.25 + 0.5 * sy), setup.sun);
+								// a texel is lit when it faces the light and sees it ( the light's reach is the shader's business )
+								const vec3 q = position(c, x + 0.25 + 0.5 * sx, y + 0.25 + 0.5 * sy);
+								const double facing = light == 1 ? dot(c.normal, setup.sun) : dot(c.normal, origin - q);
+								const bool seen = facing > 0.01 && primary_visible(light, q, false);
 								primary[(static_cast<std::size_t>(c.y + y) * 2 + static_cast<std::size_t>(sy)) * (LM_W * 2) + static_cast<std::size_t>(c.x + x) * 2
-									+ static_cast<std::size_t>(sx)] = lit ? 255 : 0;
-								lit_texels += lit;
+									+ static_cast<std::size_t>(sx)] = seen ? 255 : 0;
+								lit_texels += seen;
 							}
 						}
-						sun_lit[index] = sun_lit[index] || lit_texels;
-						sun_part[at] = static_cast<float>(lit_texels * 0.25 * std::max(0.0, facing));
+						float e[3];
+						if (lit_texels && primary_reach(light, p, c.normal, e))
+						{
+							primary_lit[index] = 1;
+							for (int k = 0; k < 3; k++)
+							{
+								primary_part[at * 3 + static_cast<std::size_t>(k)] = e[k] * static_cast<float>(lit_texels) * 0.25f;
+							}
+							if (light >= 2)
+							{
+								chart_lit[index].add(p - origin);
+							}
+						}
 					}
 				}
 			});
+			for (std::size_t ci = 0; ci < charts.size(); ci++)
+			{
+				const int light = surface_light[static_cast<std::size_t>(charts[ci].surface)];
+				if (chart_lit[ci].any)
+				{
+					for (int a = 0; a < 9; a++)
+					{
+						lit[static_cast<std::size_t>(light)].lo[a] = std::min(lit[static_cast<std::size_t>(light)].lo[a], chart_lit[ci].lo[a]);
+						lit[static_cast<std::size_t>(light)].hi[a] = std::max(lit[static_cast<std::size_t>(light)].hi[a], chart_lit[ci].hi[a]);
+					}
+					lit[static_cast<std::size_t>(light)].any = true;
+				}
+			}
 			// bounced light: every luxel looks around ( cosine weighted directions over its side ) and takes what the
 			// luxels it sees throw back
 			emit.assign(luxel_count * 3, 0.0f);
-			for (std::size_t k = 0; k < luxel_count; k++)
+			for (std::size_t k = 0; k < luxel_count * 3; k++)
 			{
-				for (int ch = 0; ch < 3; ch++)
-				{
-					emit[k * 3 + static_cast<std::size_t>(ch)] = REFLECT * (direct[k * 3 + static_cast<std::size_t>(ch)] + w.sun_color[ch] * SUN_SCALE * sun_part[k]);
-				}
+				emit[k] = REFLECT * (direct[k] + primary_part[k]);
 			}
 			std::vector<vec3> hemisphere;
 			for (int k = 0; k < bounce_rays; k++)
@@ -935,7 +1227,7 @@ namespace codol::bsp
 			}
 			for (int bounce = 0; bounce < bounces; bounce++)
 			{
-				std::vector<float> gathered(luxel_count * 3, 0.0f);
+				std::vector<float> gathered(luxel_count * 3, 0.0f), gathered_from(luxel_count * 3, 0.0f);
 				parallel_for(charts.size(), [&](const std::size_t index)
 				{
 					const chart& c = charts[index];
@@ -948,6 +1240,7 @@ namespace codol::bsp
 							// the same directions for every luxel, turned by an angle of its own
 							const double turn = static_cast<double>((at * 2654435761u) & 0xFFFF) * (2.0 * PI / 65536.0), ct = std::cos(turn), st = std::sin(turn);
 							double sum[3] = { 0, 0, 0 };
+							vec3 sum_from{ 0, 0, 0 };
 							for (const vec3& h : hemisphere)
 							{
 								const double hx = h.x * ct - h.y * st, hy = h.x * st + h.y * ct;
@@ -957,17 +1250,19 @@ namespace codol::bsp
 								{
 									continue;
 								}
-								const std::size_t from = luxel_at(s.brush, s.face, p + d * s.t);
-								if (from != npos)
+								const std::size_t source = luxel_at(s.brush, s.face, p + d * s.t);
+								if (source != npos)
 								{
-									sum[0] += emit[from * 3];
-									sum[1] += emit[from * 3 + 1];
-									sum[2] += emit[from * 3 + 2];
+									sum[0] += emit[source * 3];
+									sum[1] += emit[source * 3 + 1];
+									sum[2] += emit[source * 3 + 2];
+									sum_from = sum_from + d * luminance(&emit[source * 3]);
 								}
 							}
 							for (int ch = 0; ch < 3; ch++)
 							{
 								gathered[at * 3 + static_cast<std::size_t>(ch)] = static_cast<float>(sum[ch] / bounce_rays);
+								gathered_from[at * 3 + static_cast<std::size_t>(ch)] = static_cast<float>(sum_from[ch] / bounce_rays);
 							}
 						}
 					}
@@ -975,34 +1270,82 @@ namespace codol::bsp
 				for (std::size_t k = 0; k < gathered.size(); k++)
 				{
 					indirect[k] += gathered[k];
+					came_from[k] += gathered_from[k];
 					emit[k] = REFLECT * gathered[k];
 				}
 			}
 			// what every luxel throws back in the end
-			for (std::size_t k = 0; k < luxel_count; k++)
+			for (std::size_t k = 0; k < luxel_count * 3; k++)
 			{
-				for (int ch = 0; ch < 3; ch++)
-				{
-					const std::size_t i = k * 3 + static_cast<std::size_t>(ch);
-					emit[i] = REFLECT * (direct[i] + indirect[i] + w.sun_color[ch] * SUN_SCALE * sun_part[k]);
-				}
+				emit[k] = REFLECT * (direct[k] + indirect[k] + primary_part[k]);
 			}
+			// ---- the two layers of the secondary lightmap: light without a direction above, light from the direction the
+			// two alpha channels give below, as square roots that add up to the square root of what arrives
 			for (const chart& c : charts)
 			{
 				std::vector<std::uint8_t>& secondary = rw.lightmaps[static_cast<std::size_t>(c.page)].secondary;
+				// the frame the shader has the direction in: the tangent of the face's vertices, cross( normal, tangent ) x
+				// the binormal sign, the normal
+				const c1::GfxWorldVertex& vertex = rw.surfaces[static_cast<std::size_t>(c.surface)].vertices[c.first_vertex];
+				float unpacked[3];
+				zone::unpack_unit_vector(vertex.tangent, unpacked);
+				vec3 tangent{ unpacked[0], unpacked[1], unpacked[2] };
+				if (length(tangent - c.normal * dot(tangent, c.normal)) < 1e-3)
+				{
+					tangent = c.u_axis;
+				}
+				const vec3 in_plane = tangent - c.normal * dot(tangent, c.normal);
+				const vec3 binormal = cross(c.normal, tangent) * (vertex.binormalSign < 0 ? -1.0 : 1.0);
+				const double tangent_up = dot(tangent, c.normal);
 				for (int y = 0; y < c.h; y++)
 				{
 					for (int x = 0; x < c.w; x++)
 					{
 						const std::size_t at = (c.first + static_cast<std::size_t>(y) * static_cast<std::size_t>(c.w) + static_cast<std::size_t>(x)) * 3;
-						std::uint8_t* texel = secondary.data() + (static_cast<std::size_t>(c.y + y) * LM_W + static_cast<std::size_t>(c.x + x)) * 4;
-						texel[0] = to_byte(direct[at + 2] + indirect[at + 2]);
-						texel[1] = to_byte(direct[at + 1] + indirect[at + 1]);
-						texel[2] = to_byte(direct[at] + indirect[at]);
+						float e[3];
+						for (int k = 0; k < 3; k++)
+						{
+							e[k] = direct[at + static_cast<std::size_t>(k)] + indirect[at + static_cast<std::size_t>(k)];
+						}
+						const double lum = luminance(e);
+						vec3 towards{ came_from[at], came_from[at + 1], came_from[at + 2] };
+						double share = 0, dx = 0, dy = 0;
+						if (lum > 1e-6 && length(towards) > 1e-9)
+						{
+							// how much of the light comes from one side: 2 / 3 for light from all over, 1 for one direction
+							const double concentration = std::min(1.0, length(towards) / lum);
+							share = std::clamp((concentration - 2.0 / 3.0) * 3.0, 0.0, 1.0) * 0.85;
+							towards = towards * (1.0 / length(towards));
+							double up = dot(towards, c.normal);
+							if (up < 0.35)
+							{
+								// not along the surface or from behind it
+								towards = towards + c.normal * (0.35 - up) * 1.5;
+								towards = towards * (1.0 / length(towards));
+								up = dot(towards, c.normal);
+							}
+							const vec3 flat = towards - c.normal * up;
+							const double a = dot(flat, in_plane) / dot(in_plane, in_plane), b = dot(flat, binormal) / std::max(dot(binormal, binormal), 1e-9);
+							const double along = std::max(up - a * tangent_up, 0.05);
+							dx = std::clamp(a / along, -2.0, 2.0);
+							dy = std::clamp(b / along, -2.0, 2.0);
+						}
+						const double cosine = 1.0 / std::sqrt(dx * dx + dy * dy + 1.0);		// of the direction and a flat normal, as the shader has it
+						std::uint8_t* upper = secondary.data() + (static_cast<std::size_t>(c.y + y) * LM_W + static_cast<std::size_t>(c.x + x)) * 4;
+						std::uint8_t* lower = upper + static_cast<std::size_t>(LM_W) * LM_H * 4;
+						for (int k = 0; k < 3; k++)
+						{
+							const double root = std::sqrt(std::clamp(static_cast<double>(e[k]), 0.0, 1.0));
+							const double directed = std::min(root * share / cosine, 1.0);
+							upper[2 - k] = to_byte(static_cast<float>(root - directed * cosine));
+							lower[2 - k] = to_byte(static_cast<float>(directed));
+						}
+						upper[3] = to_byte(static_cast<float>((dx + 2.08) / 4.08));
+						lower[3] = to_byte(static_cast<float>((dy + 2.06451607) / 4.06451607));
 					}
 				}
 			}
-			// soften the sun's edge: a 3 x 3 box filter inside every chart
+			// soften the primary light's edge: a 3 x 3 box filter inside every chart
 			{
 				std::vector<std::vector<std::uint8_t>> sharp;
 				for (const render_lightmap& lightmap : rw.lightmaps)
@@ -1012,7 +1355,7 @@ namespace codol::bsp
 				const int pw = LM_W * 2;
 				for (const chart& c : charts)
 				{
-					const std::vector<std::uint8_t>& from = sharp[static_cast<std::size_t>(c.page)];
+					const std::vector<std::uint8_t>& source = sharp[static_cast<std::size_t>(c.page)];
 					std::vector<std::uint8_t>& primary = rw.lightmaps[static_cast<std::size_t>(c.page)].primary;
 					for (int y = c.y * 2; y < (c.y + c.h) * 2; y++)
 					{
@@ -1026,7 +1369,7 @@ namespace codol::bsp
 									const int xx = x + dx, yy = y + dy;
 									if (xx >= c.x * 2 && xx < (c.x + c.w) * 2 && yy >= c.y * 2 && yy < (c.y + c.h) * 2)
 									{
-										sum += from[static_cast<std::size_t>(yy) * pw + static_cast<std::size_t>(xx)];
+										sum += source[static_cast<std::size_t>(yy) * pw + static_cast<std::size_t>(xx)];
 										n++;
 									}
 								}
@@ -1036,10 +1379,18 @@ namespace codol::bsp
 					}
 				}
 			}
-			ctx.rep.notes.push_back(format("light: the sun reaches %zu of %zu faces", static_cast<std::size_t>(std::count(sun_lit.begin(), sun_lit.end(), std::uint8_t{ 1 })),
-				charts.size()));
+			{
+				std::size_t sun_faces = 0, light_faces = 0;
+				for (std::size_t ci = 0; ci < charts.size(); ci++)
+				{
+					const int light = surface_light[static_cast<std::size_t>(charts[ci].surface)];
+					sun_faces += primary_lit[ci] && light == 1;
+					light_faces += primary_lit[ci] && light >= 2;
+				}
+				ctx.rep.notes.push_back(format("light: the sun reaches %zu of %zu faces, primary light entities %zu", sun_faces, charts.size(), light_faces));
+			}
 
-			// lightmap page and coordinates of the surfaces
+			// lightmap page, coordinates and primary light of the surfaces
 			for (std::size_t si = 0; si < rw.surfaces.size(); si++)
 			{
 				render_surface& surface = rw.surfaces[si];
@@ -1052,7 +1403,6 @@ namespace codol::bsp
 					surface.lightmap = 31;
 					continue;
 				}
-				bool any_sun = false;
 				std::size_t next = 0;
 				surface.lightmap = charts[of_surface[si][0]].page;
 				for (const render_face& rf : surface.faces)
@@ -1064,7 +1414,6 @@ namespace codol::bsp
 					}
 					const std::size_t ci = of_surface[si][next++];
 					const chart& c = charts[ci];
-					any_sun = any_sun || sun_lit[ci];
 					for (std::uint32_t k = 0; k < rf.vertex_count; k++)
 					{
 						c1::GfxWorldVertex& v = surface.vertices[rf.first_vertex + k];
@@ -1074,7 +1423,19 @@ namespace codol::bsp
 						v.lmapCoord[1] = static_cast<float>((c.y + ly) / LM_H);
 					}
 				}
-				surface.primary_light = any_sun ? 1 : 0;
+				surface.primary_light = surface_light[si];
+			}
+		}
+		// ---- the falloff curve of the light definition: row 0 of the upper layer of every page, 32 texels from texel
+		// 1 ( GfxLightDef::lmapLookupStart ), with a copy of the end texel on either side for the bilinear filter
+		for (render_lightmap& lightmap : rw.lightmaps)
+		{
+			for (int x = 0; x < 34; x++)
+			{
+				const std::uint8_t v = to_byte(w.light_falloff[static_cast<std::size_t>(std::clamp(x - 1, 0, 31))]);
+				std::uint8_t* texel = lightmap.secondary.data() + static_cast<std::size_t>(x) * 4;
+				texel[0] = texel[1] = texel[2] = v;
+				texel[3] = 255;
 			}
 		}
 
@@ -1207,46 +1568,54 @@ namespace codol::bsp
 							}
 						}
 					}
-					for (const map_light& light : w.bake_lights)
+					// the primary light of the point is added at run time; every other light that reaches it goes into its
+					// colours. A light from one direction, as average and lean: c max( 0, n . l ) ~ c ( 1 / 4 + n . l / 2 )
+					s.light = static_cast<std::uint8_t>(primary_at(p));
+					const auto add = [&](const float color[3], const double scale, const vec3& l)
 					{
-						const vec3 origin{ light.origin[0], light.origin[1], light.origin[2] };
-						const vec3 to = origin - p;
-						const double distance = length(to);
-						if (distance >= light.radius || distance < 1e-3)
-						{
-							continue;
-						}
-						const vec3 l = to * (1.0 / distance);
-						double scale = 1.0 - distance / light.radius;
-						if (light.type == 2)
-						{
-							const double c = dot(l, vec3{ light.dir[0], light.dir[1], light.dir[2] });
-							if (c <= light.cos_half_fov_outer)
-							{
-								continue;
-							}
-							if (c < light.cos_half_fov_inner)
-							{
-								scale *= (c - light.cos_half_fov_outer) / std::max(1e-6, static_cast<double>(light.cos_half_fov_inner - light.cos_half_fov_outer));
-							}
-						}
-						if (rays.blocked(p, origin, true))
-						{
-							continue;
-						}
-						// a light from one direction, as average and lean: c max( 0, n . l ) ~ c ( 1 / 4 + n . l / 2 )
 						for (int k = 0; k < 3; k++)
 						{
-							s.m0[k] += static_cast<float>(light.color[k] * scale * 0.25);
+							s.m0[k] += static_cast<float>(color[k] * scale * 0.25);
 							for (int a = 0; a < 3; a++)
 							{
-								s.m1[k][a] += static_cast<float>(light.color[k] * scale * 0.5 * l[a]);
+								s.m1[k][a] += static_cast<float>(color[k] * scale * 0.5 * l[a]);
 							}
 						}
+					};
+					for (std::size_t i = 0; i < setup.points.size(); i++)
+					{
+						if (s.light > 0 && setup.primary_of[i] == s.light)
+						{
+							continue;
+						}
+						const map_light& light = *setup.points[i];
+						vec3 l;
+						double distance = 0;
+						const double scale = light_reach(setup, light, p, l, distance);
+						if (scale > 0 && !rays.blocked(p, vec3{ light.origin[0], light.origin[1], light.origin[2] }, true))
+						{
+							add(light.color, scale, l);
+						}
 					}
-					s.light = rays.reaches_sky(p, setup.sun, true) ? 1 : 0;
+					if (s.light != 1 && luminance(w.sun_color) > 0 && rays.reaches_sky(p, setup.sun, true))
+					{
+						add(w.sun_color, 1.0, setup.sun);
+					}
 				}
 			});
+			// the grid points a primary light entity lights belong to its region
+			for (std::size_t rc = 0; rc < static_cast<std::size_t>(rows) * cols; rc++)
+			{
+				for (int z = 0; z < layers; z++)
+				{
+					const sample& s = samples[rc * static_cast<std::size_t>(layers) + static_cast<std::size_t>(z)];
+					if (!s.solid && s.light >= 2)
+					{
+						lit[s.light].add(vec3{ grid_position(mins[0] + static_cast<int>(rc / static_cast<std::size_t>(cols)), 0),
+							grid_position(mins[1] + static_cast<int>(rc % static_cast<std::size_t>(cols)), 1), grid_position(mins[2] + z, 2) } - light_origin(s.light));
+					}
+				}
+			}
 			for (int k = 0; k < 3; k++)
 			{
 				h.mins[k] = static_cast<std::uint16_t>(mins[k]);
@@ -1275,7 +1644,7 @@ namespace codol::bsp
 						for (int k = 0; k < 3; k++)
 						{
 							const double v = s.m0[k] + s.m1[k][0] * directions[d].x + s.m1[k][1] * directions[d].y + s.m1[k][2] * directions[d].z;
-							colors.rgb[d][k] = static_cast<std::uint8_t>(to_byte(static_cast<float>(v)) & mask);
+							colors.rgb[d][k] = static_cast<std::uint8_t>(grid_byte(static_cast<float>(v)) & mask);
 						}
 					}
 					const std::string key(reinterpret_cast<const char*>(&colors), sizeof(colors));
@@ -1388,8 +1757,8 @@ namespace codol::bsp
 				probe.origin[0] = static_cast<float>(p.x);
 				probe.origin[1] = static_cast<float>(p.y);
 				probe.origin[2] = static_cast<float>(p.z);
-				float around[3];
-				gather(setup, p, nullptr, around);
+				arriving around;
+				gather(setup, p, nullptr, 0, around);
 				for (int face = 0; face < 6; face++)
 				{
 					std::vector<float> level(64 * 64 * 3);
@@ -1410,7 +1779,7 @@ namespace codol::bsp
 							{
 								for (int k = 0; k < 3; k++)
 								{
-									c[k] = REFLECT * around[k];		// a static model: lit like the probe's own place
+									c[k] = REFLECT * around.e[k];		// a static model: lit like the probe's own place
 								}
 							}
 							std::memcpy(&level[(static_cast<std::size_t>(y) * 64 + static_cast<std::size_t>(x)) * 3], c, sizeof(c));
@@ -1420,9 +1789,9 @@ namespace codol::bsp
 					{
 						for (int k = 0; k < size * size; k++)
 						{
-							probe.pixels.push_back(to_byte(std::clamp(level[static_cast<std::size_t>(k) * 3 + 2], 0.0f, 1.0f)));
-							probe.pixels.push_back(to_byte(std::clamp(level[static_cast<std::size_t>(k) * 3 + 1], 0.0f, 1.0f)));
-							probe.pixels.push_back(to_byte(std::clamp(level[static_cast<std::size_t>(k) * 3], 0.0f, 1.0f)));
+							probe.pixels.push_back(root_byte(level[static_cast<std::size_t>(k) * 3 + 2]));
+							probe.pixels.push_back(root_byte(level[static_cast<std::size_t>(k) * 3 + 1]));
+							probe.pixels.push_back(root_byte(level[static_cast<std::size_t>(k) * 3]));
 							probe.pixels.push_back(255);
 						}
 						if (size > 1)
@@ -1506,7 +1875,7 @@ namespace codol::bsp
 		{
 			const box3& box = w.models[static_cast<std::size_t>(s.model)].box;
 			const vec3 centre{ (box.mins[0] + box.maxs[0]) * 0.5, (box.mins[1] + box.maxs[1]) * 0.5, (box.mins[2] + box.maxs[2]) * 0.5 };
-			s.primary_light = !ctx.opts.light || rays.reaches_sky(centre, setup.sun, true) ? 1 : 0;
+			s.primary_light = !ctx.opts.light ? 1 : primary_at(centre);
 			float best = 1e30f;
 			for (const std::uint8_t p : rw.cells[static_cast<std::size_t>(s.cell)].probes)
 			{
@@ -1518,7 +1887,58 @@ namespace codol::bsp
 				}
 			}
 		}
-		rw.light_surfaces.assign(w.lights.size(), {});
+
+		// ---- per primary light: its shadow geometry - the surfaces that name it; the static models that do are added
+		// by the writer - and its region: the convex hull ( as the ranges along nine axes ) of everything it lights.
+		// The suns have neither, as in the shipped maps.
+		rw.light_surfaces.assign(light_count, {});
+		rw.light_regions.assign(light_count, {});
+		for (std::size_t si = 0; si < rw.surfaces.size(); si++)
+		{
+			const render_surface& surface = rw.surfaces[si];
+			if (surface.model == 0 && surface.primary_light >= 2 && surface.casts_sun_shadow && si <= 0xFFFF)
+			{
+				rw.light_surfaces[static_cast<std::size_t>(surface.primary_light)].push_back(static_cast<std::uint16_t>(si));
+			}
+		}
+		for (const render_smodel& s : rw.smodels)
+		{
+			if (s.primary_light >= 2)
+			{
+				const box3& box = w.models[static_cast<std::size_t>(s.model)].box;
+				for (int corner = 0; corner < 8; corner++)
+				{
+					lit[static_cast<std::size_t>(s.primary_light)].add(vec3{ corner & 1 ? box.maxs[0] : box.mins[0], corner & 2 ? box.maxs[1] : box.mins[1],
+						corner & 4 ? box.maxs[2] : box.mins[2] } - light_origin(s.primary_light));
+				}
+			}
+		}
+		for (std::size_t l = 2; l < light_count; l++)
+		{
+			kdop& hull = lit[l];
+			if (!hull.any)
+			{
+				// nothing names the light: a box around what it can reach
+				const double r = w.lights[l].radius;
+				for (int corner = 0; corner < 8; corner++)
+				{
+					hull.add(vec3{ corner & 1 ? r : -r, corner & 2 ? r : -r, corner & 4 ? r : -r });
+				}
+			}
+			hull.add(vec3{ 0, 0, 0 });
+			render_light_hull out;
+			for (int a = 0; a < 9; a++)
+			{
+				const double pad = a < 3 ? 16.0 : 32.0;
+				out.mid[a] = static_cast<float>((hull.lo[a] + hull.hi[a]) * 0.5);
+				out.half[a] = static_cast<float>((hull.hi[a] - hull.lo[a]) * 0.5 + pad);
+			}
+			rw.light_regions[l].push_back(out);
+			ctx.rep.notes.push_back(format("light: primary light %zu ( %s at %.0f %.0f %.0f, radius %.0f ): %zu surfaces and %zu static models name it; region %.0f x %.0f x %.0f", l,
+				w.lights[l].type == 2 ? "spot" : "omni", w.lights[l].origin[0], w.lights[l].origin[1], w.lights[l].origin[2], w.lights[l].radius, named_surfaces[l],
+				static_cast<std::size_t>(std::count_if(rw.smodels.begin(), rw.smodels.end(), [&](const render_smodel& m) { return m.primary_light == static_cast<int>(l); })),
+				out.half[0] * 2, out.half[1] * 2, out.half[2] * 2));
+		}
 
 		// ---- the minimap picture: the map from above as the lightmaps light it, north ( + y ) up; where a ray from
 		// above meets nothing, the picture is see through
@@ -1564,7 +1984,7 @@ namespace codol::bsp
 							{
 								for (int k = 0; k < 3; k++)
 								{
-									c[k] = emit[from * 3 + static_cast<std::size_t>(k)] / REFLECT;
+									c[k] = std::sqrt(emit[from * 3 + static_cast<std::size_t>(k)] / REFLECT);
 								}
 							}
 						}
