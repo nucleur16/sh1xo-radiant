@@ -287,6 +287,36 @@ int main(const int argc, char** argv)
 	{
 		return image_file(argv[2], use, argv[4], argc > 5 ? argv[5] : "");
 	}
+	if (command == "anim-roundtrip" && argc >= 4)
+	{
+		// [every] [zone filter | -] [rotation tolerance, s16 units] [translation tolerance]
+		return anim_roundtrip(argv[2], argv[3], argc > 4 ? std::max(1, std::atoi(argv[4])) : 1, argc > 5 && std::string(argv[5]) != "-" ? argv[5] : "",
+			argc > 6 ? static_cast<float>(std::atof(argv[6])) : 0.0f, argc > 7 ? static_cast<float>(std::atof(argv[7])) : 0.0f);
+	}
+	if (command == "anim-zone" && argc == 6)
+	{
+		return anim_zone(argv[2], argv[3], std::max(1, std::atoi(argv[4])), argv[5]);
+	}
+	if (command == "anim-model-roundtrip" && argc >= 4)
+	{
+		return anim_model_roundtrip(argv[2], argv[3], argc > 4 ? std::max(1, std::atoi(argv[4])) : 1, argc > 5 ? static_cast<float>(std::atof(argv[5])) : 0.0001f);
+	}
+	if (command == "anim-extract" && argc == 6)
+	{
+		return anim_extract(argv[2], argv[3], argv[4], argv[5]);
+	}
+	if (command == "anim-compare" && argc >= 7)
+	{
+		return anim_compare(argv[2], argv[3], argv[4], argv[5], argv[6], argc > 7 ? static_cast<float>(std::atof(argv[7])) : 0.0f, argc > 8 ? static_cast<float>(std::atof(argv[8])) : 0.0f);
+	}
+	if (command == "anim-rules" && argc >= 4)
+	{
+		return anim_survey_rules(argv[2], argv[3], argc > 4 ? argv[4] : "");
+	}
+	if (command == "anim-survey" && argc >= 4)
+	{
+		return anim_survey(argv[2], argv[3], argc > 4 ? argv[4] : "");
+	}
 	std::fprintf(stderr, "usage: see the head of asset_verify.cpp\n");
 	return 2;
 }

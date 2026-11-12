@@ -30,3 +30,12 @@ int model_compare(const std::filesystem::path& zoneA, const std::string& nameA, 
 
 int material_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, const std::filesystem::path& cache, int every,
 	const std::filesystem::path& dump);
+
+int anim_survey(const std::filesystem::path& install, const std::filesystem::path& exe, const std::string& filter);
+int anim_survey_rules(const std::filesystem::path& install, const std::filesystem::path& exe, const std::string& filter);
+int anim_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, int every, const std::string& filter, float rotationTolerance, float translationTolerance);
+int anim_zone(const std::filesystem::path& install, const std::filesystem::path& exe, int every, const std::filesystem::path& outFile);
+int anim_model_roundtrip(const std::filesystem::path& install, const std::filesystem::path& exe, int every, float epsilon);
+int anim_extract(const std::filesystem::path& zoneFile, const std::filesystem::path& exe, const std::string& name, const std::filesystem::path& outDir);
+int anim_compare(const std::filesystem::path& zoneA, const std::string& nameA, const std::filesystem::path& zoneB, const std::string& nameB, const std::filesystem::path& exe,
+	float rotationTolerance, float translationTolerance);

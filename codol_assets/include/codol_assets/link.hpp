@@ -19,6 +19,7 @@
 //   * $identitynormalmap, $white, $black, $gray: map zones carry their own 1 x 1 copies; so does the output.
 //   * Order: an asset comes after everything it points at ( images, technique sets, materials, models ).
 
+#include "codol_assets/anim.hpp"
 #include "codol_assets/image.hpp"
 #include "codol_assets/material.hpp"
 #include "codol_assets/model.hpp"
@@ -51,6 +52,7 @@ namespace codol::assets
 		Status add_material(const CompiledMaterial& material);
 		Status add_model(const CompiledModel& model);
 		Status add_rawfile(std::string_view name, std::span<const std::uint8_t> contents);
+		Status add_anim(const CompiledAnim& anim);			// link_anim.cpp
 
 		// what was assumed and done, one line each
 		const std::vector<std::string>& log() const;

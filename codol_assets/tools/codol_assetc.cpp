@@ -17,6 +17,8 @@
 //     --material gdt:<file.gdt>[:<entry>]   the material entries of a GDT ( one, or all ); their images are compiled too
 //     --xmodel <name>=<lod0.xmodel_export>[@dist][,<lod1>[@dist] ..][,collision=<lod>][,contents=<n>][,mtl:<export name>=<material>]
 //                                 [,hitloc:<bone>=<class>]
+//     --xanim <name>=<file.xanim_export>[,model=<file.xmodel_export>][,type=relative|delta|delta3d][,loop][,deltapart=<part>]
+//                                 [,assettype=<n>][,rottol=<s16 units>][,transtol=<units>]
 //     --rawfile <name>=<file>
 //
 //   codol_assetc --verify <zone.ff> --install <dir> [--exe <C1.exe>]
@@ -236,6 +238,33 @@ namespace
 				}
 				std::printf("\n");
 			}
+			else if (e.type == c1::ASSET_TYPE_XANIMPARTS)
+			{
+				RawAnim raw;
+				DecodedAnim decoded;
+				std::string error;
+				Status status;
+				if (!read_raw_anim(zone, e.header, raw, &error))
+				{
+					status = Status::error(error);
+				}
+				else
+				{
+					status = decode_anim(raw, decoded);
+				}
+				const c1::XAnimParts& h = raw.header;
+				std::string notes;
+				for (const auto& [note, time] : raw.notifies)
+				{
+					char text[32];
+					std::snprintf(text, sizeof(text), "@%.3f", time);
+					notes += " " + note + text;
+				}
+				std::printf("  xanim     %-40s %u parts, %u frames at %g / s, flags %u%s%s, tracks %s, notifies:%s\n", name.c_str(), h.boneCount[9], h.numframes + 1u, h.framerate, h.flags,
+					h.flags & ANIM_FLAG_LOOP ? " loop" : "", h.flags & (ANIM_FLAG_DELTA | ANIM_FLAG_DELTA_3D) ? " delta" : "", status ? "decode" : ("DO NOT DECODE: " + status.message).c_str(),
+					notes.c_str());
+				bad += status ? 0 : 1;
+			}
 			else
 			{
 				std::printf("  %-9s %s\n", z::asset_type_name(e.type).c_str(), name.c_str());
@@ -250,6 +279,7 @@ int main(const int argc, char** argv)
 	LinkOptions link;
 	fs::path out, sourceRoot, iwiDir, iwd, zoneOut, verifyFile;
 	std::vector<std::string> images, materials, models, rawfiles;
+	std::vector<std::string> anims;
 	bool nameGiven = false;
 	for (int k = 1; k < argc; k++)
 	{
@@ -270,6 +300,7 @@ int main(const int argc, char** argv)
 		else if (a == "--material") materials.push_back(value());
 		else if (a == "--xmodel") models.push_back(value());
 		else if (a == "--rawfile") rawfiles.push_back(value());
+		else if (a == "--xanim") anims.push_back(value());
 		else if (a == "--verify") verifyFile = value();
 		else return fail("unknown option " + a + " ( usage: see the head of codol_assetc.cpp or the README )");
 	}
@@ -547,6 +578,80 @@ int main(const int argc, char** argv)
 		}
 		std::printf("xmodel %s: %zu bones, %zu LODs, %zu surfaces, %zu vertices, %zu triangles, %zu collision surfaces\n", compiled.name.c_str(), compiled.boneNames.size(),
 			compiled.lods.size(), surfaces, vertices, triangles, compiled.collision.size());
+	}
+
+	// ---- animations
+	for (const std::string& spec : anims)
+	{
+		const std::size_t equal = spec.find('=');
+		if (equal == std::string::npos || equal == 0)
+		{
+			return fail("--xanim wants <name>=<file.xanim_export>");
+		}
+		AnimOptions options;
+		options.name = spec.substr(0, equal);
+		ExportAnim source;
+		ExportModel skeleton;
+		bool sourceRead = false;
+		for (const std::string& part : split(spec.substr(equal + 1), ','))
+		{
+			if (part.rfind("model=", 0) == 0)
+			{
+				if (const Status s = load_xmodel_export(part.substr(6), skeleton); !s)
+				{
+					return fail(s.message);
+				}
+				options.skeleton = &skeleton;
+			}
+			else if (part.rfind("type=", 0) == 0)
+			{
+				const std::string type = part.substr(5);
+				if (type != "relative" && type != "delta" && type != "delta3d")
+				{
+					return fail("--xanim type= is relative, delta or delta3d");
+				}
+				options.type = type == "delta" ? AnimType::delta : type == "delta3d" ? AnimType::delta3d : AnimType::relative;
+			}
+			else if (part == "loop") options.looping = true;
+			else if (part.rfind("deltapart=", 0) == 0) options.deltaPart = part.substr(10);
+			else if (part.rfind("assettype=", 0) == 0) options.assetType = static_cast<std::uint8_t>(std::atoi(part.c_str() + 10));
+			else if (part.rfind("rottol=", 0) == 0) options.rotationTolerance = static_cast<float>(std::atof(part.c_str() + 7));
+			else if (part.rfind("transtol=", 0) == 0) options.translationTolerance = static_cast<float>(std::atof(part.c_str() + 9));
+			else if (!sourceRead)
+			{
+				if (const Status s = load_xanim_export(part, source); !s)
+				{
+					return fail(part + ": " + s.message);
+				}
+				sourceRead = true;
+			}
+			else
+			{
+				return fail("--xanim: unknown option '" + part + "'");
+			}
+		}
+		if (!sourceRead)
+		{
+			return fail("--xanim wants <name>=<file.xanim_export>");
+		}
+		CompiledAnim compiled;
+		if (const Status s = compile_anim(source, options, compiled); !s)
+		{
+			return fail(s.message);
+		}
+		if (const Status s = linker.add_anim(compiled); !s)
+		{
+			return fail(s.message);
+		}
+		const c1::XAnimParts& h = compiled.raw.header;
+		std::printf("xanim %s: %u parts, %u frames at %g / s%s%s, %u notifies, %zu bytes of tracks\n", compiled.raw.name.c_str(), h.boneCount[9], h.numframes + 1u, h.framerate,
+			h.flags & ANIM_FLAG_LOOP ? ", looping" : "", h.flags & ANIM_FLAG_DELTA ? ", delta" : h.flags & ANIM_FLAG_DELTA_3D ? ", delta 3d" : "", h.notifyCount,
+			compiled.raw.dataByte.size() + compiled.raw.dataShort.size() * 2 + compiled.raw.dataInt.size() * 4 + compiled.raw.randomDataShort.size() * 2
+				+ compiled.raw.randomDataByte.size() + compiled.raw.indices.size() * 2);
+		for (const std::string& note : compiled.notes)
+		{
+			std::printf("  xanim %s: %s\n", compiled.raw.name.c_str(), note.c_str());
+		}
 	}
 
 	for (const std::string& spec : rawfiles)
