@@ -1458,6 +1458,17 @@ namespace editor::ui
 			install_map(request);
 		});
 
+		// ed_restage: a map of your own - the stage of the 3D view again, with the light keys the worldspawn has now
+		// ( the "Show in 3D" button of the Entity window )
+		command::register_command("ed_restage", [](args_t)
+		{
+			if (!need_map()) { return; }
+
+			std::string error;
+			if (get_scene().restage(error)) { game::printf_to_console("[CoDOL] 3D view: the stage has the map's light keys\n"); }
+			else { game::printf_to_console("^1[CoDOL] 3D view: %s\n", error.c_str()); }
+		});
+
 		// map_list [game folder]: the create-room list of a game folder ( read only )
 		command::register_command("map_list", [](args_t args)
 		{
@@ -1752,15 +1763,18 @@ namespace editor::ui
 			game::printf_to_console("new model entities: %s\n", s.model_class.c_str());
 		});
 
-		// ed_key <key> <value>: on every selected entity
+		// ed_key <key> <value>: on every selected entity; with none selected on the worldspawn, as the Entity window
 		command::register_command("ed_key", [](args_t args)
 		{
 			if (!need_map() || args.size() < 3) { return; }
 			auto& doc = get_scene().doc;
 			bool ok = false;
 
+			auto entities = doc.selected_entities();
+			if (entities.empty()) { entities.push_back(doc.worldspawn()); }
+
 			doc.begin_transaction("Set key");
-			for (const object_id id : doc.selected_entities()) { ok |= doc.set_key(id, args[1], args[2]); }
+			for (const object_id id : entities) { ok |= doc.set_key(id, args[1], args[2]); }
 			doc.end_transaction();
 			print_result(ok, "set key");
 		});
@@ -1793,8 +1807,11 @@ namespace editor::ui
 			auto& doc = get_scene().doc;
 			bool ok = false;
 
+			auto entities = doc.selected_entities();
+			if (entities.empty()) { entities.push_back(doc.worldspawn()); }
+
 			doc.begin_transaction("Remove key");
-			for (const object_id id : doc.selected_entities()) { ok |= doc.remove_key(id, args[1]); }
+			for (const object_id id : entities) { ok |= doc.remove_key(id, args[1]); }
 			doc.end_transaction();
 			print_result(ok, "remove key");
 		});

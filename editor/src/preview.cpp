@@ -1580,7 +1580,9 @@ namespace editor::preview
 			return;
 		}
 
+		// over the views, not over the lists that are clicked to fill it
 		ImGui::SetNextWindowSize(ImVec2(460.0f, 560.0f), ImGuiCond_FirstUseEver);
+		ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.55f));
 
 		if (!ImGui::Begin("Preview##window", &st.show_preview, ImGuiWindowFlags_NoCollapse))
 		{

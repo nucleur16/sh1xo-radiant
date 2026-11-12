@@ -83,7 +83,8 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
    direction ( with a small compass: from above, from the side ), sky light and ambient light of the worldspawn; a
    field whose key is not set shows the compiler's default and says so, the `x` behind a field takes the key away
    again. Fields that are dragged change the map while the mouse is down and are one undo step. "Show in 3D"
-   appears when the light keys differ from those the stage was built with, and builds the stage again.
+   appears when the light keys differ from those the stage was built with, and builds the stage again ( console:
+   `ed_restage`; `ed_key <key> <value>` and `ed_delkey <key>` go to the worldspawn when no entity is selected ).
 
    While a light is selected the 3D view and the 2D views draw **where it reaches**: three circles of its radius
    ( and one at half of it ) for a light that shines all around, the cone of a spot - outer and inner angle, cut
