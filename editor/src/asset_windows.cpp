@@ -1200,6 +1200,7 @@ namespace editor::assets
 						case kind::model: if (entry.state == status::built) { preview::show_model(entry.name); } break;
 						case kind::anim: preview::show_anim(entry.name); break;
 						case kind::sound: preview::show_sounds(entry.file); break;
+						case kind::fx: preview::show_fx(entry.name); break;
 						default: break;
 						}
 					}

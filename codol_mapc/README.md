@@ -48,7 +48,7 @@ codol_mapc --check <map.ff> --exe <C1.exe>
   model of any other entity ( `script_model` .. ) that the map zone does not have and a donor has is copied as well:
   a top level xmodel in front of the gfx_map with what it depends on ( "entity models: xmodel .. taken from zone .." in
   the report ). A model neither has is left alone - it may be in one of the game's common zones, which the compiler
-  does not read. Not loaded by a game client or server yet.
+  does not read. Loaded by server and client ( "A project's assets", below ).
 * `--assets` a project's assets for the edited map, see [A project's assets](#a-projects-assets). `--rawfile`,
   `--append-rawfile`: a rawfile of the zone is replaced / added, or gets a file's text behind what it holds.
 * `--no-brushes` also leaves out the surfaces: render surfaces are only made for brushes the brush stage compiled.
@@ -156,7 +156,10 @@ the map's animlist - the client and the server build the animtrees from `animlis
 project's list is appended to the shipped map's ( `--append-rawfile` ), its animtree file added ( `--rawfile` ) - and
 a level script that precaches and plays them, which the dedicated server reads from its script folder; **effects**
 are placed by script ( `loadfx` / `playfx` ) - the two effect files of a shipped map are not edited; **streamed
-sounds** need their archive in the client's `main\` ( `codol_assets/README.md` ).
+sounds** need their archive, as `iw_sound_NN.iwd`, in `main\` of client and server ( `codol_assets/README.md` ).
+CoDOL Radiant's File > Compile map passes all of this by itself when the map has a project: `--assets`, the
+animlist, the animtrees and every file of the project's `scripts\` as a rawfile, and copies the scripts to
+`compiled\<map>.scripts\`.
 
 Limits. A **material** that comes this way can be used by the carried models and effects; it is not put into
 `GfxWorld.materialMemory`, so a world brush face with it is still not drawn ( "What is not compiled" ). The file
@@ -166,8 +169,16 @@ does not, the report warns and the client refuses the zone. The server does not 
 
 Checked: `codol_mapc_tests --assets <project zone>` - the unedited map with the project's assets and two rawfiles:
 every asset of the project's kinds is in the zone, every asset of the map still is, the appended list holds the
-old text and the new, the collision data reads as before, a second run carries nothing. **Not loaded by a client
-or a server yet.**
+old text and the new, the collision data reads as before, a second run carries nothing.
+
+**Loaded by the server and the client** ( sixth round, `codol_bsp/README.md` ): mp_rust edited in the editor - a
+static model and a `script_model` of the project placed - and compiled with the project's zone ( a material, a
+model of two LODs, 3 loaded sounds, a curve, 4 alias lists, an effect ) and its level script as a rawfile. The file
+keeps the shipped length. The dedicated server installs the collision ( 758 leaves ) and runs the level script
+( `loadfx`, `precacheModel`, `setModel` of the project's assets ); the client enters the map, draws the static
+model, the entity model and a model the script spawns, the effect the script plays, and plays the project's loop
+sound ( audio session mean 0.20 against 0.02 after `stopLoopSound` ). Animations of a project in an edited shipped
+map were not part of that run.
 
 ### Static models
 

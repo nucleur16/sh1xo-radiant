@@ -443,8 +443,12 @@ light like any other - same record, limits 1 / 0 without `maxturn` / `maxmove` -
 class `light_spot` / `light_omni`, whose first key `"pl#"` is the index of its primary light. The dedicated server
 spawns it ( `light`, `light_spot`, `light_omni` are in its spawn table, `"pl#"` is a spawn field ), which is what a
 script's `getEnt( .., "targetname" )` and `setLightIntensity` / `setLightColor` work on. The compiler writes the
-same: the entity with `"pl#"` first, the other keys as the mapper gave them. Tested on the zone; that a script
-dims such a light in the client was not tried.
+same: the entity with `"pl#"` first, the other keys as the mapper gave them. Tested on the zone, and seen in the
+client ( [sixth round](#sixth-round-streamed-sounds-edited-shipped-maps-scripted-light) ): a level script takes
+the light with `getEnt( "c6lamp", "targetname" )` - its class is `light_spot` - and `setLightIntensity`,
+`setLightColor`, `setLightFov` and a new `.origin` change it on the screen. The server's script methods are
+`setLightIntensity` / `getLightIntensity`, `setLightColor`, `setLightRadius` ( not above the compiled radius ),
+`setLightFov( outer [, inner] )` ( not wider than compiled ) and `setLightExponent`.
 
 `codol_bsp` prints what it read ( `light keys: sun ( 1.30 1.23 1.11 ) from ( .. ), ambient ( .. ), sky ( .. ); 2
 light entities, 1 of them primary` ). CoDOL Radiant gives a new `light` the keys `radius 600`, `intensity 1`,
@@ -772,12 +776,134 @@ whose level script calls `ambientPlay( "ambient_mp_vacant" )`, has sound all the
 ( peaks 0.07 .. 0.13 over three windows of 8 s ). What our archive lacks was not found: the game's entries are all
 deflated and carry extra fields ( NTFS times, and 20 bytes with the tag 0x9999 in the local header ), ours are
 stored without any. So **a project's streamed sounds do not work yet**: under a plain name the archive is ignored and
-the alias silent, under an `iw_sound` name the client ends when the alias plays. Use loaded sounds. Also seen:
+the alias silent, under an `iw_sound` name the client ends when the alias plays. ( **Solved in the sixth round**,
+below: the entries have to be deflated and the server has to have the archive too. ) Also seen:
 `ambientPlay` of a *loaded* alias drops the client to the menu ( `ERROR: 19 codol_test_hum codol_test/hum.wav` ), and
 `playSound` of a looping alias is a script error on the server.
 
 Not looked at in the client this round: a scriptable light changed by a script, the other light definitions
 ( only `light_point_quadratic` ), an omni light's shadows, terrain borders ( nothing changed there ).
+
+### Sixth round: streamed sounds, edited shipped maps, scripted light
+
+The same harness; what is new in it is under `tests/harness/round6/` and at the end of this section. Pictures:
+`build-editor\bsptest\shots\c6*`, sources and logs under `build-editor\bsptest\c6\`.
+
+**Streamed sounds: why the client ended, and that they play now.** Two things, both read from the unpacked client
+and then tried:
+
+* *A stored entry cannot be sought in.* Miles reads a stream through the game's file callbacks ( registered at
+  0x73DB40: open 0x73D2C0, close 0x73D2E0, seek 0x73D300, read 0x73D380 ). The seek ( 0x615220 ) of a file inside
+  an archive opens the entry again and reads up to the wanted position **into a null pointer**
+  ( `unzReadCurrentFile( file, 0, position )`, 0x6495D0 ). For a deflated entry the game's inflate leaves the
+  output out; for a stored one the copy loop writes to address 0 - the access violation at 0x649719 that both
+  crash logs of the fifth round's test client name ( the stack: `AIL_open_stream` -> the file callback ). Every
+  entry of the game's own archives is deflated. `codol_assets` `write_iwd` now deflates every entry, also one
+  that gets longer by it.
+* *The server has to have the archive.* The client's file open for another thread ( 0x614550 ) accepts a file of
+  an archive only when the archive is "pure" ( 0x613B80: its checksum is in the list the server sent ), a
+  localized one, or one marked to skip the check; else it ends with "Impure client detected. Invalid .IWD files
+  referenced!" - through the engine's `va()` ( 0x6286D0 ), which on Miles' thread has no thread data: the other
+  crash address of the fifth round, 0x6286DE. The dedicated server lists the archives of *its* `main\`. The fifth
+  round had put the archive into the test client only. ( Read from the code; that an archive missing on the server
+  gives exactly this crash was not tried again. )
+* *Names.* The client's scan of `main\` ( 0x6166E0 ) takes `iw_` + nothing or `imagestripped_` / `image_` /
+  `sound_` / `model_` / `config_` + two digits up to 23 + `.iwd`. That is why `zz_x_sounds.iwd` and
+  `iw_c4fx_00.iwd` were never opened. `codol_assets` has `game_mounts_iwd` and `free_sound_iwd` for it; the
+  editor's install writes the package's plain archive as `<game>\main\iw_sound_NN.iwd` ( 23 downwards ).
+
+The test ( `round6\build_snd.ps1`, `serve_package.ps1`, `snd_sequence.ps1`; `mp_c6snd`: the box room, a project of
+three streamed aliases, its level script calls `ambientPlay( "c6_wind_amb" )` at the start of the map; the archive
+as `iw_sound_23.iwd` in `main\` of the server's base and of the test client ). The client's audio session, 5 s each:
+
+| what the level script did | highest peak | mean |
+|---|---|---|
+| nothing: the map's ambient track ( a streamed `.wav` ) since the map started | 0.1899 | 0.1252 |
+| `ambientStop` | 0.0000 | 0.0000 |
+| `ambientPlay` of the `.wav` alias | 0.1897 | 0.1316 |
+| `ambientStop` | 0.0000 | 0.0000 |
+| `ambientPlay` of an `.mp3` alias | 0.1792 | 0.1247 |
+| `ambientStop` | 0.0000 | 0.0000 |
+| `playLoopSound` of a streamed `.mp3` alias on an entity 2 m away | 0.2165 | 0.1249 |
+| the entity moved 6000 units up | 0.0624 | 0.0208 |
+| moved back | 0.1345 | 0.0816 |
+| `stopLoopSound` | 0.0000 | 0.0000 |
+
+The client stayed up through all of it. For the server's base the harness had to change: `make_base.ps1` makes
+`main\` a folder of hard links to the game's archives ( it was one junction into the install ), so that
+`put_iwd.ps1` can put a test archive next to them - in the base and in the test client, never in the install.
+
+**An edited shipped map with a project's assets** ( `round6\editor_mapc.ps1`, `serve_stock.ps1` ). In the editor:
+shipped mp_rust opened, a project `mod\mp_rust` given a material, a model ( two LODs ), sound aliases, an effect
+and a level script ( the shipped one with a few lines added ), built; the model placed as a `misc_model` and as a
+`script_model`; File > Compile map, which now hands the project to `codol_mapc` ( `--assets`, the rawfiles ). The
+report: 1 static model added, the model taken with 4 assets it depends on, 1 effect, 3 loaded sounds, 1 curve and
+4 alias lists carried, the level script as a rawfile, the file exactly as long as the shipped one.
+
+| where | what was seen |
+|---|---|
+| dedicated server | collision installed ( 758 leaves ), 14 primary lights, the project's level script from `compiled\mp_rust.scripts\` in front of the server's own: `loadfx`, `precacheModel`, `spawn` + `setModel` run, the script reports ready; no script error but the server's own ( `mp/coMarketplaceItems.csv` at the first spawn with a class, as in every round ) |
+| client | enters the map; the three crates of the project stand in the yard - the static model, the entity, the one the script spawns - with the project's material ( `c6rust_a_1`, `c6rust_b_2` ); the effect's smoke puffs and a spark above them, other in every frame ( `c6rust_fx_sheet` ); the project's loop sound on the crate: mean 0.2014 while it plays, 0.0217 after `stopLoopSound` ( the map's own sounds go on ) |
+
+The zone replaced the link to the stock zone in the two shadow zone folders and the links were put back after the
+test ( `put_zone.ps1`: a file in the way is removed first - the link, never the install's file - and then copied;
+`compile_and_serve.ps1` goes through it too ). The install's `mp_rust.ff` has its date of 2014.
+
+**A script changes a scriptable light** ( `mp_c6lamp`, `round6\make_light_maps.py`: the fifth round's two spots over
+one floor; the first `spawnflags 6`, `targetname c6lamp`, `maxmove 300`, `maxturn 45`; the second with the falloff
+definition `tungsten_lamp`; `round6\overlay_lamp`, `dvar_shots.ps1` ). The script reports
+`ready light_spot intensity 1.5 at (-220, 0, 230)`. One view of both pools, a picture per step, and the mean colour
+of the lower left and right part of the picture ( the scripted light is on the left ):
+
+| step | left r g b | right r g b | picture |
+|---|---|---|---|
+| as compiled | 56 55 54 | 48 46 43 | `c6lamp_1_` |
+| `setLightIntensity( 0 )` | 51 50 49 | 48 46 43 | `c6lamp_2_off`: the left pool is gone, the crate in it dark |
+| back to 1.5 | 56 55 54 | 48 46 44 | `c6lamp_3_full` |
+| `setLightIntensity( 0.45 )` | 52 51 49 | 48 46 44 | `c6lamp_4_dim` |
+| `setLightColor( ( 1, 0.15, 0.1 ) )` | 56 50 49 | 48 46 43 | `c6lamp_6_red`: a red pool, the crate red |
+| `setLightColor( ( 0.2, 1, 0.2 ) )` | 51 55 49 | 48 46 44 | `c6lamp_7_green` |
+| `setLightFov( 40, 20 )` | 53 51 50 | 48 46 44 | `c6lamp_9_narrow`: a small bright disc |
+| `.origin` 250 units along y | 52 51 49 | 48 46 43 | `c6lamp_11_move`: the pool moves away and ends where the surfaces that name the light end |
+| `moveTo` 250 units the other way, 2 s | 57 55 54 | 48 46 44 | `c6lamp_13_slide`: no change made out after 1.5 s, the script still reads the old origin |
+
+`c6lamp_sheet.png` has eight of them side by side. The right pool never changes: it is the second light, whose
+white `_color` comes out warm - the coloured picture of `tungsten_lamp` ( the third definition seen in the client
+after `light_point_linear` and `light_point_quadratic` ). What a moved light shows of its limits: the lightmap and
+the cut of the floor stay where the map was compiled, so its pool is clipped at the edge of the surfaces that
+name it.
+
+**A primary omni light with bots** ( `mp_c6omni`: the room with path nodes, one `spawnflags 1` light at 215 units
+above the middle, radius 900, three bots; `c6omni_sheet`, `c6omni_b_sheet` ). The room is lit by it at run time,
+the crates throw their baked shadows. The frame has a shadow map pass - 172 draw calls, 27403 triangles into a
+1024 x 2048 depth buffer ( `c6omni_stats` ) - so the bots are drawn into the light's shadow map. **A shadow of a bot
+on the floor was not made out** in fourteen pictures from two places ( the floor under the light is close to white
+there ). So an omni light's shadows of players are still not shown; under a spot they are ( fifth round ).
+
+**The create-room list.** `round6\list_build.ps1`: the editor builds the box room as `mp_c6list` and installs it
+with `list` into the test client, whose `client_shipRetail\patch\codol_common.ff` is made a real copy first ( it
+was a hard link to the install's file ): row 97 of `mp/comaplist.csv`, the arena entry, the name. The lobby is
+started without `CODOL_FORCE_MAP` ( `start_lobby.ps1` without `-Map` ) and with the test client's zone folder as
+`CODOL_ZONE_DIR`. The client starts, loads the zone ( its log lists `codol_common` ) and its menus work:
+Multiplayer -> Start -> the channel page with *Matchmaking*, *Rooms*, *Create Room* ( `c6list_2_start` ). **Create
+Room does not open**: "Unlocks at player level 5" ( `c6list_3_create` ); the lobby's own line for the account says
+`playerData level=1 .. uf_rank_1..1`. The lobby holds the level in `players\<uid>.json` of its own folder - level
+5 is 9000 XP out of finished matches -, has no switch for it ( `CODOL_RANK_SEED_LEVEL` with a scratch
+`CODOL_RANK_FILE` was tried: the per account file wins ), and that file is not the tests' to write. **So the list
+was not seen and no map was started from it.** What the lobby does with a room's map was read from its sources
+instead ( `handoff\map_handoff.py` ): the client sends the row's ID - the map name - as a CRC and as text; the
+lobby knows a name only when `<map>.ff` is in its zone folder ( `installed_maps()`: `CODOL_ZONE_DIR`, else
+`<install>\client_shipRetail\chinese`; never `usermaps\` ), and builds that table when it starts; a map it does
+not know becomes its default map ( `CODOL_MAP_PREFER`, mp_killhouse_sh ), which it also pushes back to the client;
+it then tells the server `set codol_sessionMap <map>` .. `map <map>` over rcon. Nothing in the install or the
+lobby's folder builds `codol_common.ff`. After the test `map_uninstall` took everything out again and the list
+zone was byte for byte the install's.
+
+New in the harness: `put_zone.ps1`, `put_iwd.ps1`, `make_base.ps1` ( `main\` as a folder of links ),
+`start_lobby.ps1` without `-Map`, and under `round6\`: `run_editor.ps1` ( the editor unattended ), `ui.ps1` ( one
+click in the client's menus with a picture ), `views.ps1`, `dvar_shots.ps1`, `snd_sequence.ps1`, `change_map.ps1`,
+`serve_map.ps1`, `serve_package.ps1`, `serve_stock.ps1`, `editor_mapc.ps1`, `editor_fx.ps1`, `list_build.ps1`. After
+every run `stop_all.ps1` was seen to have taken the frame dump dll out of the test client's folder.
 
 ### Script model animations
 
@@ -864,10 +990,11 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
   along a grid of 32 units around what a light wins, not along the pieces of the game compiler's BSP; a piece is
   never smaller than a grid square, and the specular highlight of a light ends at the cut ( its diffuse light goes
   on in the lightmap ). **Light regions**: a hull per cell with cone planes and diagonals; no planes through the
-  light and the edges of a portal. **Scriptable lights** are written as the shipped zones have them; a script
-  changing one was not tried in the client, and the baked visibility of a light that a script moves stays where
-  it was compiled. At most 253 primary lights, 15 light definitions. An **omni** light's shadows were not looked
-  at ( the shipped records allow them a shadow map as well ). `codol_viewtool` draws primary lights without their
+  light and the edges of a portal. **Scriptable lights** are written as the shipped zones have them and a script
+  changes one in the client ( sixth round ); the baked visibility and the cut of the surfaces of a light that a
+  script moves stay where they were compiled, and `moveTo` on a light showed no movement. At most 253 primary
+  lights, 15 light definitions. Under an **omni** light the client draws a shadow map pass with the players in
+  it, but no shadow of a player was made out in the pictures ( sixth round ). `codol_viewtool` draws primary lights without their
   shadow maps.
 * **Brush models** are drawn and collide, but are in no cell ( the engine places dynamic models itself ) and are lit
   by the lightmap of the place they were compiled at.
@@ -879,7 +1006,8 @@ Leaf box padding 0.125 and model box padding 1.0 are the relations measured on s
   sound assets have to be in a zone that is loaded - the common zones, or the map zone ( `package_map.ps1` carries a
   project's there ); a sound alias that is nowhere gives `Missing soundalias` lines in the client. Exploders and
   interval sounds ( `createExploder`, `createIntervalSound` of the shipped files ) are not written. A project's
-  loaded sounds play in the client ( fifth round: measured, not heard ); its **streamed** sounds do not - see there.
+  loaded sounds play in the client ( fifth round: measured, not heard ), its **streamed** ones too ( sixth round ) -
+  from an archive named `iw_sound_NN.iwd` that client and server both have.
 * **Script model animations** do not move in the client on the test server - a shipped map's do not either ( fourth
   round ) -, so a compiled animation has still not been seen moving. See [Script model
   animations](#script-model-animations): nothing is missing on the map's side.

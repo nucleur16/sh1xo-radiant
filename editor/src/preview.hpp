@@ -10,6 +10,9 @@
 //              ( codol_zone, codol_assets read_raw_anim / decode_anim / extract_model_lod ) - what the game gets -,
 //              or, before the first build, the source files; the mesh is skinned here and drawn with the model's
 //              materials. Timeline: play / pause, frame, speed, loop, note tracks.
+//   effect     the particles of an effect at a moment, with a timeline: the .efx of the project, or the FxEffectDef
+//              of a zone turned back into curves ( codol_assets read_fx / extract_fx ), simulated by codol_assets
+//              simulate_fx and drawn as textured quads. An approximation, see fx_preview.hpp for what is left out.
 //   sound      the aliases of a soundaliases .csv of the project: the .wav of a row is played ( WinMM ), an .mp3
 //              through MCI; an alias of a zone: its LoadedSound is read from the zone and decoded ( IMA ADPCM )
 //
@@ -28,6 +31,10 @@ namespace editor::preview
 	void show_anim(const std::string& name, const std::string& model = {});
 	// a soundaliases .csv of the project ( its aliases are listed )
 	void show_sounds(const std::filesystem::path& csv);
+	// An effect over time: its sprites, tails and lines as the editor simulates them ( codol_assets simulate_fx ) -
+	// not the game's effect system. `zone` empty: fx\<name>.efx of the project, else the effect out of the zone of
+	// the map or a common zone; a zone name of the install or a .ff: the compiled effect of that zone.
+	void show_fx(const std::string& name, const std::string& zone = {});
 	// plays an alias: of the project's csv files, else of a zone ( `zone`: a .ff file or a zone name of the install;
 	// empty: the project's zone )
 	bool play_alias(const std::string& alias, const std::string& zone, std::string& message);

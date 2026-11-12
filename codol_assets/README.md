@@ -51,7 +51,7 @@ ctest --test-dir build/codol_assets_x64 -C Release
 
 Standalone like `codol_zone`: static CRT, `/std:c++latest /W4 /WX`, builds `codol_zone` and `codol_render` with it.
 `CODOL_ASSETS_GAME_DIR` ( CMake cache or environment ) names a 1.1.1.13 install for the part of the tests that
-builds a zone; without one that part is skipped. 496 checks ( x64 ).
+builds a zone; without one that part is skipped. 575 checks ( x64 ).
 
 ## codol_assetc
 
@@ -64,7 +64,11 @@ codol_assetc --install <1.1.1.13 install> --out <zone.ff> [options] [assets]
   --copy-techsets           copy every technique set into the zone, also those the common zones define
   --source-root <dir>       where the image files of GDT materials are looked for ( default: the GDT's folder )
   --iwi-dir <dir>           write images/<name>.iwi of the streamed images there
-  --iwd <file.iwd>          pack them into a plain .iwd
+  --iwd <file.iwd>          pack them ( and the streamed sound files of --soundalias ) into an .iwd: every entry
+                            deflated; encrypted like the game's when the name holds iw_sound, iw_image ..
+  --iwd-add <archive.iwd>   the files of a plain archive go into the --iwd archive as well. With --iwd and
+                            --iwd-add alone ( no --out ) only the archive is written: a project's plain sound
+                            archive under a name the game opens ( "Sounds", "What is produced" )
   --zone-out <file>         also write the inflated zone
 
   --image <name>=<file>[,use=color|normal|specular|detail|ui|function][,format=dxt1|dxt3|dxt5|rgba|rgb|la|l|a]
@@ -568,11 +572,24 @@ channel 1>]`. `codol_asset_verify sound-extract` writes the shipped maps in this
 * per `.vfcurve` used: a top level `SndCurve`; other curves by name;
 * per alias name: a `snd_alias_list_t` with its variants, strings, `SoundFile`, curve pointer and speaker map;
 * streamed files found under `sound/` are packed into the `--iwd` archive as `sound/<file>`. They are not
-  converted: the shipped ones are `.mp3` and a few `.wav`. **In the client a project's streamed sound does not
-  play yet** ( `codol_bsp/README.md`, "Fifth round" ): the client only opens archives named like its own
-  ( `iw_sound_NN.iwd` .. ) - a plain `zz_*.iwd` is never opened, the alias stays silent; an archive with such a
-  name has to be encrypted, which `--iwd` now does by itself ( below ), and the client opens it - and then ends
-  when the alias plays. Loaded sounds play.
+  converted: the shipped ones are `.mp3` and a few `.wav`. **They play in the client** ( `codol_bsp/README.md`,
+  "Sixth round": a map's ambient track from a `.wav` and from an `.mp3`, an `.mp3` on an entity ), when the
+  archive is what the game needs - four things, each found the hard way:
+  * *its name*: the client opens `iw_NN.iwd` and `iw_sound_NN` / `iw_image_NN` / `iw_imagestripped_NN` /
+    `iw_model_NN` / `iw_config_NN.iwd` with NN from 00 to 23 and nothing else ( `C1.exe` 0x6166E0;
+    `game_mounts_iwd` ). A plain `zz_*.iwd` is never looked at. `iw_sound_00` .. `03` are the game's:
+    `free_sound_iwd` gives the first free name from 23 down;
+  * *encrypted* when the name holds `iw_sound`, `iw_image` .. - the key holds the file name, so an archive is
+    written for its name and not renamed. `--iwd` does it by itself;
+  * *every entry deflated*: the client seeks in a streamed file by reading up to the position into no buffer,
+    which its inflate survives and the copy of a stored entry does not ( an access violation at 0x649719 - the
+    crash of the fifth round ). `write_iwd` deflates every entry, also one that gets longer;
+  * *the server has it too*: the client plays a file out of an archive only when the server listed that archive
+    ( "Impure client detected" otherwise ), and the server lists what is in *its* `main\`.
+
+  A project's archive is made under a plain name ( the editor: `mod\<project>\zz_<project>_sounds.iwd` ) and
+  written again for a game folder: `codol_assetc --install <game> --iwd <game>\main\iw_sound_23.iwd --iwd-add
+  zz_<project>_sounds.iwd`. CoDOL Radiant's install does that.
 
 ```
 > python tests/make_sound_sources.py src
@@ -611,8 +628,8 @@ player playLocalSound( "codol_test_beep" );      // 2D, for one player
 ```
 
 The alias only has to exist in a zone the client has loaded - the map's zone ( `--base` ), or a zone of the map's
-load list; there is nothing to precache in script. What a modder has to add besides the zone: the `.iwd` with the
-streamed files in `main/`, and for subtitles the localized string the `subtitle` column names. `tests/asset_probe.ps1`
+load list; there is nothing to precache in script. What a modder has to add besides the zone: the archive with the
+streamed files as `iw_sound_NN.iwd` in `main/` of client and server ( above ), and for subtitles the localized string the `subtitle` column names. `tests/asset_probe.ps1`
 ( and `tests/sound_probe.ps1`, sounds only ) writes a level script with exactly the calls above for the server
 harness of `codol_bsp`.
 
@@ -671,8 +688,10 @@ tripped into a zone.
 * `vol_mod` is stored as the mixer group and does not scale the volume ( the shipped volumes look scaled:
   0.93, 0.729 .. ); `soundaliases/volumemods.def` is not read.
 * `masterslave master` has no field here; use `masterpriority` / `masterpercentage`.
-* No resampling, no `.mp3` encoding, no check that a streamed file is something the game can play. PCM is not
-  compressed unless the row says `compression adpcm`.
+* No resampling, no `.mp3` encoding, no check that a streamed file is something the game can play ( seen
+  playing: a 16 bit stereo PCM `.wav` of 22050 Hz and an `.mp3` ). PCM is not compressed unless the row says
+  `compression adpcm`. `sound/soundlength.csv`, the table the client looks a stream's length up in before it asks
+  Miles ( 0x73D250 ), is not extended.
 * The `.spkrmap` text form is this library's own. `SpeakerMap` data is written once per alias list, not shared
   between lists as a linker with the original sources may do.
 * A by-name reference ( loaded sound, curve ) to something no loaded zone defines gives the game's default asset;
@@ -853,7 +872,8 @@ playfx( level._effect[ "my_effect" ], ( 0, 0, 64 ) );
   by the client - the looping smoke element's puffs appear and rise in six frames over three seconds. The sparks
   and the light of the one shot elements were not caught in a frame. The client makes placed effects itself from
   the text of `maps/mp/<map>_fx.gsc` and `maps/createfx/<map>_fx.gsc`, which have to be exactly as the game's
-  createfx tool writes them ( `codol_bsp` does ); `playfx` from script was not tried in the client. On the
+  createfx tool writes them ( `codol_bsp` does ). `playfx` from a level script draws it too ( sixth round: in an
+  edited mp_rust, smoke puffs and a spark above a crate, `c6rust_fx_sheet.png` ). On the
   dedicated server `loadfx` + `playfx` of a compiled effect run without a script error, but that server gives every
   name an id without looking at the asset ( "On a dedicated server" below ).
 * The +252 integer and the +256 string of `FxElemDef` are carried, their meaning is not known. The flag bits above
@@ -870,6 +890,30 @@ playfx( level._effect[ "my_effect" ], ( 0, 0, 64 ) );
   `atlasColIndexBits` / `atlasRowIndexBits` of the file.
 * In the editor an effect is a file `mod\<project>\fx\<folder>\<name>.efx`; emitted effects are read from that
   `fx\` folder ( `docs/CODOL.md`, "Your own assets" ).
+
+### Looking at an effect: simulate_fx
+
+`fx_preview.hpp`: `simulate_fx( effect, seconds, out )` gives the particles of an `EditorEffect` that are alive at
+a moment - position, velocity, size, colour, rotation, material, atlas cell, the kind of shape -,
+`fx_preview_duration` how long one pass takes. It takes the editor's form, so an `.efx` and a shipped effect
+( `read_fx` -> `extract_fx` ) go the same way; CoDOL Radiant's Preview window draws the result. It is a preview
+written from the definitions, **not the game's effect system**:
+
+* done: looping and one shot spawning with delay and life span, origin ranges, the offset cylinder / sphere, both
+  velocity graph sets integrated ( a random blend between the two curves where the element says so ), gravity
+  ( 800 units / s^2 at 100 % ), size, colour, alpha and rotation graphs, the atlas cell ( fixed, random, over life,
+  by frame rate );
+* simplified: a cloud is one particle; a tail and a line carry their velocity for the drawer to stretch them;
+  fading by distance, collision, elasticity and lighting are left out; the effect stands with its forward axis up;
+* not done, and named in `FxPreview::skipped`: trails, spark fountains, models, lights, sounds, decals, runners,
+  the effects an element starts ( on impact, on death, emission ).
+
+Every "random" number is a hash of seed, element, particle and use, so a moment can be computed again. Tests
+( `tests/test_fx_preview.inc`, 42 checks ): an effect whose particles can be computed by hand - count, height,
+size, colour, alpha and cell at chosen moments, gravity, an endless loop, a one shot burst, determinism, what is
+skipped - and the library's test effect. Nothing compares it with the game's pictures; shipped
+`fire/firelp_small_pm` looks like a small fire with smoke in the editor ( `c6fx_sheet.png` ), which is all that
+was looked at.
 
 ## Linking
 

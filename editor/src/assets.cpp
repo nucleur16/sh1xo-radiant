@@ -3053,9 +3053,116 @@ namespace editor::assets
 		return lines;
 	}
 
+	// What codol_mapc gets of the project for an edited shipped map - the same things File > Build map puts into a
+	// map of one's own ( package_map.ps1 ):
+	//   --assets <zone>                           animations, sounds, effects, models, materials are carried into the
+	//                                             map zone ( the zone is a donor for entity models as well )
+	//   --append-rawfile animlists/<map>.animlist the project's animations behind the map's own list
+	//   --rawfile animtrees/<tree>.atr            the animtrees of the project's animations
+	//   --rawfile <path>                          every file of the project's scripts\, in front of the above
 	std::string compile_arguments()
 	{
-		return zone_exists() ? " --donor \"" + to_utf8(zone_file()) + "\"" : std::string();
+		if (!zone_exists())
+		{
+			return {};
+		}
+
+		std::error_code ec;
+		const fs::path dir = project_dir();
+		const std::string map = get_scene().map_name;
+		std::string out = " --assets \"" + to_utf8(zone_file()) + "\"";
+		std::map<std::string, fs::path> raw;		// rawfile name ( lower case ) -> file; the project's scripts win
+
+		for (const auto& entry : fs::directory_iterator(dir / "generated" / "animtrees", ec))
+		{
+			if (entry.is_regular_file() && entry.path().extension() == ".atr")
+			{
+				raw["animtrees/" + lower(to_utf8(entry.path().filename()))] = entry.path();
+			}
+		}
+
+		bool own_animlist = false;
+
+		for (const auto& entry : fs::recursive_directory_iterator(dir / "scripts", ec))
+		{
+			if (!entry.is_regular_file())
+			{
+				continue;
+			}
+
+			std::string name = lower(to_utf8(fs::relative(entry.path(), dir / "scripts", ec)));
+			std::replace(name.begin(), name.end(), '\\', '/');
+
+			if (name.find_first_of("=\"") != std::string::npos)
+			{
+				continue;
+			}
+
+			own_animlist |= name == "animlists/" + lower(map) + ".animlist";
+			raw[name] = entry.path();
+		}
+
+		if (const fs::path list = dir / "generated" / "animlists" / "map.animlist"; !own_animlist && !map.empty() && fs::is_regular_file(list, ec))
+		{
+			out += " --append-rawfile \"animlists/" + map + ".animlist=" + to_utf8(list) + "\"";
+		}
+
+		for (const auto& [name, file] : raw)
+		{
+			out += " --rawfile \"" + name + "=" + to_utf8(file) + "\"";
+		}
+
+		return out;
+	}
+
+	// After a compile of an edited shipped map: what of the project is not inside the fastfile and where it goes.
+	// The project's scripts are copied to compiled\<map>.scripts\ ( the dedicated server reads level scripts from its
+	// script folder, never from a zone ); the streamed sounds need their archive in main\.
+	std::vector<std::string> compile_extras(const fs::path& out_dir, const std::string& map)
+	{
+		std::vector<std::string> lines;
+		std::error_code ec;
+
+		if (g.project.empty() || !zone_exists())
+		{
+			return lines;
+		}
+
+		const fs::path dir = project_dir();
+		const fs::path scripts_to = out_dir / fs::u8path(map + ".scripts");
+		int copied = 0;
+
+		for (const auto& entry : fs::recursive_directory_iterator(dir / "scripts", ec))
+		{
+			if (!entry.is_regular_file())
+			{
+				continue;
+			}
+
+			const fs::path to = scripts_to / fs::relative(entry.path(), dir / "scripts", ec);
+			fs::create_directories(to.parent_path(), ec);
+			fs::copy_file(entry.path(), to, fs::copy_options::overwrite_existing, ec);
+			copied += !ec;
+		}
+
+		lines.push_back("the project's assets ( " + to_utf8(zone_file().filename()) + " ) were carried into the map zone: animations, sounds, effects, models, materials");
+
+		if (copied)
+		{
+			lines.push_back(std::to_string(copied) + " script file( s ) of the project: compiled\\" + map + ".scripts\\ - copy them into the server's script folder ( a level script maps\\mp\\"
+				+ map + ".gsc there replaces the map's own: it has to hold what that one does )");
+		}
+
+		for (const auto& entry : fs::directory_iterator(dir, ec))
+		{
+			if (entry.is_regular_file() && entry.path().extension() == ".iwd")
+			{
+				lines.push_back("streamed sounds: " + to_utf8(entry.path().filename()) + " has to become an archive of the game, for client and server: codol_assetc --install <game> --iwd <game>\\main\\iw_sound_23.iwd --iwd-add \""
+					+ to_utf8(entry.path()) + "\"  ( a free number from 04 to 23 )");
+			}
+		}
+
+		return lines;
 	}
 
 	const std::vector<std::string>& compile_problems() { return g.compile_problems; }
