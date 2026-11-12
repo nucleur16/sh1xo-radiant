@@ -12,7 +12,7 @@ $out = "$Scratch\out\$Variant"
 New-Item -ItemType Directory -Force $out | Out-Null
 & "$Build\codol_bsp.exe" --map $MapFile --exe "$Game\C1.exe" --install $Game --out "$out\$Name.ff" --cache $Scratch --report "$out\$Name.report.txt" @Extra | Select-Object -Last 4
 if ($LASTEXITCODE) { throw 'compile failed' }
-Copy-Item "$out\$Name.ff" "$Scratch\base\client_shipRetail\chinese\$Name.ff" -Force
+& "$H\put_zone.ps1" -File "$out\$Name.ff" -Scratch $Scratch -Game $Game -NoClient | Out-Null     # never writes through a link into the install
 & "$H\start_server.ps1" -Variant $Variant -Map $Name -Developer $Developer -Bots $Bots -MapCmd $MapCmd -Scratch $Scratch -Gametype $Gametype -Overlay $Overlay -Port $Port
 Start-Sleep $Wait
 $log = "$Scratch\run\$Variant\home\main\qconsole.log"

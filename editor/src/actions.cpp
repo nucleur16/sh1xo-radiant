@@ -645,7 +645,9 @@ namespace editor::ui
 			command_line += " --baseline \"" + to_utf8(baseline) + "\"";
 		}
 
-		// the zone of the project's assets: models the map uses and its own zone does not have are taken from it.
+		// the zone of the project's assets: everything a level script can name ( animations, sounds, effects, models )
+		// is carried into the map zone, with the project's animlist, animtrees and scripts as rawfiles; models the
+		// map's entities use and its own zone does not have are taken from it.
 		// What of the project cannot be in the compiled map is said before the compiler runs and again with its report.
 		command_line += assets::compile_arguments();
 		assets::begin_compile();
@@ -683,6 +685,11 @@ namespace editor::ui
 
 				// every face and model that will not be in the game, and why ( console + toast + Assets window )
 				assets::compile_finished(true, output);
+
+				for (const auto& line : assets::compile_extras(out.parent_path(), map_name))
+				{
+					game::printf_to_console("[CoDOL] compile: %s\n", line.c_str());
+				}
 
 				game::printf_to_console("[CoDOL] compiled: %s\n[CoDOL] report: %s\n", to_utf8(out).c_str(), to_utf8(report).c_str());
 				game::printf_to_console("[CoDOL] the fastfile is unsigned: a patched client ( Kernel33.dll ) or the dedicated server loads it from the install's zone folder under the map's name. Keep a copy of the original.\n");

@@ -202,8 +202,13 @@ namespace editor::assets
 	// what the built map will not get as the project folder has it now: sources that are new, changed or failed
 	// since the zone was built. Lines for the user, said before the build; they do not stop it.
 	std::vector<std::string> package_problems();
-	// " --donor <zone>" for codol_mapc when the project has a zone
+	// for codol_mapc when the project has a zone: " --assets <zone>" ( every asset of the project is carried into
+	// the edited map; the zone is a donor too ), the project's animlist appended to the map's, its animtrees and
+	// the files of its scripts\ as rawfiles
 	std::string compile_arguments();
+	// after a compile: the project's scripts copied to <out_dir>\<map>.scripts\, and lines that say what of the
+	// project is not inside the fastfile ( scripts for the server, the streamed sound archive )
+	std::vector<std::string> compile_extras(const std::filesystem::path& out_dir, const std::string& map);
 	// What of the project will not be in the compiled map, before the compiler runs: lines for the user.
 	std::vector<std::string> compile_precheck();
 	void begin_compile();								// runs the precheck and keeps its lines for compile_finished

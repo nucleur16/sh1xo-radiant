@@ -15,8 +15,7 @@ if (-not $Variant) { $Variant = $Name }
 & "$H\stop_server.ps1" -Scratch $Scratch | Out-Null
 & "$H\make_base.ps1" -Scratch $Scratch -Game $Game
 Get-ChildItem "$Package\zone" -Filter *.ff | ForEach-Object {
-  Copy-Item $_.FullName "$Scratch\base\client_shipRetail\chinese\$($_.Name)" -Force
-  if (-not $NoClient) { Copy-Item $_.FullName "$Client\client_shipRetail\chinese\$($_.Name)" -Force }
+  & "$H\put_zone.ps1" -File $_.FullName -Scratch $Scratch -Client $Client -Game $Game -NoClient:$NoClient
 }
 $archives = @(Get-ChildItem "$Package\main" -Filter 'zz_*.iwd' -ErrorAction SilentlyContinue)
 if ($archives.Count) {
