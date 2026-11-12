@@ -485,6 +485,52 @@ namespace
 		z::ZoneEditor editor;
 		std::vector<std::uint8_t> again;
 		CHECK(editor.load(bytes, "codol_assets_test") && editor.write(again) && again == bytes);
+
+		// carry: the animations and the model of that zone, as a fast file, into another zone - with the material and
+		// the image the model points at; a second time nothing is taken
+		const fs::path file = scratch / "codol_assets_test_carry.ff";
+		CHECK(z::write_fastfile(file, bytes, linker.key()));
+		link.zoneName = "codol_assets_carry";
+		AssetLinker target;
+		CHECK(target.begin(link));
+		const std::int32_t types[] = { c1::ASSET_TYPE_XANIMPARTS, c1::ASSET_TYPE_XMODEL };
+		AssetLinker::Carried carried;
+		const Status taken = target.carry(file, types, carried);
+		CHECK(taken);
+		if (!taken)
+		{
+			std::printf("%s\n", taken.message.c_str());
+		}
+		for (const std::string& line : carried.failed)
+		{
+			std::printf("not carried: %s\n", line.c_str());
+		}
+		CHECK(carried.failed.empty() && carried.kept.empty() && carried.copied[c1::ASSET_TYPE_XANIMPARTS] == anims.size() && carried.copied[c1::ASSET_TYPE_XMODEL] == 1);
+		CHECK(carried.dependencies >= 2);		// mc/codol_unit and codol_unit_col at least
+		CHECK(target.editor().find_asset(c1::ASSET_TYPE_MATERIAL, "mc/codol_unit") != z::ZoneEditor::npos);
+		CHECK(target.editor().find_asset(c1::ASSET_TYPE_MATERIAL, "wc/codol_unit") == z::ZoneEditor::npos);
+		const std::size_t count = target.editor().asset_count();
+		AssetLinker::Carried second;
+		CHECK(target.carry(file, types, second) && second.copied.empty() && second.kept.size() == anims.size() + 1 && target.editor().asset_count() == count);
+		CHECK(!target.carry(scratch / "codol_assets_no_such_zone.ff", types, second));
+		std::vector<std::uint8_t> carriedBytes;
+		const Status carriedWritten = target.write_zone(carriedBytes);
+		CHECK(carriedWritten);
+		if (carriedWritten)
+		{
+			z::Zone other;
+			CHECK(other.load(carriedBytes, "codol_assets_carry") && other.warnings().empty());
+			anim_tests::check_anim_zone(other, anims);
+			z::ModelView moved;
+			CHECK(z::read_model(other, other.find_asset(c1::ASSET_TYPE_XMODEL, "codol_unit_box"), moved));
+			CHECK(moved.materialNames.size() == 1 && moved.materialNames[0] == "mc/codol_unit" && moved.lods.size() == 1 && moved.raw.numCollSurfs == 1);
+		}
+		else
+		{
+			std::printf("%s\n", carriedWritten.message.c_str());
+		}
+		std::error_code ec;
+		fs::remove(file, ec);
 	}
 }
 

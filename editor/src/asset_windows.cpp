@@ -10,7 +10,7 @@
 
 #include <commdlg.h>
 
-// The Assets window and the three windows that make assets: New material, Import model, GDT materials.
+// The Assets window and the windows that make assets: New material, Import model, Import animation, GDT materials.
 // They only collect what the functions of assets.hpp need - the console commands call the same functions.
 
 namespace editor::assets
@@ -59,6 +59,10 @@ namespace editor::assets
 		constexpr const wchar_t* image_filter = L"Images ( *.png, *.tga, *.dds )\0*.png;*.tga;*.dds\0All files\0*.*\0";
 		constexpr const wchar_t* export_filter = L"xmodel_export\0*.xmodel_export\0All files\0*.*\0";
 		constexpr const wchar_t* gdt_filter = L"GDT ( *.gdt )\0*.gdt\0All files\0*.*\0";
+		constexpr const wchar_t* anim_filter = L"xanim_export\0*.xanim_export\0All files\0*.*\0";
+		constexpr const wchar_t* skeleton_filter = L"xmodel_export ( the model of the animation )\0*.xmodel_export\0All files\0*.*\0";
+		constexpr const wchar_t* csv_filter = L"Sound aliases ( *.csv )\0*.csv\0All files\0*.*\0";
+		constexpr const wchar_t* efx_filter = L"Effects ( *.efx )\0*.efx\0All files\0*.*\0";
 
 		// one line: label, path, ".."
 		bool path_row(const char* label, const char* id, std::string& path, const wchar_t* filter, const float label_width = 110.0f)
@@ -502,6 +506,167 @@ namespace editor::assets
 			ImGui::End();
 		}
 
+		// ---- Import animation --------------------------------------------------------------------------------
+
+		struct anim_dialog
+		{
+			bool open = false;
+			bool appearing = false;
+			std::string file, name, model, tree;
+			int type = 0;				// relative, delta, delta3d
+			bool loop = false;
+			bool overwrite = false;
+			std::string error;
+		};
+
+		anim_dialog g_anim;
+
+		void draw_anim_dialog()
+		{
+			auto& d = g_anim;
+			if (!d.open)
+			{
+				return;
+			}
+
+			ImGui::SetNextWindowSize(ImVec2(680.0f, 0.0f), ImGuiCond_Appearing);
+			ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+			if (d.appearing)
+			{
+				ImGui::SetNextWindowFocus();
+				d.appearing = false;
+			}
+
+			if (ImGui::Begin("Import animation##assets", &d.open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize))
+			{
+				static const char* const types[] = { "relative", "delta", "delta3d" };
+				static const char* const type_labels[] = { "Relative ( every part moves on its parent )", "Delta ( the movement of tag_origin moves the entity )",
+					"Delta 3D ( as delta, with the full rotation )" };
+
+				ImGui::PushItemWidth(520.0f);
+				path_row("xanim_export", "file", d.file, anim_filter);
+				ImGui::PopItemWidth();
+
+				if (d.name.empty() && !d.file.empty())
+				{
+					std::error_code ec;
+					if (fs::is_regular_file(fs::u8path(d.file), ec)) { d.name = lower(to_utf8(fs::u8path(d.file).stem())); }
+				}
+
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("Name");
+				ImGui::SameLine(110.0f);
+				ImGui::SetNextItemWidth(330.0f);
+				ImGui::InputTextWithHint("##name", "name of the animation: %name in script", &d.name);
+				ImGui::SameLine();
+				ImGui::Checkbox("Overwrite", &d.overwrite);
+
+				// the skeleton: a model of the project, or a file
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("Model");
+				ImGui::SameLine(110.0f);
+				ImGui::SetNextItemWidth(330.0f);
+				ImGui::InputTextWithHint("##model", "a model of the project, or an .xmodel_export", &d.model);
+				ImGui::SameLine();
+
+				if (ImGui::BeginCombo("##models", "", ImGuiComboFlags_NoPreview))
+				{
+					if (ImGui::Selectable("( none: every part is a root )", d.model.empty())) { d.model.clear(); }
+
+					for (const auto& model : project_models())
+					{
+						if (ImGui::Selectable(model.c_str(), model == d.model)) { d.model = model; }
+					}
+
+					ImGui::EndCombo();
+				}
+
+				ImGui::SameLine();
+				if (ImGui::Button("..", ImVec2(36.0f, 0.0f)))
+				{
+					browse(skeleton_filter, d.model);
+				}
+
+				ImGui::PushTextWrapPos(640.0f);
+				ImGui::TextColored(dim, "An xanim_export has no bone hierarchy: it comes from the model the animation is for. Without one every part is taken "
+					"as a root - right for a model of one bone that moves as a whole.");
+				ImGui::PopTextWrapPos();
+
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("Type");
+				ImGui::SameLine(110.0f);
+				ImGui::SetNextItemWidth(330.0f);
+
+				if (ImGui::BeginCombo("##type", type_labels[d.type]))
+				{
+					for (int i = 0; i < 3; i++)
+					{
+						if (ImGui::Selectable(type_labels[i], i == d.type)) { d.type = i; }
+					}
+
+					ImGui::EndCombo();
+				}
+
+				ImGui::SameLine();
+				ImGui::Checkbox("Looping", &d.loop);
+
+				ImGui::AlignTextToFramePadding();
+				ImGui::TextUnformatted("Animtree");
+				ImGui::SameLine(110.0f);
+				ImGui::SetNextItemWidth(330.0f);
+				ImGui::InputTextWithHint("##tree", default_anim_tree().c_str(), &d.tree);
+				ImGui::SameLine();
+				ImGui::TextColored(dim, "#using_animtree( \"%s\" );", d.tree.empty() ? default_anim_tree().c_str() : d.tree.c_str());
+
+				ImGui::Spacing();
+
+				const bool can = !d.file.empty() && !d.name.empty() && !project().empty();
+				if (!can) { ImGui::BeginDisabled(); }
+
+				if (ImGui::Button("Import and build", ImVec2(170.0f, 0.0f)))
+				{
+					anim_request request;
+					request.file = fs::u8path(d.file);
+					request.name = d.name;
+					request.model = d.model;
+					request.type = types[d.type];
+					request.loop = d.loop;
+					request.tree = d.tree;
+					request.overwrite = d.overwrite;
+
+					if (import_anim(request, d.error))
+					{
+						ui::get().show_assets = true;
+						d.open = false;
+						d.error.clear();
+					}
+				}
+
+				if (!can) { ImGui::EndDisabled(); }
+
+				ImGui::SameLine();
+				if (ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)))
+				{
+					d.open = false;
+				}
+
+				if (project().empty())
+				{
+					ImGui::TextColored(yellow, "Open a map first: the assets belong to the project of a map.");
+				}
+
+				if (!d.error.empty())
+				{
+					ImGui::PushTextWrapPos(640.0f);
+					ImGui::TextColored(red, "%s", d.error.c_str());
+					ImGui::PopTextWrapPos();
+				}
+			}
+
+			ImGui::End();
+		}
+
 		// ---- GDT -------------------------------------------------------------------------------------------
 
 		struct gdt_dialog
@@ -664,8 +829,8 @@ namespace editor::assets
 			if (project().empty())
 			{
 				ImGui::PushTextWrapPos(0.0f);
-				ImGui::TextDisabled("Open a map first. Its own textures, materials and models are a project in mod\\<map> next to the editor; "
-					"they are built into <map>_assets.ff, which the editor shows and the map compile takes models from.");
+				ImGui::TextDisabled("Open a map first. Its own textures, materials, models, animations, sounds, effects and scripts are a project in "
+					"mod\\<map> next to the editor; they are built into <map>_assets.ff, which the editor shows and the map build takes them from.");
 				ImGui::PopTextWrapPos();
 				ImGui::End();
 				return;
@@ -721,12 +886,18 @@ namespace editor::assets
 				fs::create_directories(project_dir() / "images", ec);
 				fs::create_directories(project_dir() / "materials", ec);
 				fs::create_directories(project_dir() / "models", ec);
+				fs::create_directories(project_dir() / "anims", ec);
+				fs::create_directories(project_dir() / "soundaliases", ec);
+				fs::create_directories(project_dir() / "sound", ec);
+				fs::create_directories(project_dir() / "fx", ec);
+				fs::create_directories(project_dir() / "scripts" / "maps" / "mp", ec);
 				ShellExecuteW(main_window(), L"open", project_dir().wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 			}
 
 			if (ImGui::IsItemHovered())
 			{
-				ImGui::SetTooltip("%s\nimages\\ materials\\*.mtl models\\*.model, *.xmodel_export", to_utf8(project_dir()).c_str());
+				ImGui::SetTooltip("%s\nimages\\ materials\\*.mtl models\\*.model, *.xmodel_export\nanims\\*.anim, *.xanim_export soundaliases\\*.csv sound\\ fx\\<folder>\\*.efx\n"
+					"scripts\\maps\\mp\\<map>.gsc ..: taken into the built map as they are", to_utf8(project_dir()).c_str());
 			}
 
 			if (building)
@@ -751,6 +922,64 @@ namespace editor::assets
 			next_button("GDT ..");
 			if (ImGui::Button("GDT ..")) { open_gdt_dialog(); }
 
+			// what the editor does not draw: built into the zone, carried into the map by File > Build map
+			if (ImGui::Button("Import animation ..")) { open_anim_dialog(); }
+			next_button("Sounds ..");
+
+			if (ImGui::Button("Sounds .."))
+			{
+				std::string file, error;
+				if (browse(csv_filter, file) && !import_sounds(fs::u8path(file), {}, false, error))
+				{
+					ImGui::Toast(ImGuiToastType_Error, "Sounds", error.c_str(), 8000);
+				}
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("A soundaliases .csv ( columns as in the CoD4 mod tools ). The .wav files its file column names are taken\nfrom sound\\ next to the "
+					"csv's soundaliases\\ folder, curves ( .vfcurve ) and speaker maps ( .spkrmap ) from that folder.");
+			}
+
+			next_button("Effect ..");
+
+			if (ImGui::Button("Effect .."))
+			{
+				std::string file, error;
+				if (browse(efx_filter, file) && !import_fx(fs::u8path(file), {}, false, error))
+				{
+					ImGui::Toast(ImGuiToastType_Error, "Effect", error.c_str(), 8000);
+				}
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("An .efx of the effects editor. It is named by its place below an fx folder ( fx\\misc\\x.efx: misc/x ),\nwhich is what loadfx takes.");
+			}
+
+			next_button("Level script");
+
+			if (ImGui::Button("Level script"))
+			{
+				fs::path file;
+				std::string error;
+
+				if (!level_script(file, error))
+				{
+					ImGui::Toast(ImGuiToastType_Error, "Level script", error.c_str(), 8000);
+				}
+				else
+				{
+					ShellExecuteW(main_window(), L"open", L"explorer.exe", (L"/select,\"" + file.wstring() + L"\"").c_str(), nullptr, SW_SHOWNORMAL);
+				}
+			}
+
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("scripts\\maps\\mp\\<map>.gsc of the project: made with what the compiler would generate when it is not there.\n"
+					"File > Build map takes every file of scripts\\ in front of the generated one of the same name.");
+			}
+
 			ImGui::Separator();
 
 			const auto& list = items();
@@ -761,8 +990,9 @@ namespace editor::assets
 			if (list.empty())
 			{
 				ImGui::PushTextWrapPos(0.0f);
-				ImGui::TextDisabled("Nothing yet. \"New material ..\" makes a material from an image, \"Import model ..\" a model from xmodel_export files; "
-					"image files can also be dropped on the window. Sources put into the folder by hand show up with Rescan.");
+				ImGui::TextDisabled("Nothing yet. \"New material ..\" makes a material from an image, \"Import model ..\" a model from xmodel_export files, "
+					"\"Import animation ..\" an animation from an xanim_export, \"Sounds ..\" takes a soundaliases .csv with its .wav files, \"Effect ..\" an .efx; "
+					"the files can also be dropped on the window. Sources put into the folder by hand show up with Rescan.");
 				ImGui::PopTextWrapPos();
 			}
 			else if (ImGui::BeginChild("##assets", ImVec2(0.0f, -footer), false))
@@ -783,10 +1013,11 @@ namespace editor::assets
 					const auto& entry = list[static_cast<std::size_t>(i)];
 					ImGui::PushID(i);
 
-					const char* tag = entry.type == kind::image ? "image" : entry.type == kind::material ? "material" : "model";
-					const ImVec4 color = entry.state == status::built ? green : entry.state == status::failed ? red : entry.state == status::unused ? dim : yellow;
+					const char* tag = entry.type == kind::image ? "image" : entry.type == kind::material ? "material" : entry.type == kind::model ? "model"
+						: entry.type == kind::anim ? "anim" : entry.type == kind::sound ? "sound" : entry.type == kind::fx ? "fx" : "script";
+					const ImVec4 color = entry.state == status::built ? green : entry.state == status::failed ? red : entry.state == status::unused || entry.state == status::raw ? dim : yellow;
 					const char* word = entry.state == status::fresh ? "new" : entry.state == status::changed ? "changed" : entry.state == status::built ? "built"
-						: entry.state == status::failed ? "failed" : "unused";
+						: entry.state == status::failed ? "failed" : entry.state == status::raw ? "as is" : "unused";
 
 					ImGui::Separator();
 					ImGui::TextColored(color, "%s", word);
@@ -816,8 +1047,17 @@ namespace editor::assets
 
 					if (ImGui::IsItemHovered())
 					{
-						ImGui::SetTooltip("%s\n%s", to_utf8(entry.file).c_str(), entry.type == kind::material ? "Double click: the material of new brushes and of the selection."
-							: entry.type == kind::model ? "Double click: a new entity with the model where the camera looks." : "");
+						// how it is used: in the editor, or by the level script of the built map
+						const std::string use = entry.type == kind::material ? "Double click: the material of new brushes and of the selection."
+							: entry.type == kind::model ? "Double click: a new entity with the model where the camera looks."
+							: entry.type == kind::anim ? "File > Build map puts it into the map. Script: #using_animtree( \"<its animtree>\" ); in front of main(), then\n"
+								"ent setAnim( %" + entry.name + ", 1, 0, 1 ); on a script_model that has its model"
+							: entry.type == kind::sound ? "File > Build map puts the aliases into the map. Script: ent playSound( \"<alias>\" ); ent playLoopSound( \"<alias>\" );\n"
+								"ambientPlay( \"<alias>\" ); in the map: a script_sound entity"
+							: entry.type == kind::fx ? "File > Build map puts it into the map. Script: level._effect[ \"x\" ] = loadfx( \"" + entry.name + "\" ); playfx( level._effect[ \"x\" ], origin );\n"
+								"in the map: a script_fx entity with the key fx " + entry.name
+							: std::string();
+						ImGui::SetTooltip("%s\n%s", to_utf8(entry.file).c_str(), use.c_str());
 					}
 
 					ImGui::Indent(12.0f);
@@ -959,6 +1199,23 @@ namespace editor::assets
 		reset_distances(d);
 	}
 
+	void open_anim_dialog(const fs::path& file)
+	{
+		auto& d = g_anim;
+
+		if (!d.open || !file.empty())
+		{
+			d = {};
+		}
+
+		d.open = d.appearing = true;
+
+		if (!file.empty())
+		{
+			d.file = to_utf8(file);
+		}
+	}
+
 	void open_gdt_dialog(const fs::path& file)
 	{
 		auto& d = g_gdt;
@@ -978,7 +1235,7 @@ namespace editor::assets
 
 	void close_dialogs()
 	{
-		g_material.open = g_model.open = g_gdt.open = false;
+		g_material.open = g_model.open = g_gdt.open = g_anim.open = false;
 	}
 
 	void draw_windows()
@@ -987,5 +1244,6 @@ namespace editor::assets
 		draw_material_dialog();
 		draw_model_dialog();
 		draw_gdt_dialog();
+		draw_anim_dialog();
 	}
 }

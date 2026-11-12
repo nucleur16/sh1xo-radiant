@@ -44,7 +44,8 @@ needed. What it is made of:
 | Radiant | `CoDOLRadiant.exe` | open a map of the install, edit entities / models / brushes in 3D and 2D views with undo, save as `.map` |
 | `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce, light grid, reflection probes ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
 | editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes. It patches the shipped zone; no light bake. |
-| Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials and models: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export` -> native assets in `mod\<map>\<map>_assets.ff`, shown by the editor at once. See [Your own assets](#your-own-assets). `codol_assetc` alone also compiles animations ( `xanim_export` ), sounds ( soundalias `.csv`, `.wav` ) and effects ( `.efx` ). |
+| Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials, models, animations, sounds and effects: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export`, `xanim_export`, soundalias `.csv` + `.wav`, `.efx` -> native assets in `mod\<map>\<map>_assets.ff`. Materials and models are shown by the editor at once; animations, sounds and effects are for the level script of the built map. See [Your own assets](#your-own-assets). |
+| the zone source `.csv` of a map, `linker_pc` on it | `tools\package_map.ps1` ( part of File > Build map ) | puts the project's assets, animtrees, animlist and scripts into the map zone ( `codol_assetc --carry`, `--rawfile` ), adds the minimap material, builds the load zone and writes the package |
 | `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
 | script editing | Script Workbench, rcon reload | unchanged |
 
@@ -67,15 +68,19 @@ in the client; `codol_bsp/README.md` and `codol_mapc/README.md` list what was ch
    | | |
    |---|---|
    | `zone\<map>.ff`, `zone\<map>_load.ff` | the map zone ( with the minimap material `compass_map_<map>` ) and its load zone; a picture `map_source\<map>_load.png` becomes the loading screen |
-   | `scripts\maps\mp\<map>.gsc` ( + `_fx`, `createfx` ) | the level script for the dedicated server's script folder |
+   | `scripts\maps\mp\<map>.gsc` ( + `_fx`, `createfx` ) | the level script for the dedicated server's script folder: generated, or your own ( below ) |
+   | `main\zz_<project>_sounds.iwd` | only when the project has streamed sounds: their files, for `<install>\main\` |
    | `presence\` | the row, arena entry and name for the create-room list, and `INSTALL.txt`: where every file goes |
-   | `work\<map>.report.txt` | what the compiler did: counts, timings, warnings |
+   | `work\<map>.report.txt`, `work\scripts\` | what the compiler did: counts, timings, warnings; the scripts as the compiler generated them |
 
-   Materials and models of the map's asset project ( next section ) are taken into the zone.
+   From the map's asset project ( next section ) the zone gets: the materials and models the map uses ( the
+   compiler takes them ), and after the compile every animation, sound alias ( with its loaded sounds and curves ),
+   effect and model of the project's zone, the animtrees and the animlist of the animations, and the files of the
+   project's `scripts\` folder as rawfiles. See [In the built map](#in-the-built-map).
 
-5. **File > Install the built map into the game** copies the zones to `<install>\usermaps\<map>\` and the level
-   scripts to the server's script folder ( File > Settings ). Start the lobby with `CODOL_FORCE_MAP=<map>` to play it;
-   `presence\INSTALL.txt` describes the create-room list.
+5. **File > Install the built map into the game** copies the zones to `<install>\usermaps\<map>\`, the sound
+   archive to `<install>\main\` and the scripts to the server's script folder ( File > Settings ). Start the lobby
+   with `CODOL_FORCE_MAP=<map>` to play it; `presence\INSTALL.txt` describes the create-room list.
 
 Console: `map_new <name>`, `ed_gameplay`, `map_build [fast]`, `map_install [zone folder] [script folder]`.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
@@ -92,25 +97,42 @@ mod\<project>\materials\*.mtl                    material definitions ( codol_as
 mod\<project>\models\<name>.model                a model: LOD files with distances, collision LOD, material names
 mod\<project>\models\*.xmodel_export             LOD files; one that no .model names is a model of one LOD
                                                  ( <name>_lod0 .. _lod3.xmodel_export belong together )
+mod\<project>\anims\<name>.anim                  an animation: its xanim_export, model, type, loop, animtree
+mod\<project>\anims\*.xanim_export               one that no .anim names is an animation of that name, no options
+mod\<project>\soundaliases\*.csv                 sound aliases ( columns of the CoD4 mod tools ); *.vfcurve, *.spkrmap
+mod\<project>\sound\<file>                       what the file column of the aliases names ( .wav, streamed: .mp3 / .wav )
+mod\<project>\fx\<folder>\<name>.efx             an effect; its name is <folder>/<name>, what loadfx takes
+mod\<project>\scripts\..                         your own scripts: maps\mp\<map>.gsc, animtrees\<tree>.atr ..; not
+                                                 compiled, the built map takes them as they are
+mod\<project>\generated\animtrees\<tree>.atr     written by the build: one per animtree the animations name
+mod\<project>\generated\animlists\map.animlist   written by the build: becomes animlists/<map>.animlist of the map
+mod\<project>\zz_<project>_sounds.iwd            written by the build: the streamed sound files
 mod\<project>\<project>_assets.ff                 the zone built from all of it
 mod\<project>\build_state.txt                     what the last build made of each source
 mod\codol_matlib.txt                             the material library: one scan of the install ( 20 s, once )
+mod\codol_fxatlas.txt                            the texture atlases of the install's materials ( 30 s, once, with
+                                                 the first effect )
 ```
 
 **View > Assets** lists every source with its status - new, changed, built, failed with the compiler's message,
-unused ( an image no material names ) - and has **Build**. A build compiles everything again on a worker thread
-( `codol_assets`: `compile_image`, `compile_material`, `compile_model`, `AssetLinker` ) into a new zone; the editor
-stays usable. The renderer then takes the zone without loading the map again ( `map_renderer::register_zone` ), and
-every mesh and placed model is made again from it.
+unused ( an image no material names ), as is ( a script file ) - and has **Build**. A build compiles everything
+again on a worker thread ( `codol_assets`: `compile_image`, `compile_material`, `compile_model`, `compile_anim`,
+`build_sound_aliases`, `compile_fx`, `AssetLinker` ) into a new zone; the editor stays usable. The renderer then
+takes the zone without loading the map again ( `map_renderer::register_zone` ), and every mesh and placed model is
+made again from it. Animations, sounds and effects are built and listed but not shown or played by the editor.
 
 | what | where | command |
 |---|---|---|
 | material from images | Materials > **New material ..**, Assets window, or drop image files on the editor window ( `_n` / `_nml` / `_normal` and `_s` / `_spc` / `_spec` at the end of a name fill the normal and specular map ) | `asset_new_material <name> <kind> <colour map> [normal=<file>] [specular=<file>] [surface=<type>] [overwrite]` |
 | model | Models > **Import model ..**, or drop `.xmodel_export` files | `asset_import_model <name> <lod0>[@dist] [<lod1>[@dist] ..] [collision=<lod>] [mtl:<export material>=<material>] [overwrite]` |
 | materials of a CoD4 `.gdt` | Materials > **GDT ..**, or drop a `.gdt` | `asset_gdt <file> [root=<folder the image paths start from>] [overwrite] [all \| <material> ..]` ( without a choice: the list ) |
+| animation | Assets > **Import animation ..**, or drop an `.xanim_export` | `asset_import_anim <file.xanim_export> [name=<name>] [model=<model of the project \| file.xmodel_export>] [type=relative\|delta\|delta3d] [loop] [tree=<animtree>] [overwrite]` |
+| sound aliases | Assets > **Sounds ..**, or drop a soundaliases `.csv`: the csv is copied with the sound files, curves and speaker maps it names ( from `sound\` and `soundaliases\` around it ) | `asset_import_sounds <file.csv> [root=<folder with sound\ and soundaliases\>] [overwrite]` |
+| effect | Assets > **Effect ..**, or drop an `.efx`; it is named by its place below an `fx` folder ( `..\fx\misc\x.efx`: `misc/x` ), else `<project>/<file>` | `asset_import_fx <file.efx> [name=<folder/name>] [overwrite]` |
+| level script | Assets > **Level script**: makes `scripts\maps\mp\<map>.gsc` with what the compiler would generate, to start from | `asset_level_script [<file.gsc>]` ( with a file: a copy of it ) |
 | build, list | Assets window | `asset_build`, `asset_list`, `asset_rescan`, `asset_status`, `asset_project [name]` |
 | check the zone | | `asset_verify` ( `codol_assetc --verify`: the game's loaders read the zone, it is written again and compared ) |
-| the windows, for unattended runs | | `asset_dialog material \| model \| gdt [file] \| close`, `asset_drop <file> ..` ( what dropping the files does ), `ed_windows a` |
+| the windows, for unattended runs | | `asset_dialog material \| model \| anim [file] \| gdt [file] \| close`, `asset_drop <file> ..` ( what dropping the files does ), `ed_windows a` |
 
 Material kinds ( the technique set follows from the kind and the maps given, as `codol_assets` `techset_for` has it ):
 `world`, `world_alpha` ( alpha tested ), `world_blend`, `decal`, `world_unlit` become `wc/<name>`; `model`,
@@ -131,12 +153,85 @@ right away and is applied like any other ( browser, `tex_set` ). A model is plac
 * Images are stored inline in the zone ( DXT ), which no shipped material texture does; see "Not done, taken on
   trust" in `codol_assets/README.md`. Nothing of this has been loaded by the game client or a server from the editor.
 
-Animations, sounds and effects are not part of the project folder yet: compile them with `codol_assetc --xanim` /
-`--soundalias` / `--fx` ( `codol_assets/README.md` ) into the map zone after File > Build map.
+**Animations, sounds, effects.** What each source is and how it is compiled: `codol_assets/README.md`,
+"Animations", "Sounds", "Effects".
+
+* An animation needs the model it is for ( the `xanim_export` has no bone hierarchy ): a model of the project by
+  its name, or an `.xmodel_export` file. Without one every part is taken as a root - right for a model of one bone.
+  Every animation belongs to an animtree, by default one named after the project; the build writes
+  `generated\animtrees\<tree>.atr` ( one name per line ) and `generated\animlists\map.animlist`.
+* A soundaliases `.csv` is one line of the Assets window with everything it names. Loaded sounds go into the zone,
+  streamed files into `zz_<project>_sounds.iwd`. A file that is not under `sound\` is referenced by name - a sound of
+  the game.
+* An effect names materials of the project or of the game; effects it emits are read from `fx\<name>.efx` of the
+  project.
+
+#### In the built map
+
+File > Build map ( `tools\package_map.ps1 -Assets <project zone> -Project <project folder>` ) puts the project into
+the zone of the map, so that a level script can use it:
+
+| from the project | in `compiled\<map>\` |
+|---|---|
+| the zone's animations, sound alias lists, loaded sounds, curves, effects and models, each with what it points at ( materials, images, technique sets ) | assets of `zone\<map>.ff` ( `codol_assetc --carry`; what the compiler already took stays as it is ) |
+| `generated\animtrees\<tree>.atr` | rawfile `animtrees/<tree>.atr` |
+| `generated\animlists\map.animlist` | rawfile `animlists/<map>.animlist` ( the compiler's empty one is replaced ) |
+| `scripts\<path>` | rawfile `<path>` and `scripts\<path>` |
+| `zz_<project>_sounds.iwd` | `main\zz_<project>_sounds.iwd` |
+
+**The rule for scripts:** a file of `mod\<project>\scripts\` goes in front of a generated file of the same path.
+`scripts\maps\mp\<map>.gsc` is the level script instead of the generated one, `scripts\animtrees\<tree>.atr`
+replaces the generated animtree ( it then has to list the project's animations of that tree; the Assets window says
+when it does not ), `scripts\animlists\<map>.animlist` the generated animlist. What the compiler generated is kept in
+`compiled\<map>\work\scripts\`. Files that an earlier build put into `scripts\` or `main\` of the package and that
+are not made any more are removed; nothing else is deleted. A level script of your own has to make the calls of
+the generated one - Assets > **Level script** writes them:
+
+```
+#include maps\mp\_utility;
+#using_animtree( "mp_mymap" );                                    // the animtree of the project's animations
+
+main()
+{
+	level._effect[ "sparks" ] = loadfx( "misc/my_sparks" );       // fx\misc\my_sparks.efx
+	precacheModel( "my_lidbox" );                                 // a model no entity of the map uses
+	maps\mp\mp_mymap_fx::main();                                  // generated: the script_fx / script_sound entities
+	maps\mp\_load::main();
+	maps\mp\_compass::setupMiniMap( "compass_map_mp_mymap" );
+	game[ "attackers" ] = "allies";
+	game[ "defenders" ] = "axis";
+	level thread show();
+}
+
+show()
+{
+	wait 5;
+	box = spawn( "script_model", ( 0, 0, 64 ) );
+	box setModel( "my_lidbox" );
+	box setAnim( %my_lid_open, 1, 0, 1 );                         // anims\my_lid_open.anim, model my_lidbox
+	box playSound( "my_beep" );                                   // an alias of soundaliases\*.csv
+	playfx( level._effect[ "sparks" ], box.origin );
+}
+```
+
+Checked on the dedicated server ( loopback, no client; `mp_edassets2`, a room with one model, two animations, one
+alias file and one effect imported and built in the editor, File > Build map, `map_install` into a link based copy
+of the install ): the server mounts the map zone, reads `animlists/mp_edassets2.animlist` ( 2 entries ) and
+`animtrees/mp_edassets2.atr` from it, runs the project's level script with 0 script errors, `getAnimLength` gives 2
+and 1.33 s, `setAnim` binds the script model to the tree, `loadfx` / `playfx` and `playSound` / `playLoopSound` /
+`ambientPlay` run; the server's own decoders take the animations and the model. Controls: the same script with an
+alias no zone has stops with "unknown sound alias", the same package without the carried assets with "xanim .. is
+not in any mounted zone". **Not checked: a client.** Nobody has seen one of these animations or effects or heard
+one of the sounds, and the dedicated server gives `loadfx` an id for any name, so for effects the run only shows
+that the zone mounts and the script runs.
 
 Not there: deleting or renaming an asset from the editor ( delete the files, Rescan ), editing a material's
-definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import windows, streamed images ( `.iwi` in an
-`.iwd` ), per image options ( format, `flipy` ).
+definition in a window ( edit the `.mtl`, Build ), a 3D preview in the import windows, playing an animation, a sound
+or an effect in the editor, streamed images ( `.iwi` in an `.iwd` ), per image options ( format, `flipy` ), the less
+common animation options ( `deltapart`, `assettype`, tolerances: `codol_assetc --xanim` has them ), copying the
+effects an effect emits on import ( put them into `fx\` by hand ). The shipped animtrees ( `animated_props` .. ) are
+not extended: give your animations a tree of their own. Sounds and effects of a map edited with File > Compile map
+( `codol_mapc` ) are not carried - only File > Build map does it.
 ## What works
 
 | Area | Status |
@@ -161,12 +256,11 @@ Be aware of these before planning work around this branch:
   `codol_bsp/README.md`.
 - **Static models have no player collision of their own.** As in the shipped maps, bullets hit a `misc_model`,
   players do not: put clip brushes around models.
-- **Animations, sounds and effects of your own are command line only, and nobody has seen or heard one in the
-  game.** `codol_assetc` compiles `xanim_export` ( `--xanim` ), soundalias `.csv` + `.wav` ( `--soundalias` ) and
-  `.efx` ( `--fx` ) into a zone - into the built map zone with `--base compiled\<map>\zone\<map>.ff` - and the
-  dedicated server runs a level script that uses them ( `codol_assets/README.md`: "Animations", "Sounds",
-  "Effects", "On a dedicated server" ). The Assets window does not list or build them yet, and an animation also
-  needs two rawfiles in the map zone ( `animtrees/<tree>.atr`, `animlists/<map>.animlist` ).
+- **Nobody has seen or heard an animation, sound or effect of your own in the game.** The Assets window builds
+  them and File > Build map puts them into the map with their animtrees, animlist and your level script; a
+  dedicated server runs a level script that uses them without a script error ( [In the built map](#in-the-built-map) ).
+  No client has loaded such a map, the editor does not play them, and streamed sounds need their `.iwd` in the
+  game's `main\` folder - a plain archive next to the game's own, which was not tried.
 - **Editing a shipped map** ( File > Compile map ) cannot draw new world materials, does not remove render surfaces
   of deleted brushes and does not re-bake light. For that, build the map from scratch.
 - **Imported maps hold collision brushes only.** Brush sides get the right material but a default projection;

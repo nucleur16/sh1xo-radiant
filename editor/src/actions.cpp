@@ -935,6 +935,11 @@ namespace editor::ui
 			{
 				game::printf_to_console("^3[CoDOL] build: Edit > Add gameplay entities puts the care package and the helicopter path in\n");
 			}
+
+			for (const auto& line : assets::package_problems())
+			{
+				game::printf_to_console("^3[CoDOL] build: %s\n", line.c_str());
+			}
 		}
 
 		const auto map_file = s.map_file;
@@ -964,6 +969,7 @@ namespace editor::ui
 				+ "\" -Assetc \"" + to_utf8(assetc) + "\"";
 
 			if (with_assets) { command_line += " -Assets \"" + to_utf8(assets_zone) + "\""; }
+			command_line += assets::package_arguments();
 			if (const auto picture = map_file.parent_path() / (name + "_load.png"); std::filesystem::is_regular_file(picture, ec)) { command_line += " -Loadscreen \"" + to_utf8(picture) + "\""; }
 			if (fast) { command_line += " -Fast"; }
 		}
@@ -1086,6 +1092,26 @@ namespace editor::ui
 			if (entry.is_regular_file() && entry.path().extension() == ".ff")
 			{
 				copy(entry.path(), zone_dir / entry.path().filename());
+			}
+		}
+
+		// the streamed sounds of the project: next to the game's archives. Only into the install itself - a zone
+		// folder given by hand says nothing about where main\ is
+		for (const auto& entry : std::filesystem::directory_iterator(package / "main", ec))
+		{
+			if (!entry.is_regular_file() || entry.path().extension() != ".iwd")
+			{
+				continue;
+			}
+
+			if (zone_to.empty() && !install.empty())
+			{
+				copy(entry.path(), std::filesystem::u8path(install) / "main" / entry.path().filename());
+			}
+			else
+			{
+				game::printf_to_console("^3[CoDOL] install: compiled\\%s\\main\\%s ( streamed sounds ) belongs into the game's main folder: not copied, the zone folder was given by hand\n",
+					name.c_str(), to_utf8(entry.path().filename()).c_str());
 			}
 		}
 

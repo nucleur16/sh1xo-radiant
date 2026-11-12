@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Map, [Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Out,
       [string]$Game = 'D:\CoD\CODOL Builds\Call of Duty Online 1.1.1.13', [string[]]$Assets = @(), [string]$Loadscreen, [string]$DisplayName,
-      [string]$Environment = 'urban', [string]$Cache, [string[]]$Extra = @(), [string]$Bsp, [string]$Assetc, [switch]$Fast)
+      [string]$Environment = 'urban', [string]$Cache, [string[]]$Extra = @(), [string]$Bsp, [string]$Assetc, [switch]$Fast, [string]$Project,
+      [string]$Carry = 'xanim,sndcurve,loaded_sound,sound,fx,xmodel')
 # A map with everything around it, from a .map:
 #
 #   <Out>\zone\<Name>.ff            the map zone: world, collision, lights, the minimap material compass_map_<Name> with
@@ -8,10 +9,22 @@ param([Parameter(Mandatory)][string]$Map, [Parameter(Mandatory)][string]$Name, [
 #   <Out>\zone\<Name>_load.ff       the loading screen zone; with -Loadscreen <picture>: $levelbriefing / $defeatbackdrop
 #                                   show that picture ( image loadscreen_<Name>, inline in the zone )
 #   <Out>\scripts\maps\mp\<Name>.gsc ( + _fx, createfx )   the level script for the dedicated server's script folder
+#   <Out>\main\zz_*_sounds.iwd      the streamed sound files of the project, when it has any
 #   <Out>\presence\                 what the create-room list needs, and INSTALL.txt: where every file goes
 #
-# -Assets: codol_assetc project zones the map takes materials / models from. -Extra: further codol_bsp arguments.
-# Nothing is written outside <Out>; the install is only read.
+# -Assets: codol_assetc project zones. The compiler takes the materials and models the map uses from them; after it
+#   everything a script can name - animations, sound aliases with their loaded sounds and curves, effects, models
+#   ( -Carry: the asset types ) - is carried into the map zone with what it points at ( codol_assetc --carry ).
+# -Project: the folder of an asset project ( the editor's mod\<project> ). From it:
+#     generated\animtrees\<tree>.atr     -> rawfile animtrees/<tree>.atr of the map zone   ( written by the asset build:
+#     generated\animlists\map.animlist   -> rawfile animlists/<Name>.animlist                the animtrees of its animations )
+#     scripts\<path>                     -> rawfile <path> of the map zone and <Out>\scripts\<path>
+#     zz_*_sounds.iwd                    -> <Out>\main\
+#   The rule for scripts: a file of the project's scripts\ is taken as it is and goes in front of a generated file of
+#   the same path - the level script maps\mp\<Name>.gsc, the effect scripts, an animtree, the animlist. What the
+#   compiler generated stays in <Out>\work\scripts for reference. A level script of your own has to call
+#   maps\mp\<Name>_fx::main() and maps\mp\_load::main() itself.
+# -Extra: further codol_bsp arguments. Nothing is written outside <Out>; the install is only read.
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $Bsp) { $Bsp = "$root\build\codol_bsp\Release\codol_bsp.exe" }
@@ -21,17 +34,18 @@ if ($Name -notmatch '^[a-z0-9_]+$') { throw 'the map name may only hold a-z, 0-9
 if (-not $DisplayName) { $DisplayName = $Name }
 if (-not $Cache) { $Cache = "$Out\work" }
 $zone = "$Out\zone"; $work = "$Out\work"; $presence = "$Out\presence"
-New-Item -ItemType Directory -Force $zone, $work, $presence, "$Out\scripts" | Out-Null
+New-Item -ItemType Directory -Force $zone, $work, $presence, "$Out\scripts", "$work\scripts" | Out-Null
+if ($Project -and -not (Test-Path $Project -PathType Container)) { throw "-Project $Project is not a folder" }
 
 # 1. the map
 $a = @('--map', $Map, '--exe', "$Game\C1.exe", '--install', $Game, '--out', "$zone\$Name.ff", '--name', $Name, '--cache', $Cache,
-       '--report', "$work\$Name.report.txt", '--minimap', "$work\compass_map_$Name.tga", '--scripts', "$Out\scripts")
+       '--report', "$work\$Name.report.txt", '--minimap', "$work\compass_map_$Name.tga", '--scripts', "$work\scripts")
 foreach ($z in $Assets) { $a += @('--assets', $z) }
 if ($Fast) { $a += '--fast' }
 & $Bsp @a @Extra | Select-Object -Last 2
 if ($LASTEXITCODE) { throw 'codol_bsp failed' }
 
-# 2. the minimap material, into the map zone
+# 2. into the map zone: the minimap material, what a script can name of the project zones, the project's rawfiles
 Set-Content "$work\minimap.mtl" -Encoding ASCII -Value @"
 // the compass of ${Name}: the picture codol_bsp rendered
 material "compass_map_$Name"
@@ -40,9 +54,56 @@ material "compass_map_$Name"
 	colorMap compass_map_$Name clamp
 }
 "@
-& $Assetc --install $Game --base "$zone\$Name.ff" --name $Name --out "$zone\$Name.ff" --matlib "$Cache\codol_matlib.txt" `
-  --image "compass_map_$Name=$work\compass_map_$Name.tga" --material "$work\minimap.mtl" | Select-String -Pattern 'compass_map|wrote|rror' | ForEach-Object { '  ' + $_.Line.Trim() }
-if ($LASTEXITCODE) { throw 'adding the minimap material failed' }
+$b = @('--install', $Game, '--base', "$zone\$Name.ff", '--name', $Name, '--out', "$zone\$Name.ff", '--matlib', "$Cache\codol_matlib.txt",
+       '--image', "compass_map_$Name=$work\compass_map_$Name.tga", '--material', "$work\minimap.mtl")
+if ($Carry) { foreach ($z in $Assets) { $b += @('--carry', "$z,$Carry") } }
+# rawfile name -> file; a later entry of the same name ( any case ) replaces an earlier one: the project's scripts last
+$raw = [ordered]@{}
+$mine = [ordered]@{}		# path below scripts\ -> file
+if ($Project) {
+  $root = (Resolve-Path $Project).Path.TrimEnd('\')
+  if (Test-Path "$root\generated\animtrees") { Get-ChildItem "$root\generated\animtrees" -File -Filter *.atr | ForEach-Object { $raw["animtrees/$($_.Name)"] = $_.FullName } }
+  if (Test-Path "$root\generated\animlists\map.animlist") { $raw["animlists/$Name.animlist"] = "$root\generated\animlists\map.animlist" }
+  if (Test-Path "$root\scripts") {
+    Get-ChildItem "$root\scripts" -File -Recurse | Sort-Object FullName | ForEach-Object {
+      $rel = $_.FullName.Substring("$root\scripts\".Length)
+      if ($rel -match '[=,"]') { throw "scripts\${rel}: a script path cannot hold = , or a quote" }
+      $mine[$rel] = $_.FullName
+      $raw[($rel -replace '\\', '/')] = $_.FullName
+    }
+  }
+}
+foreach ($k in $raw.Keys) { $b += @('--rawfile', "$k=$($raw[$k])") }
+& $Assetc @b | Select-String -Pattern 'compass_map|carried|kept|warning|wrote|rror' | ForEach-Object { '  ' + $_.Line.Trim() }
+if ($LASTEXITCODE) { throw 'adding the minimap material and the project assets to the map zone failed' }
+foreach ($k in $raw.Keys) { "  rawfile $k  <-  $($raw[$k])" }
+
+# 2b. the script folder of the package and the sound archive. Files this script put there in an earlier run and
+#     does not make any more are removed ( work\package_files.txt lists them ); nothing else is deleted.
+$made = @()
+$put = {
+  param($from, $rel)
+  $to = Join-Path $Out $rel
+  New-Item -ItemType Directory -Force (Split-Path $to) | Out-Null
+  Copy-Item -LiteralPath $from -Destination $to -Force
+  $script:made += $rel
+}
+Get-ChildItem "$work\scripts" -File -Recurse | ForEach-Object {
+  $rel = $_.FullName.Substring("$work\scripts\".Length)
+  if ($mine.Contains($rel)) { "  script $rel`: the project's, in front of the generated one ( kept in work\scripts )" } else { & $put $_.FullName "scripts\$rel" }
+}
+foreach ($rel in $mine.Keys) { & $put $mine[$rel] "scripts\$rel" }
+$archives = @()
+if ($Project) { $archives = @(Get-ChildItem $Project -File -Filter 'zz_*.iwd') }
+foreach ($f in $archives) { & $put $f.FullName "main\$($f.Name)"; "  sound archive main\$($f.Name)  $($f.Length) bytes" }
+$manifest = "$work\package_files.txt"
+if (Test-Path $manifest) {
+  Get-Content $manifest | Where-Object { $_ -and ($made -notcontains $_) -and ($_ -match '^(scripts|main)\\') -and ($_ -notmatch '\.\.') } | ForEach-Object {
+    $old = Join-Path $Out $_
+    if (Test-Path -LiteralPath $old -PathType Leaf) { Remove-Item -LiteralPath $old -Force; "  removed $_ ( of an earlier build )" }
+  }
+}
+Set-Content $manifest -Encoding UTF8 -Value $made
 
 # 3. the loading screen
 if ($Loadscreen) {
@@ -96,6 +157,18 @@ USERMAP_INFO["$Name"] = dict(name="$key", desc="${key}_DESC", image="sfproto_$Na
 NEW_LOCALIZE["$key"] = u"$DisplayName"
 NEW_LOCALIZE["${key}_DESC"] = u"$DisplayName"
 "@
+$projectNote = ''
+if ($mine.Count) {
+  $projectNote += "   From the asset project ( in front of the generated files of the same path, and rawfiles of $Name.ff as well ):`r`n"
+  $projectNote += (($mine.Keys | ForEach-Object { "     scripts\$_" }) -join "`r`n") + "`r`n"
+  $projectNote += "   Copy the whole scripts\ folder into <server>\bin\home\codol_rawfiles\ ( the paths below it are the script paths ).`r`n"
+}
+if ($archives.Count) {
+  $projectNote += "`r`n2a. streamed sounds`r`n"
+  $projectNote += (($archives | ForEach-Object { "     main\$($_.Name)" }) -join "`r`n") + "  ->  <game>\main\`r`n"
+  $projectNote += "   The streamed sound files ( sound\<file> ) of the map's sound aliases: a plain archive next to the game's own.`r`n"
+  $projectNote += "   Without it the aliases exist and play nothing.`r`n"
+}
 Set-Content "$presence\INSTALL.txt" -Encoding ASCII -Value @"
 $Name - where the files go ( <game> = the Call of Duty Online 1.1.1.13 folder, <server> = CoD4x_Server )
 
@@ -108,7 +181,7 @@ $Name - where the files go ( <game> = the Call of Duty Online 1.1.1.13 folder, <
      scripts\maps\mp\${Name}_fx.gsc, scripts\maps\createfx\${Name}_fx.gsc go next to it only when the server should
      run the effects itself; the client takes both from the zone ( they are rawfiles of $Name.ff ).
    Without the level script the map still runs ( "no level script" ), without minimap setup.
-
+$projectNote
 3. the create-room list ( map pool row, arena entry, localized name )
    These three live in one patch zone, client_shipRetail\patch\usermaps_patch.ff, which the install's own script
    rebuilds from the folders under usermaps\:

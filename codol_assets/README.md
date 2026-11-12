@@ -51,7 +51,7 @@ ctest --test-dir build/codol_assets_x64 -C Release
 
 Standalone like `codol_zone`: static CRT, `/std:c++latest /W4 /WX`, builds `codol_zone` and `codol_render` with it.
 `CODOL_ASSETS_GAME_DIR` ( CMake cache or environment ) names a 1.1.1.13 install for the part of the tests that
-builds a zone; without one that part is skipped. 475 checks ( x64 ).
+builds a zone; without one that part is skipped. 496 checks ( x64 ).
 
 ## codol_assetc
 
@@ -79,6 +79,8 @@ codol_assetc --install <1.1.1.13 install> --out <zone.ff> [options] [assets]
   --sound-root <dir>        the folder that holds sound/ and soundaliases/ ( default: above soundaliases/, else the csv's folder )
   --fx <name>=<file.efx>    an effect, named as loadfx takes it ( misc/my_effect ); effects it emits: <name>.efx of the same fx folder
   --fx-atlas <file>         atlas table of the shipped materials; default <out dir>/codol_fxatlas.txt, made on first use ( 30 s )
+  --carry <zone.ff>[,<type> ..]   take assets of another fast file as they are, each with what it points at; default:
+                            xanim, sndcurve, loaded_sound, sound, fx; types as --verify prints them, or all ( "Linking" )
   --rawfile <name>=<file>   also: animtrees/<tree>.atr, animlists/<map>.animlist ( "Animations" )
 
 codol_assetc --verify <zone.ff> --install <dir>
@@ -826,7 +828,8 @@ playfx( level._effect[ "my_effect" ], ( 0, 0, 64 ) );
   written, as in the shipped effects.
 * The atlas of a material that is neither in the zone being built nor in a shipped zone is taken from
   `atlasColIndexBits` / `atlasRowIndexBits` of the file.
-* The editor is not wired: `editor/src/assets.cpp` does not know effects yet.
+* In the editor an effect is a file `mod\<project>\fx\<folder>\<name>.efx`; emitted effects are read from that
+  `fx\` folder ( `docs/CODOL.md`, "Your own assets" ).
 
 ## Linking
 
@@ -848,6 +851,22 @@ How shipped zones refer to assets ( `codol_asset_probe graph` ), and what `Asset
 * Order: an asset comes after everything it points at.
 * The zone is written by running the game's loaders over the asset graph ( `codol_zone` ), so block, alignment and
   order of every piece are the game's. A zone the loaders do not accept is not written.
+
+**From one zone into another** ( `AssetLinker::carry`, `codol_assetc --carry <zone.ff>[,<type> ..]` ): every top
+level asset of the given types of another fast file is copied as it is, in the order of that file, with the assets
+it points at ( `ZoneEditor::add_asset_closure` ) - a model with its materials, images and technique sets, an alias
+list with its loaded sounds and curve, an effect with the materials it draws. An asset whose type and name the zone
+already has stays as it is; one that cannot be copied is reported and the others still go in. This is how the
+assets of an editor project get into the zone of a map ( `codol_bsp/tools/package_map.ps1` ):
+
+```
+> codol_assetc --install <game> --base mp_mymap.ff --out mp_mymap.ff --carry mod\mp_mymap\mp_mymap_assets.ff,xanim,sndcurve,loaded_sound,sound,fx,xmodel
+    --rawfile animtrees/mp_mymap.atr=.. --rawfile animlists/mp_mymap.animlist=..
+carried from mp_mymap_assets.ff: 2 xanim, 1 xmodel, 4 sound, 1 sndcurve, 3 loaded_sound, 1 fx ( and 4 assets they point at )
+```
+
+The unit test carries the animations and the model of the test zone into a new zone and reads them back; the zone
+of the editor run below ( 33 assets ) loads with the game's loaders and writes back identical.
 
 ## Verification
 
@@ -1026,6 +1045,18 @@ no 4-bit client tree id", `playSound( "codol_test_missing" )` is "unknown sound 
 animlist and the sound aliases are found in the zone. **`loadfx` of a name that no zone has gives an id as well**
 ( 4, no warning ): for effects the run shows that the zone mounts and the script runs, nothing about the effect.
 
+**From the editor** ( `docs/CODOL.md`, "In the built map"; loopback, port 17755, a base of its own ). A room
+`mp_edassets2`; in CoDOL Radiant, unattended: `asset_new_material`, `asset_import_model codol_test_lidbox`,
+`asset_import_anim` twice ( the lid with `model=codol_test_lidbox` ), `asset_import_sounds`, `asset_import_fx`,
+`asset_level_script <the script of tests/asset_probe.ps1 with #using_animtree( "mp_edassets2" )>`, `map_build fast`,
+`map_install <base>\client_shipRetail\chinese <overlay>`. The project zone has 16 assets, the map zone 33 ( both:
+loaders accept, read -> write identical ). `+map mp_edassets2`: `animlists: mp_edassets2.animlist loaded, 2 entries`,
+`mounted animtree: animtrees/mp_edassets2.atr`, the same answers as in the table above ( lengths 2 and 1.33333, notes
+0.5 and 1, `bound server tree 6 'mp_edassets2' ( 3 entries ) / client tree 9`, `loadfx` id 3, every sound call ran,
+`codol_checkxanim` status 1 for both, `codol_checkmodel` complete ), 0 script errors. Controls: with `playSound(
+"codol_test_missing" )` in the script the server stops with "unknown sound alias"; the same package built without
+`--carry` gives "xanim 'codol_test_spin' is not in any mounted zone" and a script runtime error.
+
 ## For the editor
 
 Everything is in the library; the tool is a thin shell around it. Keep one `MaterialLibrary` ( `open` with a cache
@@ -1033,7 +1064,9 @@ file ) and write new assets into a zone of their own in a folder the renderer se
 `extra_zones` of `codol_view` ), or hand the file to the renderer while a map is loaded ( `map_renderer::register_zone` ).
 
 CoDOL Radiant does exactly this ( `editor/src/assets.cpp`, `asset_windows.cpp`; `docs/CODOL.md`, "Your own assets" ):
-a project folder per map, a build on a worker thread, the Assets window, "New material ..", "Import model ..", GDT.
+a project folder per map, a build on a worker thread, the Assets window, "New material ..", "Import model ..", GDT,
+"Import animation ..", "Sounds ..", "Effect ..". File > Build map carries the zone's animations, sounds, effects and
+models into the map zone ( `--carry`, "Linking" ) with the animtrees, the animlist and the project's scripts.
 
 **New material from image**
 
@@ -1064,8 +1097,7 @@ linker.add_model(model);  linker.write(..);
 // renderer: add_model( modelName, origin, angles )
 ```
 
-**Animation, sounds, effect** ( not wired into `editor/src/assets.cpp` yet: its project scan, item list, build job
-and windows know images, materials and models; the calls are these )
+**Animation, sounds, effect** ( `run_build` of `editor/src/assets.cpp` makes these calls )
 
 ```cpp
 ExportAnim source;                           load_xanim_export(file, source);
@@ -1111,7 +1143,7 @@ link_fx(linker.editor(), fx);
 * A by-name reference to a technique set, image or material that no loaded zone defines gives the game's default
   asset; the linker does not check that a referenced image or material exists anywhere.
 * Animations, sounds and effects: see their own "not done" lists above. In short: none has been seen or heard in a
-  client; the editor does not build them yet ( `codol_assetc` does ).
+  client. The editor builds them and puts them into a built map, it does not show or play them.
 * Not started: signed fast files; weapons, vehicles, impact effect tables, physics presets, fonts, menus.
 
 ## Origin of the code
