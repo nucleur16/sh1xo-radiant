@@ -245,16 +245,6 @@ namespace
 				}
 				std::printf("\n");
 			}
-			else if (e.type == c1::ASSET_TYPE_XANIMPARTS)
-			{
-				RawAnim raw;
-				DecodedAnim decoded;
-				std::string error;
-				Status status;
-				if (!read_raw_anim(zone, e.header, raw, &error))
-				{
-					status = Status::error(error);
-				}
 			else if (e.type == c1::ASSET_TYPE_SOUND)
 			{
 				CompiledAliasList list;
@@ -285,6 +275,16 @@ namespace
 				extract_snd_curve(zone, e.header, curve);
 				std::printf("  sndcurve  %-40s %zu knots\n", name.c_str(), curve.knots.size());
 			}
+			else if (e.type == c1::ASSET_TYPE_XANIMPARTS)
+			{
+				RawAnim raw;
+				DecodedAnim decoded;
+				std::string error;
+				Status status;
+				if (!read_raw_anim(zone, e.header, raw, &error))
+				{
+					status = Status::error(error);
+				}
 				else
 				{
 					status = decode_anim(raw, decoded);

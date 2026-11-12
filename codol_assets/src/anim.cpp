@@ -466,6 +466,7 @@ namespace codol::assets
 				}
 				frame_table(bone.trans.frames);
 				const Vec3 mins = vec(), size = vec();
+				bone.trans.step = std::max({ size[0], size[1], size[2] });
 				bone.trans.values.resize(bone.trans.frames.size());
 				for (Vec3& v : bone.trans.values)
 				{
@@ -502,6 +503,7 @@ namespace codol::assets
 			else
 			{
 				out.deltaTrans.frames = t.indices;
+				out.deltaTrans.step = std::max({ t.frameSize[0], t.frameSize[1], t.frameSize[2] });
 				for (std::size_t k = 0; k + 2 < t.frames.size(); k += 3)
 				{
 					out.deltaTrans.values.push_back({ t.mins[0] + t.frameSize[0] * static_cast<float>(t.frames[k]), t.mins[1] + t.frameSize[1] * static_cast<float>(t.frames[k + 1]),

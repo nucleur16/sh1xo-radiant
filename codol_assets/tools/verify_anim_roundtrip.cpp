@@ -110,10 +110,12 @@ namespace
 		// radians. Components within e of each other ( the tolerance, and 1.5 for the two roundings ): the quaternions
 		// are at most 2 e apart, which is a turn of 4 e
 		const float rotationLimit = 4.0f * (std::max(rotationTolerance, 1.0f) + 1.5f) / 32767.0f;
-		// One and a half steps of the coarsest 8 bit box ( 0.05 ): the compiled key is within half a step of the frame,
-		// a frame between keys within a step of that. 16 bit boxes are finer unless they are larger than 3277 units.
-		const float translationLimit = translationTolerance + 0.076f;
+		// One and a half steps of the box the track is stored in: the compiled key is within half a step of the frame,
+		// a frame between keys within a step of that. A step is at most 0.05 in an 8 bit box; a 16 bit box has finer
+		// ones unless it is larger than 3277 units ( a helicopter flying in ).
+		const auto translation_limit = [&](const VecTrack& a, const VecTrack& b) { return translationTolerance + 1.5f * std::max({ a.step, b.step, 0.05f }) + 0.001f; };
 		double worstRotation = 0, worstTranslation = 0;
+		bool translationsFit = true;
 		if (ds.bones.size() == dc.bones.size() && names)
 		{
 			for (std::uint32_t f = 0; f <= ds.lastFrame; f++)
@@ -133,19 +135,23 @@ namespace
 					if (ds.bones[k].translation != ANIM_TRANS_NONE && dc.bones[k].translation != ANIM_TRANS_NONE)
 					{
 						const Vec3 x = ds.bones[k].trans.at(frame), y = dc.bones[k].trans.at(frame);
-						worstTranslation = std::max<double>({ worstTranslation, std::fabs(x[0] - y[0]), std::fabs(x[1] - y[1]), std::fabs(x[2] - y[2]) });
+						const float off = std::max({ std::fabs(x[0] - y[0]), std::fabs(x[1] - y[1]), std::fabs(x[2] - y[2]) });
+						worstTranslation = std::max<double>(worstTranslation, off);
+						translationsFit = translationsFit && off <= translation_limit(ds.bones[k].trans, dc.bones[k].trans);
 					}
 				}
 				worstRotation = std::max<double>(worstRotation, quat_angle_between(ds.deltaRot.at(frame), dc.deltaRot.at(frame)));
 				const Vec3 x = ds.deltaTrans.at(frame), y = dc.deltaTrans.at(frame);
-				worstTranslation = std::max<double>({ worstTranslation, std::fabs(x[0] - y[0]), std::fabs(x[1] - y[1]), std::fabs(x[2] - y[2]) });
+				const float off = std::max({ std::fabs(x[0] - y[0]), std::fabs(x[1] - y[1]), std::fabs(x[2] - y[2]) });
+				worstTranslation = std::max<double>(worstTranslation, off);
+				translationsFit = translationsFit && off <= translation_limit(ds.deltaTrans, dc.deltaTrans);
 			}
 		}
 		else
 		{
 			worstRotation = 4;
 		}
-		const bool transforms = worstRotation <= rotationLimit && worstTranslation <= translationLimit;
+		const bool transforms = worstRotation <= rotationLimit && translationsFit;
 		totals.transforms.add(transforms);
 		if (worstRotation < 4)
 		{

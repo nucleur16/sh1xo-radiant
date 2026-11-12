@@ -131,6 +131,7 @@ namespace codol::assets
 	{
 		std::vector<std::uint16_t> frames;
 		std::vector<Vec3> values;
+		float step = 0;						// largest stored step of the track's box ( 0 for a constant )
 		Vec3 at(float frame) const;
 	};
 
