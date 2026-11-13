@@ -126,6 +126,12 @@ namespace codol::edit
 	// the moved vertices was ( within `weld_tolerance`; < 0: none ) moves along. `locked` vertices of `id` stay.
 	bool move_patch_vertices_welded(document& doc, object_id id, std::span<const int> vertices, const vec3& delta,
 		double weld_tolerance, std::span<const int> locked = {});
+	// the same with any transform ( the rotate / scale gizmo on a set of vertices, about their centre ): every vertex goes
+	// to t( where it is ); welded vertices go where the vertex they sit on goes; locked ones stay. One undo step.
+	bool transform_patch_vertices(document& doc, object_id id, std::span<const int> vertices, const transform& t,
+		double weld_tolerance, std::span<const int> locked = {});
+	// the candidate nearest to `point` within `reach` ( "weld to brush / model / prefab vertices" while dragging )
+	bool snap_to_nearest(const vec3& point, std::span<const vec3> candidates, double reach, vec3& out);
 
 	// ---- thicken / cap --------------------------------------------------------------------------
 

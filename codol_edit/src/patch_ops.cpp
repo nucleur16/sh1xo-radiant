@@ -7,6 +7,8 @@
 #include "doc_impl.hpp"
 #include "codol_edit/patch_ops.hpp"
 
+#include <tuple>
+
 namespace codol::edit
 {
 	// the one door into a document's private state for the operations of this file
@@ -1759,6 +1761,109 @@ namespace codol::edit
 		}
 
 		return true;
+	}
+
+	bool transform_patch_vertices(document& doc, const object_id id, const std::span<const int> vertices, const transform& t, const double weld_tolerance,
+		const std::span<const int> locked)
+	{
+		impl& d = ops_access::of(doc);
+
+		const patch* p = d.get_patch(id);
+		if (!p || vertices.empty())
+		{
+			return d.fail("Transform vertices: not a patch");
+		}
+
+		// the vertices that move, where they were and where they go
+		std::vector<int> moving;
+		std::vector<vec3> from, to;
+		for (const int index : vertices)
+		{
+			if (index < 0 || index >= static_cast<int>(p->vertices.size()))
+			{
+				return d.fail("Transform vertices: bad vertex index");
+			}
+
+			if (std::find(locked.begin(), locked.end(), index) == locked.end() && std::find(moving.begin(), moving.end(), index) == moving.end())
+			{
+				moving.push_back(index);
+				from.push_back(p->vertices[static_cast<std::size_t>(index)].xyz);
+				to.push_back(t.apply(from.back()));
+			}
+		}
+
+		if (moving.empty())
+		{
+			return d.fail("Transform vertices: the vertices are locked");
+		}
+
+		// ( patch, vertex ) -> where it goes: the moving ones, and with welding every vertex of the selected patches that
+		// sits where a moving one was goes where that one goes
+		std::vector<std::tuple<object_id, int, vec3>> placed;
+		for (std::size_t k = 0; k < moving.size(); k++)
+		{
+			placed.emplace_back(id, moving[k], to[k]);
+		}
+
+		if (weld_tolerance >= 0.0)
+		{
+			std::vector<object_id> others{ id };
+			for (const object_id other : d.sel.objects)
+			{
+				if (other != id && d.get_patch(other))
+				{
+					others.push_back(other);
+				}
+			}
+
+			for (const object_id other : others)
+			{
+				const patch* q = d.get_patch(other);
+				for (int i = 0; i < static_cast<int>(q->vertices.size()); i++)
+				{
+					if (other == id && (std::find(moving.begin(), moving.end(), i) != moving.end() || std::find(locked.begin(), locked.end(), i) != locked.end()))
+					{
+						continue;
+					}
+
+					const vec3& at = q->vertices[static_cast<std::size_t>(i)].xyz;
+					for (std::size_t k = 0; k < from.size(); k++)
+					{
+						if (length(from[k] - at) <= weld_tolerance)
+						{
+							placed.emplace_back(other, i, to[k]);
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		transaction_scope tx(d, "Transform vertices");
+		for (const auto& [target, index, where] : placed)
+		{
+			d.edit_patch(target).vertices[static_cast<std::size_t>(index)].xyz = where;
+		}
+
+		return true;
+	}
+
+	bool snap_to_nearest(const vec3& point, const std::span<const vec3> candidates, const double reach, vec3& out)
+	{
+		double best = reach;
+		bool found = false;
+		for (const vec3& c : candidates)
+		{
+			const double dist = length(c - point);
+			if (dist <= best)
+			{
+				best = dist;
+				out = c;
+				found = true;
+			}
+		}
+
+		return found;
 	}
 
 	// ---- thicken / cap ------------------------------------------------------------------------------

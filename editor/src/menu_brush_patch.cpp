@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "ext.hpp"
+#include "menu_ext.hpp"
 
 #include <codol_edit/patch_ops.hpp>
 
@@ -60,6 +61,8 @@ namespace editor::ui
 
 			// ---- how patches are shown / edited ( the toolbar toggles of radiant )
 			bool weld_moves = false;		// vertices that share a place move together
+			bool snap_brushes = false;		// a dragged patch vertex snaps onto brush corners near it
+			bool snap_models = false;		// .. onto the vertices of models and of the contents of prefabs
 			bool tolerant_weld = false;		// weld over one grid step instead of 0.1 units
 			bool drill_down = true;			// a vertex grabbed in a 2D view takes the ones behind it along
 			bool edge_mode = false;			// a click on a terrain quad in the 3D view turns its diagonal
@@ -750,7 +753,234 @@ namespace editor::ui
 
 	bool move_patch_vertices(const object_id patch, const std::vector<int>& vertices, const edit::vec3& delta)
 	{
-		return edit::move_patch_vertices_welded(get_scene().doc, patch, vertices, delta, g.weld_moves ? weld_tolerance() : -1.0, locked_of(patch));
+		// Weld > Snap To Brush / Model Vertices While Dragging: the first vertex ( the one the mouse holds ) lands on the
+		// nearest such point, the others keep their distance to it
+		edit::vec3 moved = delta;
+		const auto* p = get_scene().doc.find_patch(patch);
+		if (p && !vertices.empty() && vertices.front() >= 0 && vertices.front() < static_cast<int>(p->vertices.size()))
+		{
+			const edit::vec3 from = p->vertices[static_cast<std::size_t>(vertices.front())].xyz;
+			edit::vec3 onto;
+			if (patch_drag_snap(from + delta, onto))
+			{
+				moved = onto - from;
+			}
+		}
+
+		return edit::move_patch_vertices_welded(get_scene().doc, patch, vertices, moved, g.weld_moves ? weld_tolerance() : -1.0, locked_of(patch));
+	}
+
+	// ---- the patch vertex selection, shared by the 2D views, the 3D view and the Advanced Edit dialog -----------
+
+	object_id patch_vertex_selection(std::vector<int>* out)
+	{
+		const auto* p = vsel_patch();
+		if (out)
+		{
+			*out = p ? g.vsel : std::vector<int>();
+		}
+
+		return p ? g.vsel_patch : edit::no_object;
+	}
+
+	bool patch_vertex_selected(const object_id patch, const int index)
+	{
+		return patch == g.vsel_patch && std::find(g.vsel.begin(), g.vsel.end(), index) != g.vsel.end();
+	}
+
+	void select_patch_vertices(const object_id patch, const std::vector<int>& list, const bool add)
+	{
+		select_vertices(patch, list, add && g.vsel_patch == patch);
+	}
+
+	void deselect_patch_vertices(const object_id patch, const std::vector<int>& list)
+	{
+		if (patch == g.vsel_patch)
+		{
+			std::erase_if(g.vsel, [&](const int i) { return std::find(list.begin(), list.end(), i) != list.end(); });
+		}
+	}
+
+	void clear_patch_vertices()
+	{
+		g.vsel.clear();
+	}
+
+	bool patch_vertex_locked(const object_id patch, const int index)
+	{
+		const auto& list = locked_of(patch);
+		return std::find(list.begin(), list.end(), index) != list.end();
+	}
+
+	bool patch_drill_down()
+	{
+		return g.drill_down;
+	}
+
+	std::vector<edit::vec3> locked_positions(const object_id patch)
+	{
+		std::vector<edit::vec3> out;
+		if (const auto* p = get_scene().doc.find_patch(patch))
+		{
+			for (const int i : locked_of(patch))
+			{
+				if (i >= 0 && i < static_cast<int>(p->vertices.size())) { out.push_back(p->vertices[static_cast<std::size_t>(i)].xyz); }
+			}
+		}
+		return out;
+	}
+
+	void relock_patch_vertices(const object_id patch, const std::vector<edit::vec3>& positions)
+	{
+		const auto* p = get_scene().doc.find_patch(patch);
+		auto& list = g.locked[patch];
+		list.clear();
+		for (int i = 0; p && i < static_cast<int>(p->vertices.size()); i++)
+		{
+			for (const auto& at : positions)
+			{
+				if (length(p->vertices[static_cast<std::size_t>(i)].xyz - at) < 0.01) { list.push_back(i); break; }
+			}
+		}
+	}
+
+	bool transform_patch_vertices(const object_id patch, const std::vector<int>& vertices, const edit::transform& t)
+	{
+		return edit::transform_patch_vertices(get_scene().doc, patch, vertices, t, g.weld_moves ? weld_tolerance() : -1.0, locked_of(patch));
+	}
+
+	namespace
+	{
+		// points a patch vertex may be welded / snapped onto near `at`: corners of the brushes, the vertices of the
+		// models of entities ( their meshes as the renderer has them ) and the corners of what prefabs hold
+		void snap_candidates(const edit::vec3& at, const double reach, const bool brushes, const bool models, std::vector<edit::vec3>& out)
+		{
+			auto& s = get_scene();
+			const auto touches = [&](const float* mins, const float* maxs)
+			{
+				for (int k = 0; k < 3; k++)
+				{
+					if (at[k] < mins[k] - reach || at[k] > maxs[k] + reach) { return false; }
+				}
+				return true;
+			};
+
+			if (brushes)
+			{
+				for (const auto& o : s.statics.objects)
+				{
+					if (!o.patch && touches(o.mins, o.maxs))
+					{
+						if (const auto* geo = s.doc.geometry(o.id))
+						{
+							out.insert(out.end(), geo->vertices.begin(), geo->vertices.end());
+						}
+					}
+				}
+			}
+
+			if (models)
+			{
+				std::vector<view::object_ref> refs;
+				std::vector<float3> tris;
+				for (const auto& e : s.statics.entities)
+				{
+					if (!e.has_model || !touches(e.mins, e.maxs))
+					{
+						continue;
+					}
+
+					refs.clear();
+					s.refs_of(e.id, refs);
+					for (const auto& ref : refs)
+					{
+						tris.clear();
+						if (s.renderer.object_triangles(ref, tris) && tris.size() < 300000)
+						{
+							for (const auto& p : tris)
+							{
+								out.push_back({ p.x, p.y, p.z });
+							}
+						}
+					}
+				}
+
+				// prefabs: the ends of the lines the views draw for their contents
+				std::vector<line_vertex> lines;
+				ext::append_prefab_lines(lines);
+				for (const auto& v : lines)
+				{
+					const float p[3] = { v.x, v.y, v.z };
+					if (touches(p, p))
+					{
+						out.push_back({ v.x, v.y, v.z });
+					}
+				}
+			}
+		}
+	}
+
+	bool patch_drag_snap(const edit::vec3& at, edit::vec3& out)
+	{
+		if (!g.snap_brushes && !g.snap_models)
+		{
+			return false;
+		}
+
+		// the reach of the magnet: one grid step, at least 2 units
+		const double reach = std::max(get_scene().grid, 2.0);
+		std::vector<edit::vec3> candidates;
+		snap_candidates(at, reach, g.snap_brushes, g.snap_models, candidates);
+		return edit::snap_to_nearest(at, candidates, reach, out);
+	}
+
+	// Weld > Weld to Model Vertices / Weld to Prefab Vertices: the selected vertices ( or every vertex of the selected
+	// patches ) that lie within the weld tolerance of such a point move onto it; one undo step
+	bool weld_patches_to_models()
+	{
+		auto& s = get_scene();
+		auto& doc = s.doc;
+		const double reach = weld_tolerance();
+		std::vector<object_id> patches;
+		for (const object_id id : doc.selection())
+		{
+			if (doc.find_patch(id)) { patches.push_back(id); }
+		}
+
+		if (patches.empty())
+		{
+			return fail("Weld to model / prefab vertices", "Select a patch.");
+		}
+
+		int moved = 0;
+		doc.begin_transaction("Weld to models");
+		for (const object_id id : patches)
+		{
+			const auto* p = doc.find_patch(id);
+			const auto& locked = locked_of(id);
+			for (int i = 0; i < static_cast<int>(p->vertices.size()); i++)
+			{
+				if ((id == g.vsel_patch && !g.vsel.empty() && std::find(g.vsel.begin(), g.vsel.end(), i) == g.vsel.end())
+					|| std::find(locked.begin(), locked.end(), i) != locked.end())
+				{
+					continue;
+				}
+
+				const edit::vec3 at = doc.find_patch(id)->vertices[static_cast<std::size_t>(i)].xyz;
+				std::vector<edit::vec3> candidates;
+				snap_candidates(at, reach, false, true, candidates);
+				edit::vec3 onto;
+				if (edit::snap_to_nearest(at, candidates, reach, onto) && length(onto - at) > 1e-9)
+				{
+					const int one[] = { i };
+					moved += doc.move_patch_vertices(id, one, onto - at) ? 1 : 0;
+				}
+			}
+		}
+		doc.end_transaction();
+
+		game::printf_to_console("Weld to model / prefab vertices: %d vertices moved ( tolerance %g )\n", moved, reach);
+		return true;
 	}
 
 	void patch_vertex_marks(const std::function<void(const edit::vec3&, ImU32)>& mark)
@@ -937,8 +1167,11 @@ namespace editor::ui
 			ImGui::Separator();
 			toggle("Tolerant Weld", g.tolerant_weld, "Weld over one grid step instead of 0.1 units.");
 			toggle("Weld Equal Patch Points During Moves", g.weld_moves, "A vertex dragged in a 2D view takes along every vertex of the selected patches in the same place\n( the seam of a cylinder, the edge two patches share ).");
-			item("Weld to Model Vertices", nullptr, false, "Not available: the editor does not read the vertices of placed models for snapping yet.");
-			item("Weld to Prefab Vertices", nullptr, false, "Not available: prefabs are not expanded into editable geometry.");
+			if (item("Weld to Model / Prefab Vertices", nullptr, any, why_any, "The selected vertices ( else every vertex of the selected patches ) within the tolerance of a vertex of a model\n"
+				"( its mesh as the 3D view draws it ) or of the contents of a prefab move onto it.")) { weld_patches_to_models(); }
+			ImGui::Separator();
+			toggle("Snap To Brush Vertices While Dragging", g.snap_brushes, "A patch vertex dragged in a 2D view or in the 3D view lands on a brush corner within one grid step of it.");
+			toggle("Snap To Model / Prefab Vertices While Dragging", g.snap_models, "The same with the vertices of models and of the contents of prefabs.");
 			editor::menu::end();
 		}
 
@@ -1757,6 +1990,64 @@ namespace editor::ui
 		flag("patch_tolerant", &bp_state::tolerant_weld, "tolerant weld");
 		flag("patch_drill", &bp_state::drill_down, "drill down vertices");
 		flag("patch_edge_mode", &bp_state::edge_mode, "cycle terrain edge mode");
+		flag("patch_snap_brushes", &bp_state::snap_brushes, "snap dragged patch vertices to brush vertices");
+		flag("patch_snap_models", &bp_state::snap_models, "snap dragged patch vertices to model / prefab vertices");
+		// patch_weld_models: Weld > Weld to Model / Prefab Vertices
+		command::register_command("patch_weld_models", [](args_t) { if (need_map()) { weld_patches_to_models(); } });
+		// patch_vsel3d: the shared patch vertex selection ( as the 3D view, the 2D views and the dialog see it )
+		command::register_command("patch_vsel_info", [](args_t)
+		{
+			std::vector<int> list;
+			const object_id id = patch_vertex_selection(&list);
+			std::string text;
+			const auto* p = get_scene().doc.find_patch(id);
+			for (const int i : list)
+			{
+				char at[96];
+				const auto& v = p->vertices[static_cast<std::size_t>(i)].xyz;
+				std::snprintf(at, sizeof(at), " %d( %g %g %g )%s", i, v.x, v.y, v.z, patch_vertex_locked(id, i) ? "L" : "");
+				text += at;
+			}
+			game::printf_to_console("patch vertices: patch #%u, %d selected:%s\n", id, static_cast<int>(list.size()), text.c_str());
+		});
+
+		// patch_vtransform rotate <degrees> [x|y|z] | scale <factor>: what the rotate / scale gizmo of the 3D view does to
+		// the selected patch vertices, about their centre ( weld and lock honoured; one undo step )
+		command::register_command("patch_vtransform", [](args_t args)
+		{
+			std::vector<int> list;
+			const object_id id = patch_vertex_selection(&list);
+			const auto* p = get_scene().doc.find_patch(id);
+			if (!p || list.empty() || args.size() < 3)
+			{
+				game::printf_to_console("usage: patch_vtransform rotate <degrees> [x|y|z] | scale <factor>   ( with patch vertices selected )\n");
+				return;
+			}
+
+			edit::vec3 centre;
+			for (const int i : list) { centre += p->vertices[static_cast<std::size_t>(i)].xyz; }
+			centre = centre * (1.0 / static_cast<double>(list.size()));
+
+			edit::transform tr;
+			if (args[1] == "rotate")
+			{
+				const double a = number(args, 2) * 3.14159265358979323846 / 180.0;
+				const int axis = args.size() > 3 ? ext::axis_of(args[3]) : 2;
+				const int u = (axis + 1) % 3, v = (axis + 2) % 3;
+				tr.m[u][u] = std::cos(a);
+				tr.m[u][v] = -std::sin(a);
+				tr.m[v][u] = std::sin(a);
+				tr.m[v][v] = std::cos(a);
+			}
+			else
+			{
+				const double f = number(args, 2, 1.0);
+				tr.m[0][0] = tr.m[1][1] = tr.m[2][2] = f;
+			}
+
+			tr.t = centre - tr.apply_vector(centre);
+			done(transform_patch_vertices(id, list, tr), args[1] == "rotate" ? "Rotate vertices" : "Scale vertices");
+		});
 
 		// patch_show <0|1>: textured / wireframe
 		command::register_command("patch_show", [](args_t args) { set_patches_as(args.size() > 1 ? std::atoi(args[1].c_str()) : (patches_as_wire() ? 0 : 1)); });

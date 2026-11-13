@@ -831,6 +831,42 @@ namespace
 			CHECK(move_patch_vertices_welded(d2, a, corner, { 0, 0, 16 }, 0.01));
 			CHECK(near(d2.find_patch(b)->at(0, 0).xyz, { 64, 0, 16 }) && near(d2.find_patch(b)->at(0, 1).xyz, { 64, 64, 0 }) && d2.undo_count() == 3);
 		}
+
+		// the rotate / scale gizmo of the 3D view on a set of vertices: a turn about their centre, welded and locked
+		{
+			document doc;
+			const object_id a = doc.create_terrain_patch({ 0, 0, 0 }, { 128, 128, 0 }, 3, 3);
+			const object_id b = doc.create_terrain_patch({ 128, 0, 0 }, { 256, 128, 0 }, 3, 3);
+			const object_id both[] = { a, b };
+			doc.select(both);
+			// the column x 128 of a ( 6 7 8 ), turned 90 degrees about Z through its centre 128 64: ( x y ) -> ( 128 - ( y - 64 ), 64 + ( x - 128 ) )
+			transform turn;
+			turn.m[0][0] = 0; turn.m[0][1] = -1; turn.m[1][0] = 1; turn.m[1][1] = 0;
+			turn.t = vec3(128, 64, 0) - turn.apply_vector({ 128, 64, 0 });
+			const int column[] = { 6, 7, 8 };
+			const int locked[] = { 8 };
+			const auto undo_before = doc.undo_count();
+			CHECK(transform_patch_vertices(doc, a, column, turn, 0.01, locked));
+			CHECK(doc.undo_count() == undo_before + 1 && doc.undo_name() == "Transform vertices");
+			CHECK(near(doc.find_patch(a)->at(2, 0).xyz, { 192, 64, 0 }) && near(doc.find_patch(a)->at(2, 1).xyz, { 128, 64, 0 }) && near(doc.find_patch(a)->at(2, 2).xyz, { 128, 128, 0 }));
+			// welded: column 0 of b sat on 6 7 8 and went with them ( 8 is locked: its partner stays too )
+			CHECK(near(doc.find_patch(b)->at(0, 0).xyz, { 192, 64, 0 }) && near(doc.find_patch(b)->at(0, 2).xyz, { 128, 128, 0 }));
+			CHECK(!transform_patch_vertices(doc, a, std::span<const int>(locked), turn, 0.01, locked));
+			CHECK(doc.undo());
+
+			// a scale by 2 about the centre, no weld
+			transform twice;
+			twice.m[0][0] = twice.m[1][1] = twice.m[2][2] = 2.0;
+			twice.t = vec3(128, 64, 0) - twice.apply_vector({ 128, 64, 0 });
+			CHECK(transform_patch_vertices(doc, a, column, twice, -1.0));
+			CHECK(near(doc.find_patch(a)->at(2, 0).xyz, { 128, -64, 0 }) && near(doc.find_patch(b)->at(0, 0).xyz, { 128, 0, 0 }));
+
+			// the nearest snap point within reach
+			const vec3 points[] = { { 10, 0, 0 }, { 0, 3, 0 }, { 0, 0, 30 } };
+			vec3 onto;
+			CHECK(snap_to_nearest({ 0, 0, 0 }, points, 8.0, onto) && onto == vec3(0, 3, 0));
+			CHECK(!snap_to_nearest({ 0, 0, 0 }, points, 2.0, onto));
+		}
 	}
 
 	// ---- thicken / cap --------------------------------------------------------------------------

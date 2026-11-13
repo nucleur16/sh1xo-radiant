@@ -70,7 +70,7 @@ three lines at the bottom of the view say what the mouse and the keys do in the 
 | Tool | Key | Left button |
 |---|---|---|
 | **Select** | Esc | Click selects ( Ctrl or Shift adds / removes ). **Drag on the selection**: it moves, on the world plane that faces the camera most ( look down: on the floor; look along: up and sideways ). **Drag next to a selected brush**: the faces on that side follow the mouse - Radiant's resize; they are outlined while the mouse is there, and a drag that starts past a corner takes both faces. **Squares on the selection's box**: that side of every selected brush. **Ctrl+Shift click** selects a face ( again: deselects it ); **drag a selected face**: it moves along its normal, with every other selected face. **Shift drag**: everything in the rectangle is added to the selection. **Alt click**: the object behind the selected one under the mouse ( Alt+Shift click adds it ) - through walls and into stacks. With nothing selected a left drag drives the camera, as before. |
-| **Vertices** | V | Handles on the corners of the selected brushes ( green ) and the control points of the selected patches ( pink ). Click a handle: select it; Ctrl or Shift click adds / removes; Shift drag: the handles in the rectangle. Drag a handle: the selected handles move with it, on the plane that faces the camera most ( with **Alt** along the third axis instead ); the handle that is dragged lands on the grid, also when it was off it. The arrows of the gizmo on the selected handles move them along one axis. A corner that brushes share moves in all of them; sides that are no longer flat are split into triangles ( the brush is rebuilt as the hull of its corners ). |
+| **Vertices** | V | Handles on the corners of the selected brushes ( green ) and the control points of the selected patches ( pink ). Click a handle: select it; Ctrl or Shift click adds / removes; Shift drag: the handles in the rectangle. Drag a handle: the selected handles move with it, on the plane that faces the camera most ( with **Alt** along the third axis instead ); the handle that is dragged lands on the grid, also when it was off it. The arrows of the gizmo on the selected handles move them along one axis. A corner that brushes share moves in all of them; sides that are no longer flat are split into triangles ( the brush is rebuilt as the hull of its corners ). **Control points of patches** are the Patch menu's vertex selection ( below ): Alt click selects the column of a point, Alt + Shift click its row ( Ctrl adds ); locked points are red and stay; Delete removes a whole selected row / column; the rotate / scale gizmo ( the view's toolbar, R ) turns / scales a set of them about its centre. |
 | **Edges** | E, while the handles are shown | Handles on the middle of the edges ( blue ); an edge moves as a whole, the same way. E again or V: back to the vertices. |
 | **Clipper** | C | Click on a surface: a clip point; two or three, drag to move them. Two points cut straight through the surface the first was put on, three define the plane. The cut is drawn on every selected brush, the arrow shows the side that stays. Enter clips, Ctrl+Enter keeps the other side, Shift+Enter splits; Esc removes the points, then leaves. Points placed in a 2D view and in the 3D view are the same points. |
 | **Create** | B | Drag a rectangle on the surface under the mouse - the ground, a wall, the top of a brush, the floor of an empty map: a brush stands on it, as high as the last selection was ( 64 when there was none ). It is selected: drag the squares on its box to size it. The list next to the button picks the shape: box, cylinder and cone ( with a number of sides ), wedge, terrain patch. |
@@ -285,7 +285,9 @@ the grid itself, two triangles per cell.
 | Matrix > Re-disperse Vertices / Columns / Rows | `patch_redisperse <vertices\|columns\|rows>` | vertices: even spacing along the lines the control points form; columns / rows: evenly on the straight line between the first and the last |
 | Weld > Connect Selection / Weld | `patch_weld [tolerance]` | vertices of the selected patches closer than 0.1 units ( Tolerant Weld: one grid step ) become one place |
 | Weld > Weld to Brush Vertices | `patch_weld_brushes [tolerance]` | onto brush corners |
-| Weld > Tolerant Weld, Weld Equal Patch Points During Moves | `patch_tolerant [0\|1]`, `patch_weld_moves [0\|1]` | the second: a vertex dragged in a 2D view takes along every vertex of the selected patches in the same place ( the seam of a cylinder ) |
+| Weld > Weld to Model / Prefab Vertices | `patch_weld_models` | the selected vertices ( else all of the selected patches ) onto the nearest vertex of a model ( its mesh as the 3D view draws it ) or of a prefab's contents within the tolerance |
+| Weld > Snap To Brush Vertices / Snap To Model / Prefab Vertices While Dragging | `patch_snap_brushes [0\|1]`, `patch_snap_models [0\|1]` | a dragged patch vertex ( 2D or 3D, the one the mouse holds ) lands on such a point within one grid step; the others keep their distance to it |
+| Weld > Tolerant Weld, Weld Equal Patch Points During Moves | `patch_tolerant [0\|1]`, `patch_weld_moves [0\|1]` | the second: a vertex dragged in a 2D view or the 3D view ( also by the rotate / scale gizmo ) takes along every vertex of the selected patches in the same place ( the seam of a cylinder ) |
 | Inc / Dec Subdivision | `patch_subdiv <+n\|-n>` | curves: the subdivision number goes down ( finer ) / up until the tessellation changes, as in radiant; 1 - 16 quads per segment, in the views and in the compiled map ( below: the size line ) |
 | Split | `patch_split [column\|row] [index]` | two patches, at the line of the selected vertices or in the middle |
 | Invert ( Ctrl+I ) | `patch_invert` | faces the other way; a terrain keeps its triangles |
@@ -300,9 +302,22 @@ the grid itself, two triangles per cell.
 | Cycle Terrain Edge Mode | `patch_edge_mode [0\|1]` | a click on a terrain quad in the 3D view turns its diagonal |
 | | `patch_info` | the selected patches: size, subdivision, bounds, turned edges |
 
-**Patch vertices.** In *vertex mode* ( V ) of a 2D view a patch shows its control points; grabbing one selects it
-( yellow; Shift adds ) together with the ones behind it, and dragging moves them. The Advanced Edit dialog selects
-by row and column. The vertex selection is what "the selected vertices" above means.
+**Patch vertices.** One selection of control points for every view - the vertices of one selected patch, what
+"the selected vertices" above means ( `ui::patch_vertex_selection` ). In *vertex mode* ( V ) of a 2D view a patch
+shows its control points; grabbing one selects it ( yellow; Shift adds ) together with the ones behind it, and
+dragging moves them. The Advanced Edit dialog selects by row and column ( `patch_vsel` ). In the **3D view**'s vertex
+tool the control points are handles: click selects one, Ctrl / Shift click adds / removes, Shift drag takes those in
+the rectangle, **Alt click its column, Alt + Shift click its row** ( Ctrl adds ); with Drill Down Vertices a click
+also takes the points under it on the screen. A drag moves the selection on the plane that faces the camera most,
+the held point on the grid, with Weld Equal Patch Points During Moves and the snapping of the Weld menu; **locked**
+points ( Lock Vertices ) are red in every view and do not move. The gizmo moves the selection; with the view's
+Rotate / Scale gizmo it turns / scales the selected points about their centre ( `patch_vtransform rotate <deg>
+[x|y|z] | scale <f>` does the same from the console ). **Delete** with points selected ( 3D or 2D vertex mode ):
+a whole row / column of a terrain is removed ( `patch_terrain_remove` ), the first / last row or column of a curve
+takes its pair along ( `patch_delete` ); anything else deletes nothing and says why - Esc drops the points, then
+Delete deletes the patch. The selection made in a 2D view or the dialog is drawn in the 3D view, as handles in the
+vertex tool and as marks in the others. `patch_vsel_info` prints it with positions ( `L`: locked ).
+`tests\ed3d\patch_vertices.cmds` runs all of this with pictures.
 
 **In the file** a curve is a `curve` block and a terrain a `mesh` block, as CoD4 radiant writes them: material,
 `lightmap_gray`, an optional `smoothing` line, `columns rows 16 8` and per vertex `v x y z [c r g b a] t s t ls lt
@@ -341,10 +356,8 @@ drawn triangles with a lightmap and collision triangles of the clip map's terrai
 fan of a cap around its centre ) are dropped. Patches of a brush entity are not compiled ( the build says so ).
 `codol_bsp_patch_tests` compiles a room with every patch kind and brush primitive.
 
-**Not there:** Weld to Model / Prefab Vertices ( greyed: models are not read for snapping, prefabs are not
-expanded ); `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brush > Box / Cylinder make for
-physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode; selecting patch vertices
-in the 3D view.
+**Not there:** `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brush > Box / Cylinder make for
+physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode.
 
 **In File > Compile map** ( an edited shipped map, `codol_mapc` ) the patches of the worldspawn are drawn: their
 tessellation ( the triangles `codol_bsp` makes ) becomes a render surface of the patch's material that takes, per
@@ -925,13 +938,14 @@ Be aware of these before planning work around this branch:
   without the list.
 - **3D editing**: the selection rectangle is a rectangle ( no lasso ); a drag next to a brush moves faces, it does
   not shear them ( Radiant's Ctrl drag ); the handles of the vertex and edge tools are drawn through walls and have
-  a move gizmo only ( no rotating or scaling of a set of corners ); a brush is always the hull of its corners, so a
+  a move gizmo only for brush corners ( a set of patch control points turns and scales; brush corners do not ); a brush is always the hull of its corners, so a
   corner pushed inside the others disappears. The texture keys act on every face of a selected brush, as in
   Radiant - deselect the brush ( Esc ) and Ctrl+Shift click faces to work on single ones.
 - **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
   worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
-- **Patches**: no welding to model or prefab vertices, no `physics_box` / `physics_cylinder` blocks, patch vertices
-  are selected in the 2D views and the Advanced Edit dialog only. The subdivision number of a curve is radiant's
+- **Patches**: no `physics_box` / `physics_cylinder` blocks. The patch vertex selection is one patch at a time ( a
+  click on another patch's point starts a new one ); a vertex of a model is snapped to as the renderer gives its triangles
+  for picking. The subdivision number of a curve is radiant's
   ( smaller is finer, verified in its binary ), but how many triangles a number gives is this editor's reading ( an
   error bound in units ) - radiant's and cod4map's tessellation were not traced
   ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map ( an edited

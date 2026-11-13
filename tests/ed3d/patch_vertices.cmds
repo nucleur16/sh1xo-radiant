@@ -1,0 +1,99 @@
+# Patch vertices in the 3D view: the selection of the Patch menu ( one for the 2D views, the 3D view and the Advanced
+# Edit dialog ), clicks, Ctrl click, Alt click ( column ), Alt Shift click ( row ), locked vertices, drags with grid
+# snap and "snap to brush vertices", the rotate of the gizmo on a set of vertices, Delete on a row.
+# A 5 x 5 terrain on 0 0 .. 256 256 at z 16: vertex i is at x 64 * ( i / 5 ), y 64 * ( i % 5 ). A brush with a
+# corner at 300 0 16 next to it.
+map_new $MAP
+wait 6
+ed_box 300 -64 0 364 0 16
+ed_box 0 0 0 256 256 16
+patch_terrain 5 5 z
+ed_camera 128 -300 380 45 90
+ed3d tool vertex
+wait 1
+
+# selected from the console ( the Advanced Edit dialog's patch_vsel ): shown in the 3D view
+patch_vsel row 2
+patch_vsel_info
+expect 5 selected: 2( 0 128 16 )
+ed_shot $OUT\pv_1_row_from_dialog.png
+wait 1
+
+# click, Ctrl click, Alt click ( its column )
+ed3d wclick 0 0 16
+patch_vsel_info
+expect patch #4, 1 selected: 0( 0 0 16 )
+ed3d wclick 64 0 16 ctrl
+patch_vsel_info
+expect 2 selected: 0( 0 0 16 ) 5( 64 0 16 )
+ed3d wclick 128 128 16 alt
+patch_vsel_info
+expect 5 selected: 10( 128 0 16 ) 11( 128 64 16 ) 12( 128 128 16 )
+ed_shot $OUT\pv_2_column.png
+wait 1
+
+# the column locked: red, and a drag of one of them does not move it
+patch_lock
+ed3d wclick 128 128 16
+ed3d wpress 128 128 16
+ed3d wdrag 160 160 16
+ed3d release
+patch_vsel_info
+expect 1 selected: 12( 128 128 16 )L
+ed3d wclick 0 0 16
+ed_shot $OUT\pv_3_locked.png
+wait 1
+
+# a drag: on the world plane that faces the camera most ( here the one across Y ), the held vertex on the grid
+ed3d wclick 256 256 16
+ed3d wpress 256 256 16
+ed3d wdrag 287 256 45
+ed3d release
+patch_vsel_info
+expect 24( 288 256 48 )
+
+# snap to brush vertices: dragged near the corner 300 0 16 it lands on it
+patch_snap_brushes 1
+ed3d wclick 256 0 16
+ed3d wpress 256 0 16
+ed3d wdrag 297 3 16
+ed3d release
+patch_vsel_info
+expect 20( 300 0 16 )
+patch_snap_brushes 0
+
+# Alt Shift click: the row; the rotate of the gizmo about the centre of the row ( the locked 10 stays )
+ed3d wclick 0 0 16 alt shift
+patch_vsel_info
+expect 5 selected: 0( 0 0 16 ) 5( 64 0 16 ) 10( 128 0 16 )L 15( 192 0 16 ) 20( 300 0 16 )
+patch_vtransform rotate 90 z
+patch_vsel_info
+expect 0( 136.8 -136.8 16 ) 5( 136.8 -72.8 16 ) 10( 128 0 16 )L
+ed_shot $OUT\pv_4_rotated_row.png
+wait 1
+ed_undo
+
+# Delete: one vertex is not deleted; a whole row is
+ed3d wclick 0 0 16
+act patch.delete_vertices_3d
+expect no whole row or column; nothing deleted
+ed3d wclick 0 128 16 alt shift
+act patch.delete_vertices_3d
+patch_info
+expect terrain 5 x 4
+ed_shot $OUT\pv_5_row_deleted.png
+wait 1
+
+# weld to model / prefab vertices: no model here, nothing moves
+patch_weld_models
+expect Weld to model / prefab vertices: 0 vertices moved
+
+# the object tool: the selection made elsewhere is marked
+ed3d tool object
+patch_vsel column 0
+ed_shot $OUT\pv_6_marks_object_tool.png
+wait 1
+actions_check
+wait 1
+expect 0 problems
+quit
