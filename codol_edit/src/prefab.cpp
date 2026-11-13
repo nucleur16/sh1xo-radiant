@@ -55,8 +55,11 @@ namespace codol::edit
 				return false;
 			}
 
+			// the contents land as the prefab has them: both layers go with them
 			const bool lock = doc.texture_lock();
+			const bool lock_lightmap = doc.texture_lock_lightmap();
 			doc.set_texture_lock(true);
+			doc.set_texture_lock_lightmap(true);
 			doc.begin_transaction(selected_only ? "Stamp prefab" : "Expand prefabs");
 
 			std::vector<object_id> created;
@@ -156,6 +159,7 @@ namespace codol::edit
 
 			doc.end_transaction();
 			doc.set_texture_lock(lock);
+			doc.set_texture_lock_lightmap(lock_lightmap);
 			return done > 0;
 		}
 	}
@@ -191,7 +195,9 @@ namespace codol::edit
 		const vec3 at = origin ? *origin : vec3{ std::round(centre.x), std::round(centre.y), std::round(box.mins.z) };
 
 		const bool lock = d->texture_lock;
+		const bool lock_lightmap = d->texture_lock_lightmap;
 		d->texture_lock = true;
+		d->texture_lock_lightmap = true;
 		begin_transaction("Convert to prefab");
 
 		if (!(at == vec3{}))
@@ -206,6 +212,7 @@ namespace codol::edit
 		const object_id id = create_point_entity("misc_prefab", at, pairs);
 
 		d->texture_lock = lock;
+		d->texture_lock_lightmap = lock_lightmap;
 
 		if (id == no_object || prefab_text.empty())
 		{

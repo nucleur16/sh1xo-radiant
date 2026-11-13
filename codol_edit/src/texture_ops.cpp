@@ -177,6 +177,8 @@ namespace codol::edit
 
 	bool document::texture_lock_moves() const { return d->texture_lock; }
 	bool document::texture_lock_rotations() const { return d->texture_lock_rotations; }
+	void document::set_texture_lock_lightmap(const bool on) { d->texture_lock_lightmap = on; }
+	bool document::texture_lock_lightmap() const { return d->texture_lock_lightmap; }
 	void document::set_edit_layer(const texture_layer layer) { d->edit_layer = layer == texture_layer::lightmap ? 1 : 0; }
 	document::texture_layer document::edit_layer() const { return d->edit_layer == 1 ? texture_layer::lightmap : texture_layer::material; }
 

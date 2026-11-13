@@ -94,6 +94,37 @@ namespace editor::actions
 	void open_help_window();
 }
 
+// The hand written menus go through these instead of ImGui::BeginMenu / MenuItem: a key shown in a menu is
+// always the action's key of the moment ( menu::key( "edit.clone" ) ), and actions_check can walk every menu
+// ( audit: all menus are run once into a window off the screen ) and report entries whose key text is not the
+// registry's.
+namespace editor::menu
+{
+	bool begin(const char* label, bool enabled = true);
+	void end();
+	bool item(const char* label, const char* shortcut = nullptr, bool selected = false, bool enabled = true);
+	bool item(const char* label, const char* shortcut, bool* p_selected, bool enabled = true);
+	// the key of an action as the next item shows it; the item is then known to belong to the action
+	const char* key(std::string_view action_id);
+
+	[[nodiscard]] bool auditing();
+	// the menu bar asks for this once per frame: true when actions_check wants every menu walked now
+	[[nodiscard]] bool audit_requested();
+	void audit_begin();
+	void audit_end();		// prints the report of actions_check
+	void register_commands();
+}
+
+namespace editor
+{
+	// the key of an action for a text ( a tooltip, the hint lines ): "-" when it has none
+	inline const char* key_or_dash(const std::string_view id)
+	{
+		const char* k = actions::shortcut(id);
+		return k ? k : "-";
+	}
+}
+
 namespace editor::prefs
 {
 	// typed settings on top of the saved dvars
@@ -173,9 +204,10 @@ namespace editor::textures
 
 namespace editor::render_modes
 {
-	enum class shading : int { game, fullbright, fake_normal, fake_view, depth };
+	enum class shading : int { game, fullbright, fake_normal, fake_view, depth, case_textures };
 	enum class patches : int { textured, wireframe, textured_wire };
-	enum class entities : int { models, boxes, models_boxes, selected_models };
+	// CoD4 radiant's Show Entities As: skinned, bounding box, skinned and boxed, wireframe, selected wireframe, selected skinned
+	enum class entities : int { models, boxes, models_boxes, wireframe, selected_wireframe, selected_models, count };
 
 	struct state
 	{
@@ -213,6 +245,8 @@ namespace editor::render_modes
 	// the frame as the view shows it: the post process ( fake light, light preview, film ) over the renderer's picture
 	IDirect3DTexture9* post_process(IDirect3DTexture9* frame, int width, int height);
 	void draw_overlay(const view::overlay_context& ctx);			// lines: clip cube, patch wires, angles, origins
+	// over the picture of the 3D view: the legend of the case textures ( the sizes the frame drew, their colours )
+	void draw_view_legend(ImDrawList* dl, const ImVec2& at, int width, int height);
 	void device_lost();
 	[[nodiscard]] bool entity_boxes_always();
 	[[nodiscard]] bool hide_patch_meshes();

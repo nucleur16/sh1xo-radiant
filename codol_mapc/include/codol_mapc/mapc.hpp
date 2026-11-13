@@ -60,12 +60,15 @@ namespace codol::mapc
 
 		std::vector<brush_edit> brushes;			// edited ( replaces >= 0 ) and added
 		std::vector<int> brushes_deleted;			// cbrush_t indices
+		// the patches of the worldspawn ( curves, terrain ): every one is new - an imported map has none - and is drawn
+		// ( stage_surfaces ); their collision is not compiled ( README, "Patches" )
+		std::vector<edit::object_id> patches;
 
 		std::vector<std::string> not_compiled;		// things of the edited map the compiler has no stage for
 
 		[[nodiscard]] bool empty() const
 		{
-			return models_moved.empty() && models_deleted.empty() && models_added.empty() && brushes.empty() && brushes_deleted.empty();
+			return models_moved.empty() && models_deleted.empty() && models_added.empty() && brushes.empty() && brushes_deleted.empty() && patches.empty();
 		}
 	};
 
@@ -111,6 +114,7 @@ namespace codol::mapc
 		int clip_models_moved = 0, clip_models_deleted = 0, clip_models_added = 0;
 		int brushes_replaced = 0, brushes_deleted = 0, brushes_added = 0, brush_sides_added = 0, planes_added = 0, leafs_touched = 0;
 		int surfaces_added = 0, vertices_added = 0, triangles_added = 0, faces_not_drawn = 0;
+		int patches_drawn = 0;					// patches of the worldspawn that got render surfaces
 		int assets_carried = 0, asset_dependencies = 0, rawfiles_set = 0;
 		std::uint64_t zone_bytes_before = 0, zone_bytes_after = 0;
 		std::vector<std::string> notes;			// what was done, per stage

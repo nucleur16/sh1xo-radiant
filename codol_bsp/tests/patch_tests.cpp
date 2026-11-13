@@ -15,6 +15,7 @@
 #include "codol_zone/zone_editor.hpp"
 
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 
 namespace
@@ -71,7 +72,7 @@ namespace
 			const edit::object_id arch = edit::create_curve_patch(doc, { -180, -40, 1 }, { -100, 40, 1 }, 5, 3, 2, m.crate);
 			const int middle[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 			doc.move_patch_vertices(arch, middle, { 0, 0, 48 });
-			edit::patch_change_subdivision(doc, 2);		// 6 quads per segment
+			edit::patch_change_subdivision(doc, 2);		// two steps finer: the subdivision number goes down until the tessellation changed twice
 			keep(out.patches);
 
 			// terrain with noise and a turned edge
@@ -170,6 +171,21 @@ namespace
 
 		return count;
 	}
+	// "light: N faces in P lightmap page( s ), L luxels of S units; .." of a report: L
+	std::size_t luxels_of(const bsp::report& rep)
+	{
+		for (const std::string& note : rep.notes)
+		{
+			const auto at = note.find(" luxels of ");
+			if (note.rfind("light: ", 0) == 0 && at != std::string::npos)
+			{
+				std::size_t start = note.rfind(' ', at - 1);
+				return static_cast<std::size_t>(std::strtoull(note.c_str() + start + 1, nullptr, 10));
+			}
+		}
+
+		return 0;
+	}
 }
 
 int main(int argc, char** argv)
@@ -196,6 +212,19 @@ int main(int argc, char** argv)
 	CHECK(doc.save_map_file(out / "maps" / "patches.map", error));
 	CHECK(plain.save_map_file(out / "maps" / "patches_none.map", error));
 
+	// the same room with the lightmap layer of every face at a quarter of radiant's 16384 ( Texture Lock > Lightmaps
+	// keeps such a layer on the brush ): codol_bsp makes the luxels of those faces a quarter as large each way
+	edit::document fine;
+	make_map(fine, false);
+	fine.select_all();
+	{
+		edit::tex_def lm;
+		lm.size_x = lm.size_y = 4096.0;
+		CHECK(fine.set_lightmap(lm));
+	}
+	fine.deselect_all();
+	CHECK(fine.save_map_file(out / "maps" / "patches_fine.map", error));
+
 	// what was written reads back as the same patches
 	{
 		edit::document again;
@@ -219,6 +248,15 @@ int main(int argc, char** argv)
 
 	const compiled c = compile(out, game, "patches");
 	const compiled none = compile(out, game, "patches_none");
+	const compiled finer = compile(out, game, "patches_fine");
+	CHECK(finer.ok);
+	if (none.ok && finer.ok)
+	{
+		const std::size_t a = luxels_of(none.rep), b = luxels_of(finer.rep);
+		std::printf("lightmap layer 16384: %zu luxels, 4096: %zu luxels\n", a, b);
+		// four times as many luxels each way, minus what the padding and the cap of the pages take
+		CHECK(a > 0 && b > a * 4);
+	}
 	CHECK(c.ok && none.ok);
 
 	if (c.ok && none.ok)

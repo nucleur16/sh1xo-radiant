@@ -204,6 +204,23 @@ namespace editor::ui
 	// ( without "drill down" only the one nearest to the viewer stays in the list ); a drag honours weld and lock
 	void patch_vertices_grabbed(object_id patch, std::vector<int>& vertices, int view_axis);
 	bool move_patch_vertices(object_id patch, const std::vector<int>& vertices, const edit::vec3& delta);
+	// The patch vertex selection - the vertices of one selected patch that the Patch menu works on - is one for every
+	// view: the 2D views' vertex mode, the 3D view's vertex tool, the Advanced Edit dialog.
+	object_id patch_vertex_selection(std::vector<int>* out = nullptr);
+	[[nodiscard]] bool patch_vertex_selected(object_id patch, int index);
+	void select_patch_vertices(object_id patch, const std::vector<int>& list, bool add);
+	void deselect_patch_vertices(object_id patch, const std::vector<int>& list);
+	void clear_patch_vertices();
+	[[nodiscard]] bool patch_vertex_locked(object_id patch, int index);
+	[[nodiscard]] bool patch_drill_down();
+	// the locked vertices of a patch by place, and locked again by place after an operation that renumbers the vertices
+	std::vector<edit::vec3> locked_positions(object_id patch);
+	void relock_patch_vertices(object_id patch, const std::vector<edit::vec3>& positions);
+	// the rotate / scale gizmo on selected patch vertices ( weld and lock honoured )
+	bool transform_patch_vertices(object_id patch, const std::vector<int>& vertices, const edit::transform& t);
+	// Weld > Snap To Brush / Model Vertices While Dragging: the point a dragged patch vertex at t lands on
+	bool patch_drag_snap(const edit::vec3& at, edit::vec3& out);
+	bool weld_patches_to_models();
 	// calls mark( position, colour ) for the selected and the locked patch vertices
 	void patch_vertex_marks(const std::function<void(const edit::vec3&, ImU32)>& mark);
 	// 3D view, terrain edge mode: a click along the ray turns the diagonal of the quad it hits; true when it did

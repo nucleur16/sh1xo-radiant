@@ -244,18 +244,18 @@ namespace editor::textures
 			ImGui::TextDisabled("%s", name.c_str());
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Apply to the selection", nullptr, false, has_targets()))
+			if (editor::menu::item("Apply to the selection", nullptr, false, has_targets()))
 			{
 				doc().set_default_material(name);
 				if (ui::report(doc().set_material(name), "Set material")) { note_material_used(name); }
 			}
 
-			if (ImGui::MenuItem("Use for new brushes"))
+			if (editor::menu::item("Use for new brushes"))
 			{
 				doc().set_default_material(name);
 			}
 
-			if (ImGui::MenuItem("Select all faces using this material", nullptr, false, get_scene().open))
+			if (editor::menu::item("Select all faces using this material", nullptr, false, get_scene().open))
 			{
 				const int found = doc().select_by_material(name);
 				game::printf_to_console("%d faces / patches use %s\n", found, name.c_str());
@@ -264,26 +264,26 @@ namespace editor::textures
 
 			ImGui::Separator();
 
-			if (ImGui::MenuItem(favourite ? "Remove from the favourites" : "Add to the favourites"))
+			if (editor::menu::item(favourite ? "Remove from the favourites" : "Add to the favourites"))
 			{
 				if (favourite) { g_favourites.erase(name); } else { g_favourites.insert(name); }
 				save_lists();
 				g.key.clear();
 			}
 
-			if (ImGui::MenuItem("Find / Replace: find this"))
+			if (editor::menu::item("Find / Replace: find this"))
 			{
 				g_find = name;
 				g_show_replace = true;
 			}
 
-			if (ImGui::MenuItem("Find / Replace: replace with this"))
+			if (editor::menu::item("Find / Replace: replace with this"))
 			{
 				g_replace = name;
 				g_show_replace = true;
 			}
 
-			if (ImGui::MenuItem("Preview"))
+			if (editor::menu::item("Preview"))
 			{
 				st.show_preview = true;
 				preview::show_material(name);
@@ -365,6 +365,12 @@ namespace editor::textures
 			doc().set_texture_lock(doc().texture_lock_moves(), !doc().texture_lock_rotations());
 			game::printf_to_console("texture lock, rotations: %s\n", doc().texture_lock_rotations() ? "on" : "off");
 		}, views, no_map).toggle([] { return doc().texture_lock_rotations(); });
+		add("texture.lock_lightmaps", "Texture lock: lightmaps", "", []
+		{
+			doc().set_texture_lock_lightmap(!doc().texture_lock_lightmap());
+			game::printf_to_console("texture lock, lightmaps: %s\n", doc().texture_lock_lightmap() ? "on" : "off");
+		}, views, no_map).toggle([] { return doc().texture_lock_lightmap(); })
+			.help("On: the lightmap layer goes with the brushes and patches ( every move, turn, flip, scale, clone ). Off, as radiant: it stays in the world - faces keep their lightmap projection, patches get their lightmap coordinates from their new place.");
 
 		add("texture.cycle_layer", "Edit layer: cycle ( material, lightmap, smoothing )", "Shift+L", [] { set_layer(g_layer + 1); }, views, no_map);
 		add("texture.layer_material", "Edit layer: material", "", [] { set_layer(0); }, anywhere, no_map).toggle([] { return g_layer == 0; });
@@ -459,20 +465,25 @@ namespace editor::textures
 			if (need_map()) { say(doc().set_smoothing(args.size() > 1 ? args[1] : std::string()), "set smoothing"); }
 		});
 
-		// tex_lock <moves|rotations> [0|1]
+		// tex_lock <moves|rotations|lightmaps> [0|1]
 		command::register_command("tex_lock", [](args_t args)
 		{
 			auto& d = doc();
 			bool moves = d.texture_lock_moves(), rotations = d.texture_lock_rotations();
 
-			if (args.size() > 1)
+			if (args.size() > 1 && (args[1] == "lightmaps" || args[1] == "lightmap"))
+			{
+				d.set_texture_lock_lightmap(args.size() > 2 ? args[2] != "0" : !d.texture_lock_lightmap());
+			}
+			else if (args.size() > 1)
 			{
 				bool& which = args[1] == "rotations" ? rotations : moves;
 				which = args.size() > 2 ? args[2] != "0" : !which;
 				d.set_texture_lock(moves, rotations);
 			}
 
-			game::printf_to_console("texture lock: moves %s, rotations %s\n", d.texture_lock_moves() ? "on" : "off", d.texture_lock_rotations() ? "on" : "off");
+			game::printf_to_console("texture lock: moves %s, rotations %s, lightmaps %s\n", d.texture_lock_moves() ? "on" : "off", d.texture_lock_rotations() ? "on" : "off",
+				d.texture_lock_lightmap() ? "on" : "off");
 		});
 
 		// tex_inuse: the materials of the map with the number of faces
@@ -518,7 +529,7 @@ namespace editor::textures
 
 	void draw_menu()
 	{
-		if (!ImGui::BeginMenu("Textures"))
+		if (!editor::menu::begin("Textures"))
 		{
 			return;
 		}
@@ -529,25 +540,24 @@ namespace editor::textures
 		actions::menu_item("texture.find_replace");
 		ImGui::Separator();
 
-		if (ImGui::BeginMenu("Texture Lock"))
+		if (editor::menu::begin("Texture Lock"))
 		{
 			actions::menu_item("texture.lock_moves", "Moves");
 			actions::menu_item("texture.lock_rotations", "Rotations");
-			ImGui::MenuItem("Lightmaps", nullptr, false, false);
-			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { ImGui::SetTooltip("The lightmap of a map is baked by the map compiler from the geometry: there is no alignment to keep."); }
+			actions::menu_item("texture.lock_lightmaps", "Lightmaps");
 			ImGui::Separator();
 			actions::menu_item("texture.lock_toggle", "Both on / off");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Edit Layer"))
+		if (editor::menu::begin("Edit Layer"))
 		{
 			actions::menu_item("texture.cycle_layer", "Cycle");
 			ImGui::Separator();
 			actions::menu_item("texture.layer_material", "Material");
 			actions::menu_item("texture.layer_lightmap", "Lightmap");
 			actions::menu_item("texture.layer_smoothing", "Smoothing");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
@@ -560,45 +570,45 @@ namespace editor::textures
 		actions::menu_item("texture.select_by_material");
 		ImGui::Separator();
 
-		if (ImGui::BeginMenu("Usage Filter"))
+		if (editor::menu::begin("Usage Filter"))
 		{
-			if (ImGui::MenuItem("All", nullptr, g.usage < 0)) { g.usage = -1; g.key.clear(); }
+			if (editor::menu::item("All", nullptr, g.usage < 0)) { g.usage = -1; g.key.clear(); }
 			for (int i = 0; i < static_cast<int>(std::size(USAGES)); i++)
 			{
-				if (ImGui::MenuItem(USAGES[i].label, nullptr, g.usage == i)) { g.usage = i; g.key.clear(); ui::get().show_materials = true; }
+				if (editor::menu::item(USAGES[i].label, nullptr, g.usage == i)) { g.usage = i; g.key.clear(); ui::get().show_materials = true; }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Locale Filter", !g.locales.empty()))
+		if (editor::menu::begin("Locale Filter", !g.locales.empty()))
 		{
-			if (ImGui::MenuItem("All", nullptr, g.locale < 0)) { g.locale = -1; g.key.clear(); }
+			if (editor::menu::item("All", nullptr, g.locale < 0)) { g.locale = -1; g.key.clear(); }
 			for (int i = 0; i < static_cast<int>(g.locales.size()); i++)
 			{
-				if (ImGui::MenuItem(locale_label(g.locales[static_cast<std::size_t>(i)]).c_str(), nullptr, g.locale == i)) { g.locale = i; g.key.clear(); ui::get().show_materials = true; }
+				if (editor::menu::item(locale_label(g.locales[static_cast<std::size_t>(i)]).c_str(), nullptr, g.locale == i)) { g.locale = i; g.key.clear(); ui::get().show_materials = true; }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Surface Type Filter"))
+		if (editor::menu::begin("Surface Type Filter"))
 		{
-			if (ImGui::MenuItem("All", nullptr, g.surface == -1)) { g.surface = -1; g.key.clear(); }
-			if (ImGui::MenuItem("( none )", nullptr, g.surface == -2)) { g.surface = -2; g.key.clear(); ui::get().show_materials = true; }
+			if (editor::menu::item("All", nullptr, g.surface == -1)) { g.surface = -1; g.key.clear(); }
+			if (editor::menu::item("( none )", nullptr, g.surface == -2)) { g.surface = -2; g.key.clear(); ui::get().show_materials = true; }
 			for (int i = 0; i < static_cast<int>(std::size(SURFACE_TYPES)); i++)
 			{
-				if (ImGui::MenuItem(SURFACE_TYPES[i], nullptr, g.surface == i)) { g.surface = i; g.key.clear(); ui::get().show_materials = true; }
+				if (editor::menu::item(SURFACE_TYPES[i], nullptr, g.surface == i)) { g.surface = i; g.key.clear(); ui::get().show_materials = true; }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
 		actions::menu_item("texture.reload");
 
-		if (ImGui::MenuItem("New material ..")) { assets::open_material_dialog(); }
-		ImGui::EndMenu();
+		if (editor::menu::item("New material ..")) { assets::open_material_dialog(); }
+		editor::menu::end();
 	}
 
 	// ---- find / replace ------------------------------------------------------------------------------------------
@@ -729,7 +739,7 @@ namespace editor::textures
 
 		if (ImGui::IsItemHovered())
 		{
-			ImGui::SetTooltip("A face has a material with its alignment and a lightmap with its own; a patch a material, a lightmap\nmaterial, two sets of texture coordinates and a smoothing word. Shift+L cycles.");
+			ImGui::SetTooltip("A face has a material with its alignment and a lightmap with its own; a patch a material, a lightmap\nmaterial, two sets of texture coordinates and a smoothing word. %s cycles.", actions::shortcut("texture.cycle_layer") ? actions::shortcut("texture.cycle_layer") : "Edit layer: cycle");
 		}
 
 		if (g_layer == 2)
@@ -849,7 +859,7 @@ namespace editor::textures
 				report(d.set_lightmap(t), "Set lightmap");
 			}
 
-			ImGui::TextDisabled("Written to the .map. The map compiler bakes lightmaps from the geometry; it does not read this layer.");
+			ImGui::TextDisabled("Written to the .map. File > Build map makes the luxels of a face as much larger as its lightmap size is over 16384 ( of a patch: its lightmap sample size over 16 ).");
 		}
 
 		// ---- the two locks
@@ -861,6 +871,9 @@ namespace editor::textures
 		if (ImGui::Checkbox("moves", &moves)) { d.set_texture_lock(moves, rotations); }
 		ImGui::SameLine();
 		if (ImGui::Checkbox("rotations", &rotations)) { d.set_texture_lock(moves, rotations); }
+		ImGui::SameLine();
+		bool lightmaps = d.texture_lock_lightmap();
+		if (ImGui::Checkbox("lightmaps", &lightmaps)) { d.set_texture_lock_lightmap(lightmaps); }
 		ImGui::SameLine();
 		if (ImGui::Button("Find / Replace ..")) { g_show_replace = true; }
 	}

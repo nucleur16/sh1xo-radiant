@@ -267,6 +267,12 @@ namespace codol::edit
 		void set_texture_lock(bool moves, bool rotations);
 		[[nodiscard]] bool texture_lock_moves() const;
 		[[nodiscard]] bool texture_lock_rotations() const;
+		// Texture Lock > Lightmaps: the lightmap layer of faces ( its projection ) and of patches ( the lightmap coordinates of
+		// the vertices ) goes with every move, rotation, scale and flip. Off ( the default, as radiant ): faces keep their
+		// lightmap projection in the world, patches get theirs from their new positions ( lightmap sample size of the patch,
+		// 16 units when it has none ).
+		void set_texture_lock_lightmap(bool on);
+		[[nodiscard]] bool texture_lock_lightmap() const;
 		// material of new brushes when none is given ( default "caulk" )
 		void set_default_material(std::string_view material);
 		[[nodiscard]] std::string_view default_material() const;

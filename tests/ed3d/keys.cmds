@@ -1,0 +1,42 @@
+# The keys the menus show follow Edit Hotkeys: actions_check walks every menu and compares its key texts with the
+# registry, before and after a few keys were changed.
+map_new $MAP
+wait 6
+actions_check
+wait 1
+expect 0 problems
+bind edit.clone Ctrl+Shift+J
+bind edit.delete Alt+X
+bind patch.invert Ctrl+Alt+I
+bind tool.clipper Alt+Q
+bind file.save Ctrl+Alt+S
+wait 1
+actions_check
+wait 1
+actions_menus clone
+actions_menus delete
+actions_menus invert
+actions_menus clipper
+actions_menus save
+expect Ctrl+Shift+J
+expect Alt+X
+expect Ctrl+Alt+I
+expect Alt+Q
+expect Ctrl+Alt+S
+# the Edit menu, open, with the new keys of Clone and Delete
+ui_mouse 48 10
+wait 0.3
+ui_mouse down
+wait 0.2
+ui_mouse up
+wait 1
+ed_shot $OUT\keys_edit_menu.png
+wait 1
+ui_mouse 600 600
+ui_key Escape
+wait 0.5
+bind_reset
+wait 1
+actions_check
+wait 1
+quit

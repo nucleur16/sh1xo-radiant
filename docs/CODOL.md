@@ -45,7 +45,7 @@ needed. What it is made of:
 |---|---|---|
 | Radiant | `CoDOLRadiant.exe` | open a map of the install or one of your own, edit entities / models / brushes in 3D and 2D views with undo, light entities with a panel of their own, save as `.map` |
 | `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce in the materials' colours, light grid, reflection probes ), primary lights ( spot, omni, scriptable ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
-| editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes, and the project's assets ( animations, sounds, effects, models ). It patches the shipped zone; no light bake. |
+| editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes and of patches ( no patch collision ), and the project's assets ( animations, sounds, effects, models ). It patches the shipped zone; no light bake. |
 | Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials, models, animations, sounds and effects: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export`, `xanim_export`, soundalias `.csv` + `.wav`, `.efx` -> native assets in `mod\<map>\<map>_assets.ff`. Materials and models are shown by the editor at once; animations, sounds and effects are for the level script of the built map. See [Your own assets](#your-own-assets). |
 | the zone source `.csv` of a map, `linker_pc` on it | `tools\package_map.ps1` ( part of File > Build map ) | puts the project's assets, animtrees, animlist and scripts into the map zone ( `codol_assetc --carry`, `--rawfile` ), adds the minimap material, builds the load zone and writes the package |
 | `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
@@ -70,7 +70,7 @@ three lines at the bottom of the view say what the mouse and the keys do in the 
 | Tool | Key | Left button |
 |---|---|---|
 | **Select** | Esc | Click selects ( Ctrl or Shift adds / removes ). **Drag on the selection**: it moves, on the world plane that faces the camera most ( look down: on the floor; look along: up and sideways ). **Drag next to a selected brush**: the faces on that side follow the mouse - Radiant's resize; they are outlined while the mouse is there, and a drag that starts past a corner takes both faces. **Squares on the selection's box**: that side of every selected brush. **Ctrl+Shift click** selects a face ( again: deselects it ); **drag a selected face**: it moves along its normal, with every other selected face. **Shift drag**: everything in the rectangle is added to the selection. **Alt click**: the object behind the selected one under the mouse ( Alt+Shift click adds it ) - through walls and into stacks. With nothing selected a left drag drives the camera, as before. |
-| **Vertices** | V | Handles on the corners of the selected brushes ( green ) and the control points of the selected patches ( pink ). Click a handle: select it; Ctrl or Shift click adds / removes; Shift drag: the handles in the rectangle. Drag a handle: the selected handles move with it, on the plane that faces the camera most ( with **Alt** along the third axis instead ); the handle that is dragged lands on the grid, also when it was off it. The arrows of the gizmo on the selected handles move them along one axis. A corner that brushes share moves in all of them; sides that are no longer flat are split into triangles ( the brush is rebuilt as the hull of its corners ). |
+| **Vertices** | V | Handles on the corners of the selected brushes ( green ) and the control points of the selected patches ( pink ). Click a handle: select it; Ctrl or Shift click adds / removes; Shift drag: the handles in the rectangle. Drag a handle: the selected handles move with it, on the plane that faces the camera most ( with **Alt** along the third axis instead ); the handle that is dragged lands on the grid, also when it was off it. The arrows of the gizmo on the selected handles move them along one axis. A corner that brushes share moves in all of them; sides that are no longer flat are split into triangles ( the brush is rebuilt as the hull of its corners ). **Control points of patches** are the Patch menu's vertex selection ( below ): Alt click selects the column of a point, Alt + Shift click its row ( Ctrl adds ); locked points are red and stay; Delete removes a whole selected row / column; the rotate / scale gizmo ( the view's toolbar, R ) turns / scales a set of them about its centre. |
 | **Edges** | E, while the handles are shown | Handles on the middle of the edges ( blue ); an edge moves as a whole, the same way. E again or V: back to the vertices. |
 | **Clipper** | C | Click on a surface: a clip point; two or three, drag to move them. Two points cut straight through the surface the first was put on, three define the plane. The cut is drawn on every selected brush, the arrow shows the side that stays. Enter clips, Ctrl+Enter keeps the other side, Shift+Enter splits; Esc removes the points, then leaves. Points placed in a 2D view and in the 3D view are the same points. |
 | **Create** | B | Drag a rectangle on the surface under the mouse - the ground, a wall, the top of a brush, the floor of an empty map: a brush stands on it, as high as the last selection was ( 64 when there was none ). It is selected: drag the squares on its box to size it. The list next to the button picks the shape: box, cylinder and cone ( with a number of sides ), wedge, terrain patch. |
@@ -285,8 +285,10 @@ the grid itself, two triangles per cell.
 | Matrix > Re-disperse Vertices / Columns / Rows | `patch_redisperse <vertices\|columns\|rows>` | vertices: even spacing along the lines the control points form; columns / rows: evenly on the straight line between the first and the last |
 | Weld > Connect Selection / Weld | `patch_weld [tolerance]` | vertices of the selected patches closer than 0.1 units ( Tolerant Weld: one grid step ) become one place |
 | Weld > Weld to Brush Vertices | `patch_weld_brushes [tolerance]` | onto brush corners |
-| Weld > Tolerant Weld, Weld Equal Patch Points During Moves | `patch_tolerant [0\|1]`, `patch_weld_moves [0\|1]` | the second: a vertex dragged in a 2D view takes along every vertex of the selected patches in the same place ( the seam of a cylinder ) |
-| Inc / Dec Subdivision | `patch_subdiv <+n\|-n>` | curves: 1 - 16 quads per segment, in the views and in the compiled map |
+| Weld > Weld to Model / Prefab Vertices | `patch_weld_models` | the selected vertices ( else all of the selected patches ) onto the nearest vertex of a model ( its mesh as the 3D view draws it ) or of a prefab's contents within the tolerance |
+| Weld > Snap To Brush Vertices / Snap To Model / Prefab Vertices While Dragging | `patch_snap_brushes [0\|1]`, `patch_snap_models [0\|1]` | a dragged patch vertex ( 2D or 3D, the one the mouse holds ) lands on such a point within one grid step; the others keep their distance to it |
+| Weld > Tolerant Weld, Weld Equal Patch Points During Moves | `patch_tolerant [0\|1]`, `patch_weld_moves [0\|1]` | the second: a vertex dragged in a 2D view or the 3D view ( also by the rotate / scale gizmo ) takes along every vertex of the selected patches in the same place ( the seam of a cylinder ) |
+| Inc / Dec Subdivision | `patch_subdiv <+n\|-n>` | curves: the subdivision number goes down ( finer ) / up until the tessellation changes, as in radiant; 1 - 16 quads per segment, in the views and in the compiled map ( below: the size line ) |
 | Split | `patch_split [column\|row] [index]` | two patches, at the line of the selected vertices or in the middle |
 | Invert ( Ctrl+I ) | `patch_invert` | faces the other way; a terrain keeps its triangles |
 | Thicken .. ( Ctrl+T ) | `patch_thicken <units> [seams 0\|1]` | a second surface behind the patch, facing away, and strips that close the edges |
@@ -300,27 +302,69 @@ the grid itself, two triangles per cell.
 | Cycle Terrain Edge Mode | `patch_edge_mode [0\|1]` | a click on a terrain quad in the 3D view turns its diagonal |
 | | `patch_info` | the selected patches: size, subdivision, bounds, turned edges |
 
-**Patch vertices.** In *vertex mode* ( V ) of a 2D view a patch shows its control points; grabbing one selects it
-( yellow; Shift adds ) together with the ones behind it, and dragging moves them. The Advanced Edit dialog selects
-by row and column. The vertex selection is what "the selected vertices" above means.
+**Patch vertices.** One selection of control points for every view - the vertices of one selected patch, what
+"the selected vertices" above means ( `ui::patch_vertex_selection` ). In *vertex mode* ( V ) of a 2D view a patch
+shows its control points; grabbing one selects it ( yellow; Shift adds ) together with the ones behind it, and
+dragging moves them. The Advanced Edit dialog selects by row and column ( `patch_vsel` ). In the **3D view**'s vertex
+tool the control points are handles: click selects one, Ctrl / Shift click adds / removes, Shift drag takes those in
+the rectangle, **Alt click its column, Alt + Shift click its row** ( Ctrl adds ); with Drill Down Vertices a click
+also takes the points under it on the screen. A drag moves the selection on the plane that faces the camera most,
+the held point on the grid, with Weld Equal Patch Points During Moves and the snapping of the Weld menu; **locked**
+points ( Lock Vertices ) are red in every view and do not move. The gizmo moves the selection; with the view's
+Rotate / Scale gizmo it turns / scales the selected points about their centre ( `patch_vtransform rotate <deg>
+[x|y|z] | scale <f>` does the same from the console ). **Delete** with points selected ( 3D or 2D vertex mode ):
+a whole row / column of a terrain is removed ( `patch_terrain_remove` ), the first / last row or column of a curve
+takes its pair along ( `patch_delete` ); anything else deletes nothing and says why - Esc drops the points, then
+Delete deletes the patch. The selection made in a 2D view or the dialog is drawn in the 3D view, as handles in the
+vertex tool and as marks in the others. `patch_vsel_info` prints it with positions ( `L`: locked ).
+`tests\ed3d\patch_vertices.cmds` runs all of this with pictures.
 
 **In the file** a curve is a `curve` block and a terrain a `mesh` block, as CoD4 radiant writes them: material,
 `lightmap_gray`, an optional `smoothing` line, `columns rows 16 8` and per vertex `v x y z [c r g b a] t s t ls lt
 [f 1]` ( texture coordinates in texels, lightmap coordinates, `f 1` = turned edge of the quad the vertex starts ).
-Unedited patches are written back byte for byte. **The fourth number of the size line is read as the subdivision
-of a curve** ( 8 = 4 quads per segment ) - an assumption of this editor: CoD4 radiant always writes 8 and its own
-meaning of the number was not verified.
+Unedited patches are written back byte for byte.
+
+**The size line is `columns rows <lightmap sample size> <subdivision>`.** Established from the CoD4 mod tools'
+binaries and maps ( read only, 2026-11-12 ):
+
+* `CoD4Radiant.exe` writes it with `"%i %i %g %i"` ( 0x445AEB ): the third number is a float of the patch
+  ( `patchMesh_t` + 0x5048, written as 0 unless the flag at + 0x5043 is set ), the fourth an int ( + 0x14 ). Its
+  reader ( 0x444CC0 ) takes the third with `atof` and sets the flag when it is not 0, the fourth with `atoi`,
+  clamped to at least 1. A new patch has 0 and 8. The function that makes a patch's lightmap coordinates
+  ( 0x4397B0 ) computes them from a sample size and stores it in + 0x5048: **the third number is the lightmap
+  sample size** ( units per luxel; 16 as radiant's default ).
+* Inc Subdivision ( 0x44CDE0 ) passes -1 to the fourth number, Dec +1, and repeats until the patch's vertex count
+  changes, never going below 1; terrain is excluded. So **the fourth number is the subdivision of a curve, and
+  smaller is finer**; that it is an error bound in world units ( the largest distance a quad may keep from the
+  curve, as the quake family's patches have it ) is this editor's reading - the tessellation code of radiant and
+  of `cod4map.exe` was not traced. `cod4map.exe` ( ParsePatch 0x428914 ) reads four ints, drops the third and
+  keeps the fourth.
+* 406 `.map` prefabs of the stock CoD4 mod tools ( 481,000 patch blocks ): curves have sample size 16 ( 2,859 ),
+  0, 4, 512, 8, 32, 1024 and subdivisions 8 ( 2,306 ), 1, 3, 2, 5, 4, 12, 7, 34, 23 .. 209; terrain meshes always
+  8 ( 20 blocks: 1 ). Neither number follows the smoothing, contents or tool flags lines. Two open-source
+  OBJ-to-CoD-map converters write `2 2 16 8` without naming the numbers; no documentation names them.
+
+So here: `patch::lightmap_sample_size` and `patch::subdivision` ( `codol_edit` `model.hpp` ), both kept exactly as
+read. A curve is drawn and compiled with n quads per segment, the smallest n with | P0 - 2 P1 + P2 | / ( 4 n² ) <=
+the subdivision for every segment of three control points ( the most a quadratic bezier leaves its chord ), 1 - 16,
+one n for the whole patch. Inc / Dec Subdivision step the number as radiant does: down ( up ) until n changes. The
+lightmap sample size sets the luxel size of the patch in `codol_bsp` ( [Textures](#keys-preferences-toolbar-the-textures-renderer-effects-and-tools-menus) ) and the world
+lightmap coordinates of an unlocked patch.
 
 **In the built map** ( File > Build map ) every patch - curves at their subdivision, terrain as it is - becomes
 drawn triangles with a lightmap and collision triangles of the clip map's terrain. Triangles without area ( the
 fan of a cap around its centre ) are dropped. Patches of a brush entity are not compiled ( the build says so ).
 `codol_bsp_patch_tests` compiles a room with every patch kind and brush primitive.
 
-**Not there:** Weld to Model / Prefab Vertices ( greyed: models are not read for snapping, prefabs are not
-expanded ); `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brush > Box / Cylinder make for
-physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode; selecting patch vertices
-in the 3D view; patches in **File > Compile map** ( an edited shipped map: `codol_mapc` reports patches and leaves
-them out - build the map from scratch ).
+**Not there:** `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brush > Box / Cylinder make for
+physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode.
+
+**In File > Compile map** ( an edited shipped map, `codol_mapc` ) the patches of the worldspawn are drawn: their
+tessellation ( the triangles `codol_bsp` makes ) becomes a render surface of the patch's material that takes, per
+vertex, the nearest texel of the shipped light bake that faces its way - the way new brush faces are lit there.
+**Their collision is not compiled** ( the report says so ): put clip brushes where players and bullets have to stop
+on them. Why, and what it would take: `codol_mapc/README.md`, "Patches". `codol_mapc_tests --only patches`; not seen in
+the game. Patches of brush entities are left out in both compilers.
 ### Selecting, regions, filters, prefabs
 
 What CoD4 radiant has in its File, Edit, View, Selection, Grid, Misc and Region menus, written again for this
@@ -491,9 +535,14 @@ vertex mode in any view and "back to vertices" in the 3D view's edge mode ).
   keys are one set for the 3D view and the 2D views: **Shift + arrows** shift by the grid size, **Ctrl + arrows**
   scale by 5 %, **Shift + PageUp / PageDown** rotate by the angle snap; a key that is held is one undo step. Hide Unselected has Alt+H as its second key, the leak spots Ctrl+Shift+K / L.
 * **Help** ( `F1`, `ed_help` ): the mouse in the 3D view and the 2D views, and the list of keys made from the
-  registry. The shortcut texts of the File, Edit, Brush, Patch, Selection .. menus are still written out by hand:
-  they show the default key, not a changed one ( the Textures, Renderer, Effects and Tools menus, the toolbar and
-  Help show the key as it is ).
+  registry. Every key text the editor shows - the menus, the tooltips of the toolbar and the view buttons, the
+  hint lines of the 3D view, Help - is the action's key as it is now ( `menu::key( "<id>" )`,
+  `actions::shortcut( "<id>" )` ): a key changed in Edit Hotkeys shows everywhere at once.
+* **`actions_check`** walks every menu of the menu bar once ( run off the screen, every submenu "open" ) and prints
+  each entry whose key text is not the key of its action, a key text that comes from no action, and an entry
+  that shows no key while the action of the same name has one; `actions_menus [text]` lists what it saw ( entry,
+  key, action id ). `tests\ed3d\keys.cmds` runs it, changes five keys, runs it again, opens the Edit menu for a
+  picture and resets the keys.
 
 **Preferences** ( Edit > Preferences, File > Settings, `P`, `ed_prefs [group]` ) replace the raw list of settings:
 General ( text size `ed_ui_scale`, toolbar, undo levels `ed_undo_levels` ), Paths, Camera ( `ed_cam_fov`,
@@ -529,14 +578,29 @@ action does not exist keeps its place and shows up when it does.
   flip and natural change the layer that is picked ( `tex_layer material|lightmap|smoothing|cycle`, `Shift+L` );
   in the lightmap layer the material and the size of the layer can be typed ( `tex_lightmap <material> [size]` ),
   in the smoothing layer the word of the selected patches ( `tex_smoothing <word>` ). The map compiler bakes
-  lightmaps from the geometry and does not read the lightmap layer: it is kept for the file. **Patches** are
+  lightmaps from the geometry, at the density the lightmap layer asks for: `codol_bsp` makes the luxels of a face
+  as much larger as the size of its lightmap layer is over radiant's 16384, per axis ( 8192: twice as many luxels
+  each way; clamped to 1/16 .. 16 ), and the luxels of a patch as much larger as its lightmap sample size ( the
+  third number of its size line ) is over 16 - `codol_bsp_patch_tests` compiles a room with every face at 4096 and
+  finds more than four times the luxels. The projection itself ( shift, rotation ) of the layer is not used: the
+  compiler lays its own luxel grid on each face. **Patches** are
   targets of all of these: their texture coordinates move ( scale and rotate about the middle, fit over the whole
   patch, natural from the vertex positions ). Natural is the alignment of a new face - the format has one
   projection, along the world axis closest to the face; there is no separate "face" projection to reset to.
 * **Find / Replace**: material A becomes B in the whole map, the selection, or the selected faces only
   ( `tex_replace <a> <b> [map|selection|faces]` ); "Select the faces using Find" ( `tex_select <material>` ). One
   undo step; a name with `wc/` in front and one without are the same material.
-* **Texture Lock > Moves / Rotations** ( `tex_lock moves|rotations [0|1]` ): apart. Lightmaps: nothing to lock.
+* **Texture Lock > Moves / Rotations** ( `tex_lock moves|rotations [0|1]` ): apart. **Texture Lock > Lightmaps**
+  ( `tex_lock lightmaps [0|1]`, action `texture.lock_lightmaps`, setting `ed_texlock_lightmaps`, a box in the
+  Surface inspector; off by default ): on, the lightmap layer goes with the geometry in every transform - moves,
+  rotations, scales, flips ( the gizmo, 2D drags, nudges, the numeric fields, the Selection menu ), clones with an
+  offset, a face dragged along its normal in the 3D view or resized - with the same maths as the material's lock
+  ( `codol_edit` `lock_layers` ); patches keep the lightmap coordinates of their vertices. Off, as radiant: faces keep
+  their lightmap projection in the world, patches get their lightmap coordinates again from where their vertices
+  are ( along the axis the patch faces most, a luxel per lightmap sample size ). Paste puts objects where they were,
+  so nothing changes there; stamping and making prefabs always keep both layers. A scale that is not the same
+  along the axes of a turned projection shears it, which the format cannot hold ( as for the material ). Tests:
+  `codol_edit_tests` ( `test_lightmap_lock` ).
 * Flip X / Y, rotate 90, fit, natural, "select all faces with the material of the selection" as actions
   ( `tex_flip x|y`, `tex_natural` ).
 * **Materials** window: filters for usage, locale and surface type ( also in the menu ), the lists *in use*
@@ -555,13 +619,13 @@ action does not exist keeps its place and shows up when it does.
 |---|---|
 | General | Outline Selected ( `J` ), Tint Selected ( `Shift+J` ), Show Connections, Show Angles ( an arrow where an entity looks ), Draw Model Origins |
 | Grid Window | names of entities, grid blocks ( the flag of the Grid menu ), coordinates at the edges and of the blocks, a cross under the mouse with its position |
-| Render Method | `r_mode game|fullbright|fake_normal|fake_view|depth`, Wireframe. **Fullbright** is the game's own `unlit` technique of each technique set: the colour maps without lightmap, sun or specular. The **fake lights** shade the fullbright picture by the way a surface faces / by its angle to the camera. Case Textures: not there ( a technique of Radiant's own technique sets ). |
+| Render Method | `r_mode game|fullbright|fake_normal|fake_view|depth`, Wireframe. **Fullbright** is the game's own `unlit` technique of each technique set: the colour maps without lightmap, sun or specular. The **fake lights** shade the fullbright picture by the way a surface faces / by its angle to the camera. **Case Textures** ( `r_mode case` ): what CoD4 radiant's mode of that name is - its technique "case texture" ( `techniques/case_texture.tech` of the mod tools ) samples a code texture that `CoD4Radiant.exe` picks per material ( the function at 0x53B630 compares the width and height of the material's colour map with those of the images listed in `bin/case_textures.txt`: `case256`, `case1024x128`, `case512x64red` .. ). So every surface shows a generic grid of the size of its texture: how many texels it has and how it is stretched. Here the grids are generated ( `codol_view/src/renderer_case.cpp`, nothing of the mod tools is read ): one per colour map size, a checker of 64 texel cells with a line every 256 texels and the size written in each block, coloured by the larger side ( blue 64 and less, cyan 128, green 256, grey 512, orange 1024, red 2048 ); unlit, as fullbright. A legend in the top right corner of the 3D view lists the sizes the frame drew. It is not a surface type view - CoD4 radiant's "case" is the texture size. Alpha tested materials ( fences, foliage ) are drawn solid, as the grid has no holes. |
 | Draw Water | off: nothing whose technique set is one of water |
 | Texture Filter | as the materials say, point, bilinear, trilinear, anisotropic ( material textures; lightmaps keep theirs ) |
 | Texture Resolution | maximum .. an eighth: the mip level every material texture is read at. One setting for colour, specular and normal maps. |
 | Specular / Normal maps | off: the game's own stand-ins ( black, flat ) are bound in their place |
 | Show Patches As | textured, wireframe, textured + wireframe ( `r_patches`, `Shift+W`; the Patch menu's entry is the same setting ) |
-| Show Entities As | models, boxes, models and boxes ( `r_entities` ) |
+| Show Entities As | CoD4 radiant's six: Bounding Box, Wireframe ( the triangles of each model's mesh as lines, front and back, in its materials ), Selected Wireframe and Selected Skinned ( the models of the selected entities wire / drawn, every other entity its box ), Skinned, Skinned And Boxed. `r_entities <models\|boxes\|both\|wireframe\|selected_wireframe\|selected_models>`, actions `render.entities_<word>` and `render.entities_cycle` ( the toolbar button, in the order of the menu ), setting `ed_r_entities` 0 - 5. The renderer asks the editor per model and frame how to draw it ( `frame_options::model_style` ); models that belong to no entity of the document stay as they are. `tests\ed3d\entities_as.cmds` takes a picture of each. |
 | Light / Sun Preview | **Light preview**: the light of the selected `light` entities, and of the ones kept in the preview list, falls on what the 3D view shows - radius, colour, intensity, the cone of a spot; up to 8, the nearest. Sun shadows on / off. For a map of your own "Sun Preview" builds the stage again with the worldspawn's light. |
 | Filmtweaks | the film values of a `.vision` file of the game's zones ( `r_vision <name>`, `r_vision list`, the window lists and filters them ), or typed ( `r_film contrast brightness desaturation [light rgb] [dark rgb]` ) |
 | Cubic Clipping | only what touches a cube around the camera is drawn ( `r_cubic <distance|off>`, `Ctrl+\`, `Ctrl+[`, `Ctrl+]` ) |
@@ -836,12 +900,10 @@ form of this work; what the standalone editor does is above.
 
 Be aware of these before planning work around this branch:
 
-- **Top bar of CoD4 Radiant: what is not there.** Case Textures ( a technique of Radiant's own technique sets ),
-  separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), "selected
-  wireframe / selected skinned" entities, a lock for lightmaps ( they are baked from the geometry ), a "face"
+- **Top bar of CoD4 Radiant: what is not there.** Separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), a "face"
   texture projection ( the format has the axial one ), PhysX movement. The light preview and the fake lights are a
   post process from the depth pre-pass, not the game's light techniques; effects in the map view are the editor's
-  particle simulation without depth. The shortcut texts of the hand written menus do not follow a changed key.
+  particle simulation without depth.
 - **Maps of your own: lighting is simpler than the game's own maps.** Surfaces are cut by the reach of the
   primary lights along a grid of 32 units, not as finely as the game's compiler does, and a surface is lit at run
   time by one primary light. Bounced light has the mean colour of a material, not its pattern. An omni light
@@ -876,15 +938,20 @@ Be aware of these before planning work around this branch:
   without the list.
 - **3D editing**: the selection rectangle is a rectangle ( no lasso ); a drag next to a brush moves faces, it does
   not shear them ( Radiant's Ctrl drag ); the handles of the vertex and edge tools are drawn through walls and have
-  a move gizmo only ( no rotating or scaling of a set of corners ); a brush is always the hull of its corners, so a
+  a move gizmo only for brush corners ( a set of patch control points turns and scales; brush corners do not ); a brush is always the hull of its corners, so a
   corner pushed inside the others disappears. The texture keys act on every face of a selected brush, as in
   Radiant - deselect the brush ( Esc ) and Ctrl+Shift click faces to work on single ones.
 - **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
   worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
-- **Patches**: no welding to model or prefab vertices, no `physics_box` / `physics_cylinder` blocks, patch vertices
-  are selected in the 2D views and the Advanced Edit dialog only, the subdivision number of a curve is this editor's
-  reading of the file ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map
-  ( an edited shipped map ) leaves patches out.
+- **Patches**: no `physics_box` / `physics_cylinder` blocks. The patch vertex selection is one patch at a time ( a
+  click on another patch's point starts a new one ); a vertex of a model is snapped to as the renderer gives its triangles
+  for picking. The subdivision number of a curve is radiant's
+  ( smaller is finer, verified in its binary ), but how many triangles a number gives is this editor's reading ( an
+  error bound in units ) - radiant's and cod4map's tessellation were not traced
+  ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map ( an edited
+  shipped map ) draws the patches of the worldspawn but compiles **no collision** for them ( clip brushes instead;
+  `codol_mapc/README.md`, "Patches" ); neither compiler takes patches of brush entities. Patches compiled into a
+  shipped map were not seen in the game.
 - **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
   the shipped animtrees are not extended ( the list under [In the built map](#in-the-built-map) ).
 - **Menus of CoD4 radiant that are not here** ( of File, Edit, View, Selection, Grid, Misc, Region ): the Script

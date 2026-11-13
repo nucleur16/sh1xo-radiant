@@ -98,6 +98,8 @@ namespace codol::view
 		inside_scene,		// the host is between BeginScene and EndScene: neither is called
 	};
 
+	struct object_ref;
+
 	struct frame_options
 	{
 		// Target. Null: an internally owned A8R8G8B8 render target texture of the requested size ( returned by
@@ -162,7 +164,20 @@ namespace codol::view
 		bool normal_maps = true;
 		// > 0: only what touches the cube of this half size around the camera is drawn ( cubic clipping )
 		float far_clip = 0;
+		// How each model ( static, entity, placed ) is drawn, asked once per model and frame before it is culled:
+		// model_style::solid, ::wireframe ( the triangles of its mesh as lines, with its material ) or ::hidden. Empty:
+		// all solid. What CoD4 radiant's "Show Entities As" needs ( wireframe, selected wireframe, selected skinned ).
+		std::function<int(const object_ref&)> model_style;
+		// Case textures ( CoD4 radiant's render method of that name, technique "case texture" ): the colour map of
+		// every material reads as a generated grid image of the same size in texels, coloured by that size, so the
+		// resolution of the textures and their scale on the surfaces can be seen. Use it with fullbright.
+		bool case_textures = false;
 	};
+
+	namespace model_style
+	{
+		enum : int { solid = 0, wireframe = 1, hidden = 2 };
+	}
 
 	struct statistics
 	{
@@ -420,6 +435,10 @@ namespace codol::view
 		statistics stats() const;
 		std::vector<std::string> warnings() const;
 		std::vector<std::string> texture_failures() const;
+		// frame_options::case_textures: the sizes ( width, height of a colour map ) the last frame drew, and the colour of
+		// the grid of a size ( D3DCOLOR ), for a legend
+		std::vector<std::pair<int, int>> case_texture_sizes() const;
+		static std::uint32_t case_texture_color(int width, int height);
 		const std::string& last_error() const;
 
 		// ---- for the editor ------------------------------------------------------------------------------

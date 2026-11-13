@@ -503,8 +503,8 @@ namespace editor::toolbar
 
 			if (ImGui::BeginPopup("##toolbar_menu"))
 			{
-				if (ImGui::MenuItem("Edit Toolbar ..")) { g_show_edit = true; }
-				if (ImGui::MenuItem("Hide the toolbar")) { prefs::set_bool("ed_toolbar", false); }
+				if (editor::menu::item("Edit Toolbar ..")) { g_show_edit = true; }
+				if (editor::menu::item("Hide the toolbar")) { prefs::set_bool("ed_toolbar", false); }
 				ImGui::EndPopup();
 			}
 

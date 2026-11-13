@@ -212,6 +212,7 @@ namespace codol::mapc
 		{
 			std::map<int, std::vector<edit::object_id>> by_model;		// brushes per sub model, document order
 			std::vector<std::string> other;								// what has no place in the zone
+			std::vector<edit::object_id> world_patches;					// patches of the worldspawn: drawn ( stage_surfaces )
 		};
 
 		brush_lists brushes_of(const edit::document& doc)
@@ -248,7 +249,14 @@ namespace codol::mapc
 					}
 					else if (doc.find_patch(child))
 					{
-						patches++;
+						if (sub_model == 0)
+						{
+							out.world_patches.push_back(child);
+						}
+						else
+						{
+							patches++;
+						}
 					}
 				}
 				const std::string who = "entity '" + std::string(e->classname()) + "'";
@@ -259,7 +267,7 @@ namespace codol::mapc
 				}
 				if (patches)
 				{
-					out.other.push_back(format("%s has %d patches: terrain and curve patches are not compiled", who.c_str(), patches));
+					out.other.push_back(format("%s has %d patches: patches are compiled in the worldspawn only, these are left out", who.c_str(), patches));
 				}
 				if (opaque)
 				{
@@ -392,6 +400,7 @@ namespace codol::mapc
 		const auto zone_order = imported_brush_order(zone, clip);
 		const brush_lists base_brushes = brushes_of(baseline), now_brushes = brushes_of(edited);
 		out.not_compiled = now_brushes.other;
+		out.patches = now_brushes.world_patches;
 		for (const auto& [sub_model, list] : base_brushes.by_model)
 		{
 			const auto it = zone_order.find(sub_model);

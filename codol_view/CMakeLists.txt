@@ -64,6 +64,7 @@ add_library(codol_view STATIC
 	src/renderer_impl.hpp
 	src/renderer_load.cpp
 	src/renderer_draw.cpp
+	src/renderer_case.cpp
 	src/renderer_shadow.cpp
 	src/pick_bvh.hpp
 	src/pick_bvh.cpp

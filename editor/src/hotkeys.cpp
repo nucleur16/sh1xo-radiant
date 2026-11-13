@@ -288,13 +288,13 @@ namespace editor::actions
 		if (!a)
 		{
 			// the action comes with another part of the editor: the entry is there, greyed out
-			ImGui::MenuItem(label ? label : std::string(id).c_str(), nullptr, false, false);
+			editor::menu::item(label ? label : std::string(id).c_str(), nullptr, false, false);
 			return false;
 		}
 
 		const bool on = a->checked && a->checked();
 
-		if (ImGui::MenuItem(label ? label : a->label.c_str(), shortcut(id), on, usable(*a)))
+		if (editor::menu::item(label ? label : a->label.c_str(), editor::menu::key(id), on, usable(*a)))
 		{
 			a->run();
 			return true;

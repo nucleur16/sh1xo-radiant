@@ -101,6 +101,9 @@ namespace codol::bsp
 		std::vector<int> cells;			// the cells the face is seen from ( vis stage ); empty: cell 0
 		bool draw = false;				// has a world material and is not removed by csg
 		bool visible = true;			// cleared when the face lies inside another opaque brush / faces the void
+		// the lightmap layer of the face line ( "lightmap_gray 16384 16384 .." ): its size over radiant's 16384, per axis; the
+		// luxels of the face are that much larger ( 8192: twice as many luxels each way )
+		double lightmap_scale[2] = { 1.0, 1.0 };
 	};
 
 	struct map_brush
@@ -141,6 +144,9 @@ namespace codol::bsp
 		std::string material;
 		std::vector<edit::mesh_vertex> vertices;
 		std::vector<std::uint32_t> indices;		// counter clockwise from the visible side
+		// the lightmap sample size of the patch ( the third number of its size line ) over 16: the luxels of its triangles
+		// are that much larger; 1 when the patch has none
+		double lightmap_scale = 1.0;
 	};
 
 	// a misc_model: a static model of the world

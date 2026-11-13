@@ -315,59 +315,75 @@ namespace editor
 			ImGui::End();
 		}
 
+		void draw_menu_contents();
+
 		void draw_menu()
 		{
+			// actions_check: every menu once, off the screen, as if it were open
+			if (menu::audit_requested())
+			{
+				menu::audit_begin();
+				draw_menu_contents();
+				menu::audit_end();
+			}
+
 			if (!ImGui::BeginMainMenuBar())
 			{
 				return;
 			}
 
+			draw_menu_contents();
+			ImGui::EndMainMenuBar();
+		}
+
+		void draw_menu_contents()
+		{
 			auto& st = ui::get();
 
-			if (ImGui::BeginMenu("File"))
+			if (editor::menu::begin("File"))
 			{
 				ui::draw_file_menu_items();
 				ui::draw_file_menu_extra();
 				ImGui::Separator();
 				prefs::draw_recent_menu();
-				ImGui::MenuItem("Settings ..", nullptr, &g_show_settings);
+				editor::menu::item("Settings ..", nullptr, &g_show_settings);
 				ImGui::Separator();
 
-				if (ImGui::MenuItem("Exit"))
+				if (editor::menu::item("Exit"))
 				{
 					ui::exit_editor();
 				}
 
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Edit"))
+			if (editor::menu::begin("Edit"))
 			{
 				ui::draw_edit_menu();
 				ImGui::Separator();
 				ext::draw_edit_menu_items();		// Edit Colors / Edit Toolbar / Edit Hotkeys / Preferences
 				ui::draw_edit_menu_extra();
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Brush"))
+			if (editor::menu::begin("Brush"))
 			{
 				ui::draw_brush_menu();
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Patch"))
+			if (editor::menu::begin("Patch"))
 			{
 				ui::draw_patch_menu();
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("View"))
+			if (editor::menu::begin("View"))
 			{
 				const auto item = [](const char* label, ggui::ggui_module* module_)
 				{
 					bool open = module_->is_active();
-					if (ImGui::MenuItem(label, nullptr, &open))
+					if (editor::menu::item(label, nullptr, &open))
 					{
 						module_->toggle(true, open);
 					}
@@ -376,52 +392,50 @@ namespace editor
 				item("3D View", GET_GUI(ggui::codol_viewport_dialog));
 				ui::draw_grid_view_menu_items();
 				ImGui::Separator();
-				ImGui::MenuItem("Entity", nullptr, &st.show_entity);
-				ImGui::MenuItem("Selection", nullptr, &st.show_selection);
-				ImGui::MenuItem("Layers", nullptr, &st.show_layers);
-				ImGui::MenuItem("Models", nullptr, &st.show_models);
-				ImGui::MenuItem("Materials", nullptr, &st.show_materials);
-				ImGui::MenuItem("Assets", nullptr, &st.show_assets);
-				ImGui::MenuItem("Preview", nullptr, &st.show_preview);
-				ImGui::MenuItem("Surface inspector", "S", &st.show_surface);
+				editor::menu::item("Entity", nullptr, &st.show_entity);
+				editor::menu::item("Selection", nullptr, &st.show_selection);
+				editor::menu::item("Layers", nullptr, &st.show_layers);
+				editor::menu::item("Models", nullptr, &st.show_models);
+				editor::menu::item("Materials", editor::menu::key("window.materials"), &st.show_materials);
+				editor::menu::item("Assets", nullptr, &st.show_assets);
+				editor::menu::item("Preview", nullptr, &st.show_preview);
+				editor::menu::item("Surface inspector", editor::menu::key("view.surface"), &st.show_surface);
 				ImGui::Separator();
 				item("Maps", GET_GUI(ggui::codol_map_ents_dialog));
 				item("Script Workbench", GET_GUI(ggui::script_workbench_dialog));
 				item("Game", GET_GUI(ggui::game_view_dialog));
-				ImGui::MenuItem("Console", nullptr, &g_show_console);
+				editor::menu::item("Console", nullptr, &g_show_console);
 				ui::draw_view_menu_extra();
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
 			// Selection, Grid, Misc, Region
 			ext::draw_menus();		// Textures, Renderer, Effects, Tools
 			ui::draw_extra_menus();
 
-			if (ImGui::BeginMenu("Game"))
+			if (editor::menu::begin("Game"))
 			{
-				if (ImGui::MenuItem("Reload scripts in the game"))
+				if (editor::menu::item("Reload scripts in the game"))
 				{
 					components::codol_game::reload_scripts("menu");
 				}
 
-				if (ImGui::MenuItem("Game window"))
+				if (editor::menu::item("Game window"))
 				{
 					GET_GUI(ggui::game_view_dialog)->open();
 				}
 
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Help"))
+			if (editor::menu::begin("Help"))
 			{
 				ext::draw_help_menu_items();
 				ImGui::Separator();
-				ImGui::MenuItem("About", nullptr, &g_show_about);
-				ImGui::MenuItem("ImGui demo", nullptr, &g_show_demo);
-				ImGui::EndMenu();
+				editor::menu::item("About", nullptr, &g_show_about);
+				editor::menu::item("ImGui demo", nullptr, &g_show_demo);
+				editor::menu::end();
 			}
-
-			ImGui::EndMainMenuBar();
 		}
 
 		void draw_about()

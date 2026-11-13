@@ -207,6 +207,7 @@ namespace editor::prefs
 
 		dvars::register_bool("ed_texlock_moves", 1, saved, "textures stay on their surface when brushes are moved");
 		dvars::register_bool("ed_texlock_rotations", 1, saved, "textures stay on their surface when brushes are rotated, scaled or flipped");
+		dvars::register_bool("ed_texlock_lightmaps", 0, saved, "the lightmap layer goes with brushes and patches when they are transformed ( off: it stays in the world )");
 
 		dvars::register_bool("ed_toolbar", 1, saved, "the toolbar under the menu bar");
 		dvars::register_int("ed_toolbar_size", 26, 18, 48, saved, "size of the toolbar buttons, pixels");
@@ -347,7 +348,7 @@ namespace editor::prefs
 		// ---- settings that are values of the scene / the document
 		{
 			static link<double> grid_link;
-			static link<bool> snap_link, lock_moves, lock_rotations;
+			static link<bool> snap_link, lock_moves, lock_rotations, lock_lightmaps;
 			static link<int> angle_link;
 
 			grid_link.sync(s.grid, [] { return std::clamp(static_cast<double>(get_float("ed_grid")), 0.125, 512.0); }, [](const double value) { set_float("ed_grid", static_cast<float>(value)); });
@@ -361,6 +362,9 @@ namespace editor::prefs
 			lock_moves.sync(moves, [] { return get_bool("ed_texlock_moves"); }, [](const bool value) { set_bool("ed_texlock_moves", value); });
 			lock_rotations.sync(rotations, [] { return get_bool("ed_texlock_rotations"); }, [](const bool value) { set_bool("ed_texlock_rotations", value); });
 			if (moves != s.doc.texture_lock_moves() || rotations != s.doc.texture_lock_rotations()) { s.doc.set_texture_lock(moves, rotations); }
+			bool lightmaps = s.doc.texture_lock_lightmap();
+			lock_lightmaps.sync(lightmaps, [] { return get_bool("ed_texlock_lightmaps"); }, [](const bool value) { set_bool("ed_texlock_lightmaps", value); });
+			if (lightmaps != s.doc.texture_lock_lightmap()) { s.doc.set_texture_lock_lightmap(lightmaps); }
 
 			s.doc.set_undo_limit(static_cast<std::size_t>(std::max(0, get_int("ed_undo_levels"))));
 		}
@@ -404,7 +408,7 @@ namespace editor::prefs
 
 	void draw_recent_menu()
 	{
-		if (!ImGui::BeginMenu("Open Recent"))
+		if (!editor::menu::begin("Open Recent"))
 		{
 			return;
 		}
@@ -420,7 +424,7 @@ namespace editor::prefs
 			const std::string label = zone ? entry.substr(5) + "   ( map of the game )" : to_utf8(std::filesystem::u8path(entry).filename());
 			ImGui::PushID(i);
 
-			if (ImGui::MenuItem(label.c_str()))
+			if (editor::menu::item(label.c_str()))
 			{
 				if (zone) { ui::open_zone(entry.substr(5)); }
 				else { ui::open_map_file(std::filesystem::u8path(entry)); }
@@ -433,19 +437,19 @@ namespace editor::prefs
 
 		if (!shown)
 		{
-			ImGui::MenuItem("( nothing yet )", nullptr, false, false);
+			editor::menu::item("( nothing yet )", nullptr, false, false);
 		}
 		else
 		{
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Clear the list"))
+			if (editor::menu::item("Clear the list"))
 			{
 				for (int i = 0; i < RECENT_COUNT; i++) { set_string(recent_name(i).c_str(), ""); }
 			}
 		}
 
-		ImGui::EndMenu();
+		editor::menu::end();
 	}
 
 	void open_window()
@@ -607,10 +611,11 @@ namespace editor::prefs
 		case 6:
 			dvar_row(need("ed_texlock_moves"), "Texture lock: moves");
 			dvar_row(need("ed_texlock_rotations"), "Texture lock: rotations, scales, flips");
+			dvar_row(need("ed_texlock_lightmaps"), "Texture lock: lightmaps");
 			ImGui::Spacing();
 			ImGui::PushTextWrapPos(0.0f);
 			ImGui::TextDisabled("With a lock the texture stays where it is on the surface when the brush is transformed; without, it stays where it is in the world. "
-				"Lightmaps are baked by the map compiler from the geometry: there is nothing to lock.");
+				"The lightmap layer has a lock of its own: on, it goes with the brushes and patches; off ( as radiant ), faces keep their lightmap projection in the world and patches get their lightmap coordinates from their new place.");
 			ImGui::PopTextWrapPos();
 			break;
 

@@ -432,10 +432,15 @@ namespace codol::mapc
 			stage_brushes(ctx);
 		}
 		// the render faces do not need the collision brushes ( --no-brushes still draws the new geometry )
-		if (opts.surfaces && brush_changes)
+		if (opts.surfaces && (brush_changes || !d.patches.empty()))
 		{
 			ctx.reload();
 			stage_surfaces(ctx);
+		}
+		if (!d.patches.empty())
+		{
+			ctx.warn(format("patches: %d of the worldspawn, %d drawn ( their vertices take the nearest texel of the existing bake, as new brush faces do ). Their collision is "
+				"not compiled: put clip brushes ( a clip material, Make Weapon Clip ) where players and bullets have to stop on them", static_cast<int>(d.patches.size()), rep.patches_drawn));
 		}
 
 		check(editor.write(zone_bytes), "writing the zone");

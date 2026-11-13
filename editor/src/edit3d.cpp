@@ -105,7 +105,11 @@ namespace editor::edit3d
 			std::vector<handle> handles;
 			std::vector<edit::vec3> sel_points;					// selected corners, by position
 			std::vector<edge_ends> sel_edges;
-			std::vector<std::pair<object_id, int>> sel_patch;	// selected control points
+			// selected control points: the patch vertex selection of the Patch menu ( ui::patch_vertex_selection ), one
+			// for the 2D views, this view and the Advanced Edit dialog
+			bool gizmo_patch = false;							// the gizmo turns / scales patch vertices ( not moves )
+			std::vector<int> gizmo_vertices;					// .. these, of
+			object_id gizmo_patch_id = edit::no_object;
 			edit::vec3 sel_offset;								// a drag in progress has moved the selected handles by this
 			float gizmo_matrix[16] = {};
 			float gizmo_start[16] = {};
@@ -399,20 +403,22 @@ namespace editor::edit3d
 
 		bool patch_selected(const object_id id, const int index)
 		{
-			return std::find(g.sel_patch.begin(), g.sel_patch.end(), std::make_pair(id, index)) != g.sel_patch.end();
+			return ui::patch_vertex_selected(id, index);
 		}
 
 		void clear_handle_selection()
 		{
 			g.sel_points.clear();
 			g.sel_edges.clear();
-			g.sel_patch.clear();
+			ui::clear_patch_vertices();
 			g.sel_offset = {};
 		}
 
 		std::size_t selected_handle_count()
 		{
-			return g.sel_points.size() + g.sel_edges.size() + g.sel_patch.size();
+			std::vector<int> patch_vertices;
+			ui::patch_vertex_selection(&patch_vertices);
+			return g.sel_points.size() + g.sel_edges.size() + patch_vertices.size();
 		}
 
 		void set_handle_selected(const handle& h, const bool on)
@@ -429,8 +435,8 @@ namespace editor::edit3d
 			}
 			else
 			{
-				std::erase(g.sel_patch, std::make_pair(h.object, h.index));
-				if (on) { g.sel_patch.emplace_back(h.object, h.index); }
+				if (on) { ui::select_patch_vertices(h.object, { h.index }, true); }
+				else { ui::deselect_patch_vertices(h.object, { h.index }); }
 			}
 		}
 
@@ -524,10 +530,7 @@ namespace editor::edit3d
 				{
 					return !has([&](const handle& h) { return h.kind == handle_kind::edge && ((same_point(h.a, e.a) && same_point(h.b, e.b)) || (same_point(h.a, e.b) && same_point(h.b, e.a))); });
 				});
-				std::erase_if(g.sel_patch, [&](const std::pair<object_id, int>& p)
-				{
-					return !has([&](const handle& h) { return h.kind == handle_kind::patch_vertex && h.object == p.first && h.index == p.second; });
-				});
+				// ( the patch vertex selection keeps itself: it goes with its patch )
 			}
 		}
 
@@ -578,15 +581,22 @@ namespace editor::edit3d
 				ok |= doc.move_corners(corners, delta);
 			}
 
-			std::map<object_id, std::vector<int>> by_patch;
-			for (const auto& [id, index] : g.sel_patch)
+			// the selected patch vertices: weld, lock and the snapping of the Patch menu's Weld entries; the vertex the
+			// mouse holds first, so that it is the one that snaps
+			std::vector<int> patch_vertices;
+			if (const object_id id = ui::patch_vertex_selection(&patch_vertices); id != edit::no_object && !patch_vertices.empty())
 			{
-				by_patch[id].push_back(index);
-			}
+				if (g.grabbed >= 0 && static_cast<std::size_t>(g.grabbed) < g.handles.size())
+				{
+					const handle& held = g.handles[static_cast<std::size_t>(g.grabbed)];
+					if (held.kind == handle_kind::patch_vertex && held.object == id)
+					{
+						std::erase(patch_vertices, held.index);
+						patch_vertices.insert(patch_vertices.begin(), held.index);
+					}
+				}
 
-			for (const auto& [id, indices] : by_patch)
-			{
-				ok |= doc.move_patch_vertices(id, indices, delta);
+				ok |= ui::move_patch_vertices(id, patch_vertices, delta);
 			}
 
 			if (ok)
@@ -1106,6 +1116,19 @@ namespace editor::edit3d
 					}
 
 					set_handle_selected(h, true);
+
+					// Patch > Drill Down Vertices: the control points under the one clicked ( at the same pixels ) come along
+					if (h.kind == handle_kind::patch_vertex && ui::patch_drill_down())
+					{
+						for (const auto& other : g.handles)
+						{
+							if (other.kind == handle_kind::patch_vertex && other.object == h.object && other.index != h.index && other.on_screen
+								&& std::max(std::fabs(other.px.x - h.px.x), std::fabs(other.px.y - h.px.y)) < 2.0f)
+							{
+								set_handle_selected(other, true);
+							}
+						}
+					}
 				}
 
 				g.anchor = h.pos;
@@ -1422,6 +1445,29 @@ namespace editor::edit3d
 				break;
 
 			case action::handle_drag:
+				// Alt click on a control point of a patch: its column ( Alt + Shift: its row ), Ctrl adds
+				if (g.alt && g.grabbed >= 0 && static_cast<std::size_t>(g.grabbed) < g.handles.size() && g.handles[static_cast<std::size_t>(g.grabbed)].kind == handle_kind::patch_vertex)
+				{
+					const handle h = g.handles[static_cast<std::size_t>(g.grabbed)];
+					if (const auto* p = doc.find_patch(h.object); p && p->height > 0)
+					{
+						std::vector<int> line;
+						for (int i = 0; i < static_cast<int>(p->vertices.size()); i++)
+						{
+							if (g.shift ? i % p->height == h.index % p->height : i / p->height == h.index / p->height)
+							{
+								line.push_back(i);
+							}
+						}
+
+						ui::select_patch_vertices(h.object, line, g.ctrl);
+						game::printf_to_console("patch #%u: %s %d selected ( %d vertices )\n", h.object, g.shift ? "row" : "column", g.shift ? h.index % p->height : h.index / p->height,
+							static_cast<int>(line.size()));
+					}
+
+					break;
+				}
+
 				// a click on a handle that was selected, with Ctrl or Shift: out of the selection; without: only it
 				if (g.grabbed >= 0 && static_cast<std::size_t>(g.grabbed) < g.handles.size() && g.grabbed_was_selected)
 				{
@@ -1572,6 +1618,67 @@ namespace editor::edit3d
 		add("tool.create_toggle", "3D view: create brushes on / off", "B", [] { set_tool(current() == tool::create ? tool::object : tool::create); }, view_3d)
 			.toggle([] { return current() == tool::create; });
 
+		// Delete with patch vertices selected ( in the vertex mode of this view or of a 2D view ): a whole row or column
+		// of a terrain mesh is removed, the first / last column pair ( row pair ) of a curve too; anything else is not
+		// deleted vertex by vertex ( a patch is a grid ) - the patch stays and a hint says what to select
+		const auto patch_delete = []
+		{
+			std::vector<int> list;
+			const object_id id = ui::patch_vertex_selection(&list);
+			const auto* p = get_scene().doc.find_patch(id);
+			if (!p || list.empty() || p->height <= 0)
+			{
+				return;
+			}
+
+			const auto whole = [&](const bool column, int& at)
+			{
+				at = column ? list[0] / p->height : list[0] % p->height;
+				const int need = column ? p->height : p->width;
+				int count = 0;
+				for (const int i : list)
+				{
+					if ((column ? i / p->height : i % p->height) != at) { return false; }
+					count++;
+				}
+				return count == need;
+			};
+
+			int at = -1;
+			const bool column = whole(true, at);
+			const bool row = !column && whole(false, at);
+			std::string line;
+			if ((column || row) && p->type == edit::patch_type::mesh)
+			{
+				line = std::string("patch_terrain_remove ") + (column ? "column " : "row ") + std::to_string(at);
+			}
+			else if ((column || row) && p->type == edit::patch_type::curve && (at == 0 || at == (column ? p->width : p->height) - 1))
+			{
+				line = std::string("patch_delete ") + (at == 0 ? "first " : "last ") + (column ? "columns" : "rows");
+			}
+
+			if (line.empty())
+			{
+				ImGui::Toast(ImGuiToastType_Info, "Patch vertices", "A patch is a grid: its vertices are not deleted one by one. Alt click a control point for its column\n"
+					"( Alt + Shift: its row ) - a terrain loses that line, a curve its first / last two. Esc drops the vertices, then Delete deletes the patch.", 5000);
+				game::printf_to_console("Delete: the selected patch vertices are no whole row or column; nothing deleted\n");
+				return;
+			}
+
+			// the locks are by vertex number: they follow the vertices to their new numbers
+			const auto locked = ui::locked_positions(id);
+			ui::clear_patch_vertices();
+			command::execute(line);
+			ui::relock_patch_vertices(id, locked);
+		};
+		const auto patch_vertices_picked = []
+		{
+			std::vector<int> list;
+			return ui::get().vertex_mode && ui::patch_vertex_selection(&list) != edit::no_object && !list.empty();
+		};
+		add("patch.delete_vertices_3d", "Delete: the row / column of the selected patch vertices ( 3D view )", "Backspace|Delete", patch_delete, view_3d).when(patch_vertices_picked);
+		add("patch.delete_vertices_2d", "Delete: the row / column of the selected patch vertices ( 2D views )", "Backspace|Delete", patch_delete, view_2d).when(patch_vertices_picked);
+
 		// one thing at a time ( the clipper's points, the tools and the selection come after: edit.escape )
 		add("edit.escape_3d", "3D view: drop the picked handles / leave create", "Escape", []
 		{
@@ -1653,12 +1760,20 @@ namespace editor::edit3d
 		ImGuizmo::SetRect(origin.x, origin.y, static_cast<float>(width), static_cast<float>(height));
 		ImGuizmo::SetGizmoSizeClipSpace(0.10f);
 
+		// patch vertices alone ( no brush corners ) also turn and scale about their centre: the rotate / scale gizmo of
+		// the view's toolbar ( W E R outside the vertex tool )
+		std::vector<int> patch_vertices;
+		const object_id patch_id = ui::patch_vertex_selection(&patch_vertices);
+		const bool patch_only = t == tool::vertex && g.sel_points.empty() && g.sel_edges.empty() && patch_id != edit::no_object && patch_vertices.size() > 1;
+		const ui::gizmo_tool mode = ui::get().gizmo;
+		const ImGuizmo::OPERATION operation = patch_only && mode == ui::gizmo_tool::rotate ? ImGuizmo::ROTATE : (patch_only && mode == ui::gizmo_tool::scale ? ImGuizmo::SCALE : ImGuizmo::TRANSLATE);
+
 		const bool snap = s.snap != io.KeyCtrl;
-		const float step = static_cast<float>(s.grid);
+		const float step = operation == ImGuizmo::ROTATE ? static_cast<float>(s.snap_angle) : (operation == ImGuizmo::SCALE ? 0.125f : static_cast<float>(s.grid));
 		const float snap_values[3] = { step, step, step };
 
 		dl->PushClipRect(origin, ImVec2(origin.x + static_cast<float>(width), origin.y + static_cast<float>(height)), true);
-		const bool changed = ImGuizmo::Manipulate(view_m, proj_m, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, g.gizmo_matrix, nullptr, snap ? snap_values : nullptr);
+		const bool changed = ImGuizmo::Manipulate(view_m, proj_m, operation, ImGuizmo::WORLD, g.gizmo_matrix, nullptr, snap ? snap_values : nullptr);
 		dl->PopClipRect();
 
 		const bool using_it = ImGuizmo::IsUsing();
@@ -1666,11 +1781,32 @@ namespace editor::edit3d
 		if (using_it && !g.gizmo_active)
 		{
 			g.gizmo_active = true;
+			g.grabbed = -1;
+			g.gizmo_patch = operation != ImGuizmo::TRANSLATE;
+			g.gizmo_patch_id = patch_id;
+			g.gizmo_vertices = patch_vertices;
 			std::memcpy(g.gizmo_start, g.gizmo_matrix, sizeof(g.gizmo_start));
-			s.begin_drag(t == tool::edge ? "Move edges" : "Move vertices");
+			s.begin_drag(g.gizmo_patch ? (operation == ImGuizmo::ROTATE ? "Rotate vertices" : "Scale vertices") : (t == tool::edge ? "Move edges" : "Move vertices"));
 		}
 
-		if (g.gizmo_active && changed)
+		if (g.gizmo_active && changed && g.gizmo_patch)
+		{
+			// p' = L ( p - centre ) + translation now; ImGuizmo's matrices are row vectors: x' = x m0 + y m4 + z m8 + m12
+			s.restart_drag();
+			const float* m = g.gizmo_matrix;
+			edit::transform tr;
+			for (int r = 0; r < 3; r++)
+			{
+				for (int c = 0; c < 3; c++)
+				{
+					tr.m[r][c] = m[c * 4 + r];
+				}
+			}
+			const edit::vec3 centre(g.gizmo_start[12], g.gizmo_start[13], g.gizmo_start[14]);
+			tr.t = edit::vec3(m[12], m[13], m[14]) - tr.apply_vector(centre);
+			ui::transform_patch_vertices(g.gizmo_patch_id, g.gizmo_vertices, tr);
+		}
+		else if (g.gizmo_active && changed)
 		{
 			s.restart_drag();
 			move_handles({ static_cast<double>(g.gizmo_matrix[12]) - g.gizmo_start[12], static_cast<double>(g.gizmo_matrix[13]) - g.gizmo_start[13], static_cast<double>(g.gizmo_matrix[14]) - g.gizmo_start[14] });
@@ -1755,33 +1891,46 @@ namespace editor::edit3d
 		}
 	}
 
+	// the key of an action as the hint lines say it: as it is bound now ( "-" when it has none )
+	std::string key_of(const char* id)
+	{
+		const char* k = actions::shortcut(id);
+		return k ? k : "-";
+	}
+
 	const char* hint()
 	{
+		const auto k = [](const char* id) { return key_of(id); };
+
 		switch (current())
 		{
 		case tool::vertex:
 		case tool::edge:
 			g.hint_text = current() == tool::edge ? "EDGES" : "VERTICES";
 			g.hint_text += "    Click a handle: select ( Ctrl / Shift adds )    Shift drag: handles in the rectangle    Drag a handle: move on the grid ( Alt: along the third axis )\n"
-				"Arrows of the gizmo: along one axis    E: edges / vertices    V: leave    Esc: deselect handles    Ctrl+Z: undo    Right drag: look + W A S D";
+				"Arrows of the gizmo: along one axis    " + k("tool.edge_mode") + ": edges / vertices    " + k("tool.vertex") + ": leave    " + k("edit.escape_3d")
+				+ ": deselect handles    " + k("edit.undo") + ": undo    Right drag: look + W A S D";
 			break;
 
 		case tool::clip:
-			g.hint_text = "CLIPPER    Click on a surface: a clip point ( two or three; drag to move them )    Enter: clip, the side of the arrow stays\n"
-				"Ctrl+Enter: keep the other side    Shift+Enter: split    Esc: remove the points / leave    Right drag: look + W A S D";
+			g.hint_text = "CLIPPER    Click on a surface: a clip point ( two or three; drag to move them )    " + k("clip.apply") + ": clip, the side of the arrow stays\n"
+				+ k("clip.apply_back") + ": keep the other side    " + k("clip.split") + ": split    " + k("edit.escape") + ": remove the points / leave    Right drag: look + W A S D";
 			break;
 
 		case tool::create:
 			g.hint_text = "CREATE ";
 			g.hint_text += primitive_name(g.prim);
 			g.hint_text += "    Drag on a surface: the base of a new brush, as high as the last selection    Then drag the squares on its box to size it\n"
-				"Click: select    B / Esc: leave    Right drag: look + W A S D";
+				"Click: select    " + k("tool.create_toggle") + " / " + k("edit.escape_3d") + ": leave    Right drag: look + W A S D";
 			break;
 
 		default:
-			g.hint_text = "Click: select ( Ctrl / Shift adds, both: face, Alt: what is behind )    Shift drag: select in the rectangle    Right click: create entity    Space: clone\n"
+			g.hint_text = "Click: select ( Ctrl / Shift adds, both: face, Alt: what is behind )    Shift drag: select in the rectangle    Right click: create entity    "
+				+ k("edit.clone") + ": clone\n"
 				"Drag the selection: move    Drag next to a brush: its faces on that side    Squares: resize    Drag a selected face: along its normal\n"
-				"V vertices   C clipper   B create   W E R gizmo   Arrows: nudge   Shift / Ctrl+Arrows, Shift+PgUp / PgDn: texture shift / scale / rotate   Right drag: look + W A S D";
+				+ k("tool.vertex") + " vertices   " + k("tool.clipper") + " clipper   " + k("tool.create_toggle") + " create   " + k("gizmo.move") + " " + k("gizmo.rotate") + " "
+				+ k("gizmo.scale") + " gizmo   " + k("edit.nudge_left") + " / " + k("edit.nudge_right") + " / " + k("edit.nudge_up") + " / " + k("edit.nudge_down") + ": nudge   "
+				+ k("texture.shift_left") + " / " + k("texture.scale_h_up") + " / " + k("texture.rotate_ccw") + " ..: texture shift / scale / rotate   Right drag: look + W A S D";
 			break;
 		}
 
@@ -1913,13 +2062,30 @@ namespace editor::edit3d
 				}
 
 				const bool hot = static_cast<int>(i) == over;
+				// a locked control point ( Patch > Lock Vertices ) is red and does not move; selected it keeps a red frame
+				const bool locked = h.kind == handle_kind::patch_vertex && ui::patch_vertex_locked(h.object, h.index);
 				const ImU32 color = h.selected ? IM_COL32(255, 230, 60, 255)
-					: (h.kind == handle_kind::edge ? IM_COL32(90, 170, 255, 255) : (h.kind == handle_kind::patch_vertex ? IM_COL32(255, 130, 220, 255) : IM_COL32(90, 255, 120, 255)));
+					: (locked ? IM_COL32(255, 60, 50, 255) : (h.kind == handle_kind::edge ? IM_COL32(90, 170, 255, 255) : (h.kind == handle_kind::patch_vertex ? IM_COL32(255, 130, 220, 255) : IM_COL32(90, 255, 120, 255))));
 				const float r = (h.selected || hot) ? 5.0f : 3.5f;
 				const ImVec2 c = at(h.px);
 				dl->AddRectFilled(ImVec2(c.x - r, c.y - r), ImVec2(c.x + r, c.y + r), hot && !h.selected ? IM_COL32(255, 255, 255, 255) : color);
-				dl->AddRect(ImVec2(c.x - r - 1.0f, c.y - r - 1.0f), ImVec2(c.x + r + 1.0f, c.y + r + 1.0f), IM_COL32(0, 0, 0, 220));
+				dl->AddRect(ImVec2(c.x - r - 1.0f, c.y - r - 1.0f), ImVec2(c.x + r + 1.0f, c.y + r + 1.0f), locked ? IM_COL32(255, 40, 30, 255) : IM_COL32(0, 0, 0, 220), 0.0f, 0, locked ? 2.0f : 1.0f);
 			}
+		}
+		else
+		{
+			// the other tools: the patch vertices selected ( in a 2D view, the Advanced Edit dialog ) and the locked ones
+			// as small marks
+			ui::patch_vertex_marks([&](const edit::vec3& p, const ImU32 color)
+			{
+				ImVec2 px;
+				if (project(p, px))
+				{
+					const ImVec2 c = at(px);
+					dl->AddRectFilled(ImVec2(c.x - 3.0f, c.y - 3.0f), ImVec2(c.x + 3.0f, c.y + 3.0f), color);
+					dl->AddRect(ImVec2(c.x - 4.0f, c.y - 4.0f), ImVec2(c.x + 4.0f, c.y + 4.0f), IM_COL32(0, 0, 0, 220));
+				}
+			});
 		}
 
 		// ---- clipper: the points and the cut

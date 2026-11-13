@@ -214,8 +214,11 @@ namespace
 		CHECK(terrain && terrain->at(1, 0).color[3] == 128 && terrain->at(2, 1).color[0] == 0 && near(terrain->at(1, 2).xyz.z, -1.25));
 		CHECK(terrain && terrain->at(2, 2).tex.size() == 4 && terrain->at(2, 2).tex[2] == 8 && terrain->smoothing == "smoothing_hard");
 		CHECK(curve && curve->type == patch_type::curve && curve->width == 5 && curve->height == 3 && curve->smoothing == "smoothing_soft");
-		CHECK(curve && curve->is_detail() && curve->tool_flags.size() == 1 && patch_subdivisions(*curve) == 4);
-		CHECK(plain && !plain->at(0, 0).has_color && plain->header_int == 12 && patch_subdivisions(*plain) == 6 && patch_subdivisions(*terrain) == 1);
+		CHECK(curve && curve->is_detail() && curve->tool_flags.size() == 1 && patch_subdivisions(*curve) == 2);
+		// the size line: columns rows, lightmap sample size, subdivision ( an error bound in units: | P0 - 2 P1 + P2 | is 64 for
+		// both curves, so 8 and 12 give 2 quads per segment )
+		CHECK(curve && curve->has_lightmap_sample_size && curve->lightmap_sample_size == 16.0 && curve->subdivision == 8);
+		CHECK(plain && !plain->at(0, 0).has_color && plain->subdivision == 12 && patch_subdivisions(*plain) == 2 && patch_subdivisions(*terrain) == 1);
 
 		// an edit and its undo: byte identical again; every operation of this file writes a file that reads back the same
 		doc.select(world->children[1]);
@@ -672,16 +675,20 @@ namespace
 			doc.select(curve);
 			mesh m;
 			doc.build_mesh(curve, m, patch_subdivisions(*doc.find_patch(curve)));
-			CHECK(m.vertices.size() == 9 * 5);
+			CHECK(m.vertices.size() == 5 * 3);
 
 			CHECK(patch_change_subdivision(doc, 1));
-			CHECK(doc.find_patch(curve)->header_int == 10 && patch_subdivisions(*doc.find_patch(curve)) == 5);
-			CHECK(doc.save_map_text().find("   5 3 16 10\n") != std::string::npos);
+			// Inc: the number goes down until the tessellation changes: 3 is the first with 3 quads per segment
+			CHECK(doc.find_patch(curve)->subdivision == 3 && patch_subdivisions(*doc.find_patch(curve)) == 3);
+			CHECK(doc.save_map_text().find("   5 3 16 3\n") != std::string::npos);
 			doc.build_mesh(curve, m, patch_subdivisions(*doc.find_patch(curve)));
-			CHECK(m.vertices.size() == 11 * 6);
+			CHECK(m.vertices.size() == 7 * 4);
 
-			CHECK(patch_change_subdivision(doc, -2) && patch_subdivisions(*doc.find_patch(curve)) == 3);
-			CHECK(patch_change_subdivision(doc, -5) && doc.find_patch(curve)->header_int == 2 && !patch_change_subdivision(doc, -1));
+			CHECK(patch_change_subdivision(doc, 1) && doc.find_patch(curve)->subdivision == 1 && patch_subdivisions(*doc.find_patch(curve)) == 4);
+			CHECK(!patch_change_subdivision(doc, 1) && doc.find_patch(curve)->subdivision == 1);		// 1 is the finest
+			CHECK(patch_change_subdivision(doc, -1) && doc.find_patch(curve)->subdivision == 2 && patch_subdivisions(*doc.find_patch(curve)) == 3);
+			CHECK(patch_change_subdivision(doc, -2) && doc.find_patch(curve)->subdivision == 16 && patch_subdivisions(*doc.find_patch(curve)) == 1);
+			CHECK(!patch_change_subdivision(doc, -1) && doc.find_patch(curve)->subdivision == 16);	// one quad is the coarsest
 			doc.select(terrain);
 			CHECK(!patch_change_subdivision(doc, 1));
 		}
@@ -700,18 +707,20 @@ namespace
 
 		// curve -> terrain: the vertices of the tessellation, every attribute interpolated
 		{
-			const std::vector<vec3> before = surface(doc, curve, 4);
+			// at the subdivision of the file: 8 ( an error bound ) is 2 quads per segment for this curve
+			const std::vector<vec3> before = surface(doc, curve, 2);
 			const object_id both[] = { curve, plain, terrain };
 			doc.select(both);
 			CHECK(curve_to_terrain(doc));
 
 			const patch* p = doc.find_patch(curve);
-			CHECK(p->type == patch_type::mesh && p->width == 9 && p->height == 5 && p->vertices.size() == 45);
-			CHECK(near(p->at(2, 0).xyz, { 288, -16, 0 }) && near(p->at(2, 0).tex[0], 128) && near(p->at(4, 2).xyz, { 320, 0, 32 }) && p->at(3, 3).has_color);
+			CHECK(p->type == patch_type::mesh && p->width == 5 && p->height == 3 && p->vertices.size() == 15);
+			CHECK(near(p->at(1, 0).xyz, { 288, -16, 0 }) && near(p->at(1, 0).tex[0], 128) && near(p->at(2, 1).xyz, { 320, 0, 32 }) && p->at(1, 1).has_color);
 			CHECK(deviation(before, surface(doc, curve, 1)) < 1e-9 && deviation(surface(doc, curve, 1), before) < 1e-9);
 			CHECK(p->is_detail() && p->smoothing == "smoothing_soft");
 
-			CHECK(doc.find_patch(plain)->width == 7 && doc.find_patch(plain)->height == 7 && !doc.find_patch(plain)->at(1, 1).has_color);
+			// one segment each way at 2 quads: 3 x 3 vertices, now a terrain mesh
+			CHECK(doc.find_patch(plain)->type == patch_type::mesh && doc.find_patch(plain)->width == 3 && doc.find_patch(plain)->height == 3 && !doc.find_patch(plain)->at(1, 1).has_color);
 			CHECK(doc.find_patch(terrain)->width == 3);		// was one already
 			CHECK(doc.undo_count() == 1 && !curve_to_terrain(doc));
 			CHECK(doc.undo() && doc.save_map_text() == sample_map());
@@ -821,6 +830,42 @@ namespace
 			const int corner[] = { 2 };		// column 1, row 0 of a
 			CHECK(move_patch_vertices_welded(d2, a, corner, { 0, 0, 16 }, 0.01));
 			CHECK(near(d2.find_patch(b)->at(0, 0).xyz, { 64, 0, 16 }) && near(d2.find_patch(b)->at(0, 1).xyz, { 64, 64, 0 }) && d2.undo_count() == 3);
+		}
+
+		// the rotate / scale gizmo of the 3D view on a set of vertices: a turn about their centre, welded and locked
+		{
+			document doc;
+			const object_id a = doc.create_terrain_patch({ 0, 0, 0 }, { 128, 128, 0 }, 3, 3);
+			const object_id b = doc.create_terrain_patch({ 128, 0, 0 }, { 256, 128, 0 }, 3, 3);
+			const object_id both[] = { a, b };
+			doc.select(both);
+			// the column x 128 of a ( 6 7 8 ), turned 90 degrees about Z through its centre 128 64: ( x y ) -> ( 128 - ( y - 64 ), 64 + ( x - 128 ) )
+			transform turn;
+			turn.m[0][0] = 0; turn.m[0][1] = -1; turn.m[1][0] = 1; turn.m[1][1] = 0;
+			turn.t = vec3(128, 64, 0) - turn.apply_vector({ 128, 64, 0 });
+			const int column[] = { 6, 7, 8 };
+			const int locked[] = { 8 };
+			const auto undo_before = doc.undo_count();
+			CHECK(transform_patch_vertices(doc, a, column, turn, 0.01, locked));
+			CHECK(doc.undo_count() == undo_before + 1 && doc.undo_name() == "Transform vertices");
+			CHECK(near(doc.find_patch(a)->at(2, 0).xyz, { 192, 64, 0 }) && near(doc.find_patch(a)->at(2, 1).xyz, { 128, 64, 0 }) && near(doc.find_patch(a)->at(2, 2).xyz, { 128, 128, 0 }));
+			// welded: column 0 of b sat on 6 7 8 and went with them ( 8 is locked: its partner stays too )
+			CHECK(near(doc.find_patch(b)->at(0, 0).xyz, { 192, 64, 0 }) && near(doc.find_patch(b)->at(0, 2).xyz, { 128, 128, 0 }));
+			CHECK(!transform_patch_vertices(doc, a, std::span<const int>(locked), turn, 0.01, locked));
+			CHECK(doc.undo());
+
+			// a scale by 2 about the centre, no weld
+			transform twice;
+			twice.m[0][0] = twice.m[1][1] = twice.m[2][2] = 2.0;
+			twice.t = vec3(128, 64, 0) - twice.apply_vector({ 128, 64, 0 });
+			CHECK(transform_patch_vertices(doc, a, column, twice, -1.0));
+			CHECK(near(doc.find_patch(a)->at(2, 0).xyz, { 128, -64, 0 }) && near(doc.find_patch(b)->at(0, 0).xyz, { 128, 0, 0 }));
+
+			// the nearest snap point within reach
+			const vec3 points[] = { { 10, 0, 0 }, { 0, 3, 0 }, { 0, 0, 30 } };
+			vec3 onto;
+			CHECK(snap_to_nearest({ 0, 0, 0 }, points, 8.0, onto) && onto == vec3(0, 3, 0));
+			CHECK(!snap_to_nearest({ 0, 0, 0 }, points, 2.0, onto));
 		}
 	}
 

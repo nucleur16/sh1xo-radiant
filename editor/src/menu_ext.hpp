@@ -5,6 +5,7 @@
 // rest of the editor calls are declared in ui.hpp.
 
 #include "ui.hpp"
+#include "ext.hpp"
 
 namespace editor::ui::ext
 {

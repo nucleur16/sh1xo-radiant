@@ -1,0 +1,15 @@
+# Texture Lock > Lightmaps through the console and the action; the maths is tested in codol_edit_tests.
+map_new $MAP
+wait 6
+tex_lock
+expect lightmaps off
+act texture.lock_lightmaps
+expect texture lock, lightmaps: on
+tex_lock lightmaps 0
+expect rotations on, lightmaps off
+tex_lock lightmaps 1
+actions_check
+wait 1
+expect 0 problems
+tex_lock lightmaps 0
+quit

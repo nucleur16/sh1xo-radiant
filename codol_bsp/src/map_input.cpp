@@ -387,6 +387,10 @@ namespace codol::bsp
 					}
 					patch.vertices = mesh.vertices;
 					patch.indices = mesh.indices;
+					if (source_patch->has_lightmap_sample_size && source_patch->lightmap_sample_size > 0.0)
+					{
+						patch.lightmap_scale = std::clamp(source_patch->lightmap_sample_size / 16.0, 1.0 / 16.0, 16.0);
+					}
 					for (const edit::mesh_vertex& v : mesh.vertices)
 					{
 						w.patch_bounds.add(vec3{ v.position[0], v.position[1], v.position[2] });
@@ -425,6 +429,11 @@ namespace codol::bsp
 					map_face face;
 					face.plane = geo->planes[f];
 					face.texture = source->faces[f].texture;
+					for (int axis = 0; axis < 2; axis++)
+					{
+						const double size = std::fabs(axis == 0 ? source->faces[f].lightmap.size_x : source->faces[f].lightmap.size_y);
+						face.lightmap_scale[axis] = size > 0.0 ? std::clamp(size / 16384.0, 1.0 / 16.0, 16.0) : 1.0;
+					}
 					face.material = face.texture.material;
 					if (face.material.rfind("wc/", 0) == 0)
 					{

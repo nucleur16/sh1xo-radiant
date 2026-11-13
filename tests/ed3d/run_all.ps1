@@ -15,7 +15,7 @@ param(
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $failed = @()
 
-foreach ($name in @("object", "handles", "shipped", "mouse", "matdrop", "switch_click", "switch_discard", "switch_stress")) {
+foreach ($name in @("object", "handles", "shipped", "mouse", "matdrop", "switch_click", "switch_discard", "switch_stress", "keys", "entities_as", "case_textures", "lightmap_lock", "patch_vertices")) {
 	if ($Skip -contains $name) { continue }
 	& powershell -NoProfile -File (Join-Path $here "run.ps1") -Exe $Exe -Script (Join-Path $here "$name.cmds") -Timeout 900
 	if ($LASTEXITCODE -ne 0) { $failed += $name }

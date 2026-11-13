@@ -177,6 +177,9 @@ namespace codol::view
 		retired_textures.clear();
 		texture_failed.clear();
 		texture_failures.clear();
+		case_textures.clear();
+		case_sizes_frame.clear();
+		case_sizes_last.clear();
 		white = {};
 		black = {};
 		flat_normal = {};

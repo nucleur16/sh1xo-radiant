@@ -112,6 +112,9 @@ namespace codol::view
 			return nullptr;
 		}
 		const auto started = std::chrono::steady_clock::now();
+		// case textures: the sizes of the frame before ( case_texture_sizes ), and a new list for this one
+		case_sizes_last.swap(case_sizes_frame);
+		case_sizes_frame.clear();
 		release_idle_zone();
 		if (!ensure_targets(width, height, options.target == nullptr, options.depth_stencil == nullptr, options.float_z))
 		{
@@ -440,6 +443,17 @@ namespace codol::view
 		{
 			return;
 		}
+		instance.style = model_style::solid;
+		if (frame->model_style)
+		{
+			const object_ref ref = instance.handle > 0 ? object_ref{ object_kind::placed_model, instance.handle }
+				: instance.is_entity ? object_ref{ object_kind::entity_model, instance.entity_index } : object_ref{ object_kind::static_model, instance.static_index };
+			instance.style = frame->model_style(ref);
+			if (instance.style == model_style::hidden)
+			{
+				return;
+			}
+		}
 		// a model the editor moved is no longer where the cells list it
 		if (cells && !instance.moved && instance.static_index >= 0 && instance.static_index < static_cast<int>(cells->size())
 			&& !(*cells)[static_cast<std::size_t>(instance.static_index)])
@@ -722,6 +736,8 @@ namespace codol::view
 		draw.vertex_count = vertex_span;
 		draw.start_index = surface.base_index;
 		draw.triangle_count = triangles;
+		// frame_options::model_style: the mesh as lines, front and back
+		draw.wireframe = draw.two_sided = instance.style == model_style::wireframe;
 		draw_passes(material, technique_type, render::vertex_format::PACKED, instance.reflection_probe, nullptr, draw);
 	}
 
@@ -756,7 +772,7 @@ namespace codol::view
 				continue;
 			}
 			apply_state_bits(material, technique_type, static_cast<int>(p));
-			if (frame && frame->wireframe)
+			if ((frame && frame->wireframe) || draw.wireframe)
 			{
 				device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
 				applied_state_bits = nullptr;
@@ -998,6 +1014,16 @@ namespace codol::view
 					else if (!frame->normal_maps && std::find(std::begin(normal), std::end(normal), def->name_hash) != std::end(normal))
 					{
 						texture = &flat_normal;
+					}
+				}
+				// editor: case textures, a grid of the colour map's size in its place ( renderer_case.cpp )
+				if (frame && frame->case_textures && def && texture && texture->width > 0 && !texture->cube)
+				{
+					static const std::uint32_t color[] = { render::hash_sampler_name("colorMap"), render::hash_sampler_name("colorMap0"), render::hash_sampler_name("colorMap1"),
+						render::hash_sampler_name("colorMap2") };
+					if (std::find(std::begin(color), std::end(color), def->name_hash) != std::end(color))
+					{
+						if (gpu_texture* stand_in = case_texture(texture->width, texture->height)) { texture = stand_in; }
 					}
 				}
 				bind_sampler(arg.dest, texture ? *texture : white, def ? def->sampler_state : render::DEFAULT_MATERIAL_SAMPLER_STATE, true);

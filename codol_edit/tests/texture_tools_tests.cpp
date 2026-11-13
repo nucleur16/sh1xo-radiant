@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <functional>
 
 using namespace codol::edit;
 
@@ -421,12 +422,206 @@ namespace
 	}
 }
 
+namespace
+{
+	// the lightmap coordinate of a world point on a face, in repeats ( the integer part is not compared )
+	void lightmap_uv(const face& f, const vec3& p, double out[2])
+	{
+		plane pl;
+		plane_from_points(f.points[0], f.points[1], f.points[2], pl);
+		vec3 u, v;
+		face_texture_axes(pl.normal, f.lightmap.rotation, u, v);
+		out[0] = dot(p, u) / f.lightmap.size_x + f.lightmap.shift_x / 512.0;
+		out[1] = dot(p, v) / f.lightmap.size_y + f.lightmap.shift_y / 512.0;
+	}
+
+	bool same_repeat(const double a, const double b)
+	{
+		const double d = std::fabs(a - b);
+		return std::fabs(d - std::round(d)) < 1e-6;
+	}
+
+	// every point of every face has the lightmap coordinate it had before `move` took it where it is now
+	bool lightmap_attached(const std::vector<face>& before, const std::vector<face>& after, const std::function<vec3(const vec3&)>& move)
+	{
+		if (before.size() != after.size())
+		{
+			return false;
+		}
+
+		for (std::size_t i = 0; i < before.size(); i++)
+		{
+			for (const vec3& p : before[i].points)
+			{
+				double a[2], b[2];
+				lightmap_uv(before[i], p, a);
+				lightmap_uv(after[i], move(p), b);
+				if (!same_repeat(a[0], b[0]) || !same_repeat(a[1], b[1]))
+				{
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	bool lightmaps_equal(const std::vector<face>& a, const std::vector<face>& b)
+	{
+		for (std::size_t i = 0; i < a.size() && i < b.size(); i++)
+		{
+			if (!(a[i].lightmap == b[i].lightmap)) { return false; }
+		}
+
+		return a.size() == b.size();
+	}
+
+	// Texture Lock > Lightmaps: the lightmap layer of faces and patches through moves, turns, flips, scales, face
+	// moves and clones, with the lock and without
+	void test_lightmap_lock()
+	{
+		document doc;
+		doc.set_texture_size_callback([](std::string_view, int& w, int& h) { w = h = 512; return true; });
+		const object_id box = doc.create_box({ 0, 0, 0 }, { 64, 64, 64 }, "wall_a");
+		doc.select(box);
+
+		// a lightmap alignment that is not the default, so that a lost shift or turn shows
+		doc.set_edit_layer(document::texture_layer::lightmap);
+		tex_def lm;
+		lm.material = "lightmap_gray";
+		lm.size_x = 1024.0;
+		lm.size_y = 512.0;
+		lm.shift_x = 40.0;
+		lm.shift_y = 8.0;
+		lm.rotation = 15.0;
+		CHECK(doc.set_texture(lm));
+		doc.set_edit_layer(document::texture_layer::material);
+
+		CHECK(!doc.texture_lock_lightmap());		// as radiant: off
+
+		const auto start = doc.find_brush(box)->faces;
+		const vec3 delta{ 24, -40, 8 };
+
+		// off: the lightmap stays in the world, its numbers do not change
+		CHECK(doc.translate(delta) && lightmaps_equal(start, doc.find_brush(box)->faces));
+		doc.undo();
+		CHECK(doc.rotate({ 32, 32, 0 }, { 0, 0, 1 }, 30) && lightmaps_equal(start, doc.find_brush(box)->faces));
+		doc.undo();
+
+		// on: every point keeps its lightmap coordinate
+		doc.set_texture_lock_lightmap(true);
+		CHECK(doc.texture_lock_lightmap());
+
+		CHECK(doc.translate(delta));
+		CHECK(!lightmaps_equal(start, doc.find_brush(box)->faces));
+		CHECK(lightmap_attached(start, doc.find_brush(box)->faces, [&](const vec3& p) { return p + delta; }));
+		doc.undo();
+
+		// a turn of 90 degrees about Z through ( 32 32 0 ): ( x y z ) -> ( 64 - y, x, z )
+		CHECK(doc.rotate({ 32, 32, 0 }, { 0, 0, 1 }, 90));
+		CHECK(lightmap_attached(start, doc.find_brush(box)->faces, [](const vec3& p) { return vec3{ 64.0 - p.y, p.x, p.z }; }));
+		doc.undo();
+
+		// a flip on X through x = 32
+		CHECK(doc.flip({ 32, 32, 32 }, 0));
+		{
+			const auto& after = doc.find_brush(box)->faces;
+			// the flip swaps the second and third point of each face ( to keep it facing out ): compare by the points
+			bool ok = after.size() == start.size();
+			for (std::size_t i = 0; ok && i < start.size(); i++)
+			{
+				for (const vec3& p : start[i].points)
+				{
+					double a[2], b[2];
+					lightmap_uv(start[i], p, a);
+					lightmap_uv(after[i], vec3{ 64.0 - p.x, p.y, p.z }, b);
+					ok = same_repeat(a[0], b[0]) && same_repeat(a[1], b[1]);
+				}
+			}
+			CHECK(ok);
+		}
+		doc.undo();
+
+		// a scale by 2 about the origin ( the lock scales the lightmap with the brush; a scale that is not the same on
+		// the axes of a turned projection would shear it, which the format cannot hold - as for the material )
+		CHECK(doc.scale({ 0, 0, 0 }, { 2, 2, 2 }));
+		CHECK(lightmap_attached(start, doc.find_brush(box)->faces, [](const vec3& p) { return p * 2.0; }));
+		doc.undo();
+
+		// a face moved along its normal ( the resize of the 3D view ): the other faces do not change at all
+		{
+			const auto before = doc.find_brush(box)->faces;
+			CHECK(doc.move_face({ box, 0 }, 16));
+			const auto& after = doc.find_brush(box)->faces;
+			bool others = true;
+			for (std::size_t i = 1; i < before.size(); i++) { others &= before[i].lightmap == after[i].lightmap; }
+			CHECK(others);
+			plane pl;
+			plane_from_points(before[0].points[0], before[0].points[1], before[0].points[2], pl);
+			const vec3 along = pl.normal * 16.0;
+			const std::vector<face> moved_before(before.begin(), before.begin() + 1), moved_after(after.begin(), after.begin() + 1);
+			CHECK(lightmap_attached(moved_before, moved_after, [&](const vec3& p) { return p + along; }));
+			doc.undo();
+		}
+
+		// a clone with an offset: the copy carries the lightmap along
+		CHECK(doc.clone_selection({ 128, 0, 0 }));
+		{
+			const object_id copy = doc.selection().front();
+			CHECK(copy != box);
+			CHECK(lightmap_attached(start, doc.find_brush(copy)->faces, [](const vec3& p) { return p + vec3{ 128, 0, 0 }; }));
+		}
+		doc.undo();
+
+		// ---- patches: the lightmap coordinates of the vertices
+		doc.deselect_all();
+		const object_id terrain = doc.create_terrain_patch({ 0, 256, 0 }, { 128, 384, 0 }, 3, 3, 2, "wall_a");
+		CHECK(terrain != no_object);
+		doc.select(terrain);
+
+		// the patch has lightmap coordinates of its own ( not those of the world )
+		doc.set_edit_layer(document::texture_layer::lightmap);
+		CHECK(doc.fit_texture(1.0, 1.0));
+		doc.set_edit_layer(document::texture_layer::material);
+		const auto patch_before = doc.find_patch(terrain)->vertices;
+		CHECK(patch_before.size() == 9 && patch_before[0].tex.size() >= 4);
+
+		// on: they go with the vertices
+		CHECK(doc.translate({ 32, 16, 0 }));
+		{
+			bool same = true;
+			const auto& now = doc.find_patch(terrain)->vertices;
+			for (std::size_t i = 0; i < now.size(); i++) { same &= near(now[i].tex[2], patch_before[i].tex[2]) && near(now[i].tex[3], patch_before[i].tex[3]); }
+			CHECK(same);
+		}
+		doc.undo();
+
+		// off: made again from the world, along the axis the patch faces ( Z ), a luxel per 16 units
+		doc.set_texture_lock_lightmap(false);
+		CHECK(doc.translate({ 32, 16, 0 }));
+		{
+			bool world = true;
+			const auto& now = doc.find_patch(terrain)->vertices;
+			vec3 u, v;
+			face_texture_axes({ 0, 0, 1 }, 0.0, u, v);
+			for (const auto& vertex : now) { world &= near(vertex.tex[2], dot(vertex.xyz, u) / 16.0) && near(vertex.tex[3], dot(vertex.xyz, v) / 16.0); }
+			CHECK(world);
+			// the material coordinates are the vertices' own in both cases
+			bool material = true;
+			for (std::size_t i = 0; i < now.size(); i++) { material &= near(now[i].tex[0], patch_before[i].tex[0]) && near(now[i].tex[1], patch_before[i].tex[1]); }
+			CHECK(material);
+		}
+		doc.undo();
+	}
+}
+
 int test_texture_tools(int& checks)
 {
 	test_replace();
 	test_flip_and_layers();
 	test_patch_texture();
 	test_lock_modes();
+	test_lightmap_lock();
 	test_rope();
 	test_noise();
 

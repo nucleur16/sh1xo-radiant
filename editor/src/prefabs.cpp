@@ -936,12 +936,12 @@ namespace editor::ui::ext
 		const bool any = s.open && !s.doc.selection().empty();
 		const bool prefab = prefab_selected();
 
-		if (ImGui::MenuItem("Enter Prefab", nullptr, false, prefab)) { enter_prefab(); }
-		if (ImGui::MenuItem("Leave Prefab", nullptr, false, prefab_depth() > 0)) { leave_prefab(); }
-		if (ImGui::MenuItem("Stamp Prefab", nullptr, false, prefab)) { stamp_prefab(); }
+		if (editor::menu::item("Enter Prefab", nullptr, false, prefab)) { enter_prefab(); }
+		if (editor::menu::item("Leave Prefab", nullptr, false, prefab_depth() > 0)) { leave_prefab(); }
+		if (editor::menu::item("Stamp Prefab", nullptr, false, prefab)) { stamp_prefab(); }
 		if (ImGui::IsItemHovered()) { ImGui::SetTooltip("The selected misc_prefab is replaced by the brushes and entities of its file."); }
-		if (ImGui::MenuItem("Convert Selection To Prefab ..", nullptr, false, any)) { get().open_convert_prefab = true; }
-		if (ImGui::MenuItem("Prefab Browser", nullptr, &get().show_prefab_browser)) {}
+		if (editor::menu::item("Convert Selection To Prefab ..", nullptr, false, any)) { get().open_convert_prefab = true; }
+		if (editor::menu::item("Prefab Browser", nullptr, &get().show_prefab_browser)) {}
 	}
 
 	void draw_prefab_breadcrumb()

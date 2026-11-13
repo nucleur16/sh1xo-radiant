@@ -84,6 +84,9 @@ namespace codol::edit
 		// ---- settings
 		bool texture_lock = true;				// moves
 		bool texture_lock_rotations = true;		// rotations, scales, flips
+		// the lightmap layer: on, it goes with the geometry as the material does with the two locks above; off, it stays
+		// where the world is ( faces keep their lightmap projection, patches get theirs from their positions again )
+		bool texture_lock_lightmap = false;
 		int edit_layer = 0;						// which layer the texture operations change: 0 material, 1 lightmap
 		std::string default_material = "caulk";
 		texture_size_fn texture_size;

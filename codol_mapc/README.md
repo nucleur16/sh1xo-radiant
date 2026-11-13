@@ -254,6 +254,28 @@ this server, whatever the map ( `codol_bsp/README.md`, "Script model animations"
 * Brush models: box of the leaf = box of its brushes + 0.125, box of the model + 1.0, radius = distance of the far
   corner - the relations measured on the brush models of the base zone ( 26 in mp_rust, 269 in mp_killhouse_sh ).
 
+### Patches
+
+* Every patch of the worldspawn is new ( an imported map has none ) and is **drawn**: its tessellation ( terrain as
+  it is, a curve at its subdivision, `edit::patch_subdivisions` - the same triangles `codol_bsp` compiles ) becomes
+  one `GfxSurface` by the path of the new brush faces below: template surface of the same material, inserted behind
+  it, into the AABB tree leaf of its cell. Per vertex: the patch's own vertex colour, the texel of the template
+  nearest to it that faces its way ( a curve faces many ways ), a tangent from its own normal. Patches of brush
+  entities are left out ( reported ).
+* **Collision is not compiled.** The report says so and names the remedy: clip brushes where players and bullets
+  have to stop. Terrain collision in the clip map is `verts` / `triIndices` / `triEdgeIsWalkable`, partitions with
+  their borders, and per collision leaf a run of AABB tree roots ( `cLeaf_t.firstCollAabbIndex` / `collAabbCount` )
+  whose nodes name their children and partitions by absolute index. Adding a patch means appending to the first
+  five arrays and inserting new roots into the run of every leaf the patch's partitions touch - which renumbers
+  every later AABB node, its child indices and the ranges of all later leaves - and the dedicated server's own
+  reader of these arrays ( `codol_dedrun` ) has rules for them that were not established ( for the brush arrays they
+  were: [On a dedicated server](#on-a-dedicated-server) ). `codol_bsp` ( clip_build.cpp ) writes all of this, for a
+  map it builds whole. Not done here: it is work, not a limit of the format, and nothing was tested in the game.
+* Tested: `codol_mapc_tests --only patches` - a bumpy 5 x 5 terrain mesh and a raised 5 x 3 curve over the spawn
+  of the map: two surfaces, every new vertex inside the patches' box and with a texel of the bake, triangle count
+  = the tessellation's, the zone reads back through `codol_zone` and is what a dedicated server takes, the clip map
+  is the base zone's. Not seen in the game.
+
 ### Surfaces
 
 * Every face of a new / edited world brush whose material is no tool material ( clip, caulk, hint .. ) is
@@ -274,7 +296,8 @@ this server, whatever the map ( `codol_bsp/README.md`, "Script model animations"
 
 ## What is not compiled
 
-* New brush models ( a brush entity without `"model" "*N"` ), patches ( terrain / curves ), `physics_box` blocks.
+* New brush models ( a brush entity without `"model" "*N"` ), `physics_box` blocks, patches of brush entities.
+* **Collision of patches** ( below, "Patches" ).
 * Render surfaces of brush models' brushes ( their collision is compiled ).
 * Faces whose `wc/<material>` no world surface uses: they collide but are not drawn ( reported ). Adding a material
   to `GfxWorld.materialMemory` and sorting the surface in is not done.

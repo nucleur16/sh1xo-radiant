@@ -1,0 +1,40 @@
+# Renderer > Show Entities As: the six modes of CoD4 radiant on three model entities, the middle one selected.
+map_new $MAP
+wait 6
+ed_box -256 -256 -16 256 256 0
+ed_place com_plasticcase_green_big_us_dirt -96 0 0
+ed_place com_plasticcase_green_big_us_dirt 0 0 0
+ed_place com_plasticcase_green_big_us_dirt 96 0 40
+wait 2
+ed_camera 0 -260 140 25 90
+sel_id 4
+wait 1
+r_entities models
+wait 1
+ed_shot $OUT\entities_0_skinned.png
+wait 1
+r_entities boxes
+wait 1
+ed_shot $OUT\entities_1_boxes.png
+wait 1
+r_entities both
+wait 1
+ed_shot $OUT\entities_2_skinned_boxed.png
+wait 1
+r_entities wireframe
+wait 1
+ed_shot $OUT\entities_3_wireframe.png
+wait 1
+r_entities selected_wireframe
+wait 1
+ed_shot $OUT\entities_4_selected_wireframe.png
+wait 1
+r_entities selected_models
+wait 1
+ed_shot $OUT\entities_5_selected_skinned.png
+wait 1
+act render.entities_cycle
+r_entities
+expect entities: Skinned And Boxed
+r_entities models
+quit

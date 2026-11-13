@@ -651,11 +651,28 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			}
 		}
 
-		const char* const MODE_NAMES[] = { "game", "fullbright", "fake_normal", "fake_view", "depth" };
+		const char* const MODE_NAMES[] = { "game", "fullbright", "fake_normal", "fake_view", "depth", "case" };
 		const char* const FILTER_NAMES[] = { "As the materials say", "Point ( no mip maps )", "Bilinear ( no mip maps )", "Trilinear", "Anisotropic" };
 		const char* const RESOLUTION_NAMES[] = { "Maximum", "High ( half )", "Normal ( quarter )", "Low ( eighth )" };
 		const char* const PATCH_NAMES[] = { "Textured", "Wireframe", "Textured + wireframe" };
-		const char* const ENTITY_NAMES[] = { "Models", "Bounding boxes", "Models and boxes" };
+		// by entities:: value; the menu lists them in CoD4 radiant's order ( ENTITY_MENU_ORDER )
+		const char* const ENTITY_NAMES[] = { "Skinned", "Bounding Box", "Skinned And Boxed", "Wireframe", "Selected Wireframe", "Selected Skinned" };
+		const char* const ENTITY_WORDS[] = { "models", "boxes", "both", "wireframe", "selected_wireframe", "selected_models" };
+		const char* const ENTITY_TIPS[] = {
+			"Models drawn with their materials.",
+			"Every entity is its box; no model is drawn.",
+			"Models drawn, and the box of every entity around them.",
+			"Models drawn as the triangles of their mesh, front and back, in the colours of their materials.",
+			"The models of the selected entities as wireframes; every other entity is its box.",
+			"The models of the selected entities drawn; every other entity is its box." };
+		constexpr int ENTITY_MENU_ORDER[] = { 1, 3, 4, 5, 0, 2 };
+
+		void set_entities(const entities mode)
+		{
+			g_state.show_entities = mode;
+			get_scene().selected_serial++;
+			game::printf_to_console("[renderer] entities: %s\n", ENTITY_NAMES[static_cast<int>(mode)]);
+		}
 
 		void set_mode(const shading mode)
 		{
@@ -688,7 +705,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
 	bool entity_boxes_always()
 	{
-		return g_state.show_entities != entities::models;
+		// the box stands for the model where the model is not drawn, and in "skinned and boxed"
+		return g_state.show_entities != entities::models && g_state.show_entities != entities::wireframe;
 	}
 
 	bool hide_patch_meshes()
@@ -716,7 +734,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		bind("ed_r_grid_blocks", ui::ext::get().show_grid_blocks, "2D views: the blocks of 1024 units");
 		bind("ed_r_grid_coordinates", st.grid_coordinates, "2D views: coordinates at the edges and of the blocks");
 		bind("ed_r_grid_crosshair", st.grid_crosshair, "2D views: a cross under the mouse");
-		bind_int("ed_r_mode", st.mode, 0, 4, "3D view: 0 as the game, 1 fullbright, 2 fake light by normal, 3 fake light by view, 4 depth");
+		bind_int("ed_r_mode", st.mode, 0, 5, "3D view: 0 as the game, 1 fullbright, 2 fake light by normal, 3 fake light by view, 4 depth, 5 case textures");
 		bind("ed_r_wireframe", st.wireframe, "3D view: wireframe");
 		bind("ed_r_water", st.draw_water, "3D view: draw water");
 		bind_int("ed_r_filter", st.texture_filter, 0, 4, "texture filter: 0 as the materials say, 1 point, 2 bilinear, 3 trilinear, 4 anisotropic");
@@ -724,7 +742,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		bind("ed_r_specular", st.specular, "3D view: specular maps");
 		bind("ed_r_normalmaps", st.normal_maps, "3D view: normal maps");
 		bind_int("ed_r_patches", st.show_patches, 0, 2, "patches: 0 textured, 1 wireframe, 2 textured with wires");
-		bind_int("ed_r_entities", st.show_entities, 0, 2, "entities: 0 models, 1 boxes, 2 models and boxes");
+		bind_int("ed_r_entities", st.show_entities, 0, static_cast<int>(entities::count) - 1, "entities: 0 skinned, 1 bounding box, 2 skinned and boxed, 3 wireframe, 4 selected wireframe, 5 selected skinned");
 		bind("ed_r_cubic", st.cubic_clip, "3D view: cubic clipping");
 		bind("ed_r_cubic_distance", st.cubic_distance, "half the edge of the clipping cube, units");
 		bind("ed_r_sun_shadows", st.sun_shadows, "3D view: sun shadows");
@@ -764,6 +782,11 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		add("render.fake_view", "View-based fake lighting", "", [] { set_mode(g_state.mode == shading::fake_view ? shading::game : shading::fake_view); }, anywhere, no_map)
 			.toggle([] { return g_state.mode == shading::fake_view; }).help("Fullbright, shaded by the angle to the camera: a light on the camera.");
 		add("render.depth", "Depth", "", [] { set_mode(g_state.mode == shading::depth ? shading::game : shading::depth); }, anywhere, no_map).toggle([] { return g_state.mode == shading::depth; });
+		add("render.case_textures", "Case textures", "", [] { set_mode(g_state.mode == shading::case_textures ? shading::game : shading::case_textures); }, anywhere, no_map)
+			.toggle([] { return g_state.mode == shading::case_textures; })
+			.help("CoD4 radiant's case textures: every colour map is replaced by a grid of the same size in texels, coloured by that size\n"
+				"( blue 64 and less, cyan 128, green 256, grey 512, orange 1024, red 2048 ): the resolution of the textures and how they are\n"
+				"stretched over the surfaces. Unlit, as fullbright.");
 		add("render.game_lighting", "Lighting of the game", "", [] { set_mode(shading::game); }, anywhere, no_map).toggle([] { return g_state.mode == shading::game; });
 
 		add("render.water", "Draw water", "", flip(st.draw_water, "draw water"), anywhere, no_map).toggle([] { return g_state.draw_water; });
@@ -775,10 +798,19 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			.toggle([] { return g_state.show_patches != patches::textured; });
 		add("render.entities_cycle", "Show entities as: next", "", []
 		{
-			g_state.show_entities = static_cast<entities>((static_cast<int>(g_state.show_entities) + 1) % 3);
-			refresh_view_lines();
-			game::printf_to_console("[renderer] entities: %s\n", ENTITY_NAMES[static_cast<int>(g_state.show_entities)]);
+			// in the order of the menu
+			int at = 0;
+			for (int i = 0; i < static_cast<int>(entities::count); i++) { if (ENTITY_MENU_ORDER[i] == static_cast<int>(g_state.show_entities)) { at = i; } }
+			set_entities(static_cast<entities>(ENTITY_MENU_ORDER[(at + 1) % static_cast<int>(entities::count)]));
 		}, anywhere, no_map).toggle([] { return g_state.show_entities != entities::models; });
+
+		// one action per mode: a key, a toolbar button, "act render.entities_wireframe"
+		for (int i = 0; i < static_cast<int>(entities::count); i++)
+		{
+			const std::string id = std::string("render.entities_") + ENTITY_WORDS[i];
+			add(id, std::string("Show entities as: ") + ENTITY_NAMES[i], "", [i] { set_entities(static_cast<entities>(i)); }, anywhere, no_map)
+				.toggle([i] { return static_cast<int>(g_state.show_entities) == i; }).help(ENTITY_TIPS[i]);
+		}
 
 		add("render.cubic_clip", "Cubic clipping", "Ctrl+Backslash", flip(st.cubic_clip, "cubic clipping"), anywhere, no_map).toggle([] { return g_state.cubic_clip; });
 		add("render.cubic_grow", "Cubic clipping: farther", "Ctrl+]", []
@@ -823,12 +855,12 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		// r_mode <game|fullbright|fake_normal|fake_view|depth>
 		command::register_command("r_mode", [](args_t args)
 		{
-			for (int i = 0; i < 5 && args.size() > 1; i++)
+			for (int i = 0; i < 6 && args.size() > 1; i++)
 			{
 				if (args[1] == MODE_NAMES[i]) { set_mode(static_cast<shading>(i)); return; }
 			}
 
-			game::printf_to_console("usage: r_mode <game|fullbright|fake_normal|fake_view|depth>   now: %s%s%s\n", MODE_NAMES[static_cast<int>(g_state.mode)],
+			game::printf_to_console("usage: r_mode <game|fullbright|fake_normal|fake_view|depth|case>   now: %s%s%s\n", MODE_NAMES[static_cast<int>(g_state.mode)],
 				g_post.problem.empty() ? "" : "   ", g_post.problem.c_str());
 		});
 
@@ -842,8 +874,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		{
 			if (args.size() > 1)
 			{
-				g_state.show_entities = args[1] == "boxes" ? entities::boxes : (args[1] == "both" ? entities::models_boxes : entities::models);
-				refresh_view_lines();
+				for (int i = 0; i < static_cast<int>(entities::count); i++)
+				{
+					if (args[1] == ENTITY_WORDS[i] || args[1] == std::to_string(i)) { set_entities(static_cast<entities>(i)); return; }
+				}
+				game::printf_to_console("usage: r_entities <models|boxes|both|wireframe|selected_wireframe|selected_models>\n");
+				return;
+			}
+
+			{
+				game::printf_to_console("[renderer] entities: %s\n", ENTITY_NAMES[static_cast<int>(g_state.show_entities)]);
 			}
 		});
 
@@ -929,31 +969,31 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
 	void draw_menu()
 	{
-		if (!ImGui::BeginMenu("Renderer"))
+		if (!editor::menu::begin("Renderer"))
 		{
 			return;
 		}
 
-		if (ImGui::BeginMenu("General"))
+		if (editor::menu::begin("General"))
 		{
 			actions::menu_item("render.outline");
 			actions::menu_item("render.tint");
 			actions::menu_item("render.connections");
 			actions::menu_item("render.angles");
 			actions::menu_item("render.model_origins");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Grid Window"))
+		if (editor::menu::begin("Grid Window"))
 		{
 			actions::menu_item("render.grid_names", "Show Names");
 			actions::menu_item("render.grid_blocks", "Show Grid Blocks");
 			actions::menu_item("render.grid_coordinates", "Draw Edge and Block Coordinates");
 			actions::menu_item("render.grid_crosshair", "Draw Crosshair");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Render Method / Features"))
+		if (editor::menu::begin("Render Method / Features"))
 		{
 			actions::menu_item("render.game_lighting");
 			actions::menu_item("render.fullbright");
@@ -962,8 +1002,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			actions::menu_item("render.depth", "Depth ( of the pre-pass )");
 			ImGui::Separator();
 			actions::menu_item("render.wireframe");
-			ImGui::MenuItem("Case Textures", nullptr, false, false);
-			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { ImGui::SetTooltip("Radiant's own tool textures ( the case of a prefab ): the zones of the game have no such technique."); }
+			actions::menu_item("render.case_textures", "Case Textures");
 			ImGui::Separator();
 			actions::menu_item("render.water");
 			actions::menu_item("render.specular");
@@ -978,68 +1017,68 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 				ImGui::TextDisabled("%s", g_post.problem.c_str());
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Texture Filter"))
+		if (editor::menu::begin("Texture Filter"))
 		{
 			for (int i = 0; i < 5; i++)
 			{
-				if (ImGui::MenuItem(FILTER_NAMES[i], nullptr, g_state.texture_filter == i)) { g_state.texture_filter = i; }
+				if (editor::menu::item(FILTER_NAMES[i], nullptr, g_state.texture_filter == i)) { g_state.texture_filter = i; }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Texture Resolution"))
+		if (editor::menu::begin("Texture Resolution"))
 		{
 			for (int i = 0; i < 4; i++)
 			{
-				if (ImGui::MenuItem(RESOLUTION_NAMES[i], nullptr, g_state.texture_resolution == i)) { g_state.texture_resolution = i; }
+				if (editor::menu::item(RESOLUTION_NAMES[i], nullptr, g_state.texture_resolution == i)) { g_state.texture_resolution = i; }
 			}
 
 			ImGui::Separator();
 			ImGui::TextDisabled("One setting for colour, specular and normal maps:\nthe mip level every material texture is read at.");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
 		actions::menu_item("texture.reload", "Reload the project's images and materials");
 		ImGui::Separator();
 
-		if (ImGui::BeginMenu("Show Patches As"))
+		if (editor::menu::begin("Show Patches As"))
 		{
 			for (int i = 0; i < 3; i++)
 			{
-				if (ImGui::MenuItem(PATCH_NAMES[i], i == 0 ? actions::shortcut("render.patches_cycle") : nullptr, static_cast<int>(g_state.show_patches) == i)) { set_patches(static_cast<patches>(i)); }
+				if (editor::menu::item(PATCH_NAMES[i], i == 0 ? editor::menu::key("render.patches_cycle") : nullptr, static_cast<int>(g_state.show_patches) == i)) { set_patches(static_cast<patches>(i)); }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Show Entities As"))
+		if (editor::menu::begin("Show Entities As"))
 		{
-			for (int i = 0; i < 3; i++)
+			for (const int i : ENTITY_MENU_ORDER)
 			{
-				if (ImGui::MenuItem(ENTITY_NAMES[i], nullptr, static_cast<int>(g_state.show_entities) == i))
+				char id[48];
+				std::snprintf(id, sizeof(id), "render.entities_%s", ENTITY_WORDS[i]);
+				if (editor::menu::item(ENTITY_NAMES[i], editor::menu::key(id), static_cast<int>(g_state.show_entities) == i))
 				{
-					g_state.show_entities = static_cast<entities>(i);
-					refresh_view_lines();
+					set_entities(static_cast<entities>(i));
 				}
-			}
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Wireframe is the render method of that name.");
-			ImGui::EndMenu();
+				if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", ENTITY_TIPS[i]); }
+			}
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Light / Sun Preview"))
+		if (editor::menu::begin("Light / Sun Preview"))
 		{
 			actions::menu_item("render.light_preview", "Enable Light Preview");
 			actions::menu_item("render.sun_shadows", "Enable Sun Shadows");
 
 			const bool stage = get_scene().open && get_scene().stage;
-			if (ImGui::MenuItem("Sun Preview: rebuild the stage with the worldspawn's light", nullptr, false, stage)) { command::execute("ed_restage"); }
+			if (editor::menu::item("Sun Preview: rebuild the stage with the worldspawn's light", nullptr, false, stage)) { command::execute("ed_restage"); }
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			{
 				ImGui::SetTooltip("A map of your own is drawn in a stage with the sun, sky and ambient light of its worldspawn keys.\nA map of the game is drawn with its own baked light: there is nothing to preview.");
@@ -1052,7 +1091,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			ImGui::Separator();
 			actions::menu_item("render.light_max", "Preview At Max Intensity");
 			ImGui::TextDisabled("%d light( s ) in the list. Selected lights are always previewed;\nthe radius and cone of a selected light are drawn as lines.", static_cast<int>(g_preview_lights.size()));
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
@@ -1061,7 +1100,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		actions::menu_item("render.cubic_shrink");
 		ImGui::SetNextItemWidth(220.0f);
 		ImGui::SliderFloat("##cubic_distance", &g_state.cubic_distance, 256.0f, 65536.0f, "cube: %.0f units", ImGuiSliderFlags_Logarithmic);
-		ImGui::EndMenu();
+		editor::menu::end();
 	}
 
 	// ---- windows ---------------------------------------------------------------------------------------------------
@@ -1170,7 +1209,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		frame.wireframe = st.wireframe;
 		frame.sun_shadows = st.sun_shadows;
 		// the fake lights shade the colour maps
-		frame.fullbright = st.mode == shading::fullbright || st.mode == shading::fake_normal || st.mode == shading::fake_view;
+		frame.fullbright = st.mode == shading::fullbright || st.mode == shading::fake_normal || st.mode == shading::fake_view || st.mode == shading::case_textures;
+		frame.case_textures = st.mode == shading::case_textures;
 		frame.draw_water = st.draw_water;
 		frame.texture_filter = st.texture_filter;
 		frame.mip_bias = static_cast<float>(st.texture_resolution);
@@ -1179,10 +1219,35 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		frame.far_clip = st.cubic_clip ? st.cubic_distance : 0.0f;
 		frame.clear_color = colors::d3d(colors::view_background) | 0xFF000000u;
 
-		if (st.show_entities == entities::boxes)
+		// Show Entities As: models of entities drawn, as wireframes or not at all ( their box is drawn by the view )
+		switch (st.show_entities)
 		{
-			frame.draw_entity_models = false;
-			frame.draw_placed_models = false;
+		case entities::boxes:
+			frame.model_style = [](const view::object_ref& ref)
+			{
+				return get_scene().object_of(ref) != edit::no_object ? view::model_style::hidden : view::model_style::solid;
+			};
+			break;
+		case entities::wireframe:
+			frame.model_style = [](const view::object_ref& ref)
+			{
+				return get_scene().object_of(ref) != edit::no_object ? view::model_style::wireframe : view::model_style::solid;
+			};
+			break;
+		case entities::selected_wireframe:
+		case entities::selected_models:
+		{
+			const int shown = st.show_entities == entities::selected_wireframe ? view::model_style::wireframe : view::model_style::solid;
+			frame.model_style = [shown](const view::object_ref& ref)
+			{
+				const auto& s = get_scene();
+				const object_id id = s.object_of(ref);
+				return id == edit::no_object ? view::model_style::solid : (s.doc.is_selected(id) ? shown : view::model_style::hidden);
+			};
+			break;
+		}
+		default:
+			break;
 		}
 
 		// the post process reads the depth pre-pass
@@ -1192,6 +1257,36 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		}
 	}
 
+	void draw_view_legend(ImDrawList* dl, const ImVec2& at, const int width, const int height)
+	{
+		if (g_state.mode != shading::case_textures || !dl)
+		{
+			return;
+		}
+
+		auto sizes = get_scene().renderer.case_texture_sizes();
+		std::sort(sizes.begin(), sizes.end(), [](const auto& a, const auto& b) { return a.first * a.second != b.first * b.second ? a.first * a.second > b.first * b.second : a.first > b.first; });
+
+		const float line = ImGui::GetTextLineHeight() + 2.0f;
+		const int rows = std::max(1, std::min(static_cast<int>(sizes.size()), static_cast<int>((height - 60) / line) - 2));
+		const float w = 150.0f;
+		const ImVec2 top(at.x + static_cast<float>(width) - w - 10.0f, at.y + 10.0f);
+		dl->AddRectFilled(top, ImVec2(top.x + w, top.y + line * (static_cast<float>(std::min<int>(rows, static_cast<int>(sizes.size()))) + 1.5f)), IM_COL32(0, 0, 0, 170), 3.0f);
+		dl->AddText(ImVec2(top.x + 6.0f, top.y + 3.0f), IM_COL32(230, 230, 230, 255), sizes.empty() ? "case textures: -" : "case textures");
+
+		for (int i = 0; i < rows && i < static_cast<int>(sizes.size()); i++)
+		{
+			const auto [sw, sh] = sizes[static_cast<std::size_t>(i)];
+			const std::uint32_t c = view::map_renderer::case_texture_color(sw, sh);	// D3DCOLOR: ARGB
+			const ImU32 color = IM_COL32((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, 255);
+			const float y = top.y + 3.0f + line * static_cast<float>(i + 1);
+			dl->AddRectFilled(ImVec2(top.x + 6.0f, y + 2.0f), ImVec2(top.x + 20.0f, y + line - 4.0f), color);
+			char text[48];
+			if (i == rows - 1 && rows < static_cast<int>(sizes.size())) { std::snprintf(text, sizeof(text), ".. %d more", static_cast<int>(sizes.size()) - i); }
+			else { std::snprintf(text, sizeof(text), "%d x %d", sw, sh); }
+			dl->AddText(ImVec2(top.x + 26.0f, y), IM_COL32(230, 230, 230, 255), text);
+		}
+	}
 	IDirect3DTexture9* post_process(IDirect3DTexture9* frame_texture, const int width, const int height)
 	{
 		auto& s = get_scene();
