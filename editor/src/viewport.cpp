@@ -11,6 +11,7 @@
 #include "edit3d.hpp"
 
 #include <ImGuizmo.h>
+#include <psapi.h>
 
 // The 3D view of the standalone editor: the map drawn by codol_view, as a view of the document. Selection, the
 // transform gizmo and every edit go to the document ( scene.hpp ); this file draws, picks and navigates. Also here:
@@ -226,6 +227,23 @@ namespace ggui
 		g_impl = m.get();
 		ui::register_commands();
 		editor::edit3d::register_commands();
+
+		// ed_mem [label]: memory of the process and of the device, one line ( a run that opens map after map prints it
+		// after each: what grows without bound is a leak )
+		command::register_command("ed_mem", [](const std::vector<std::string>& args)
+		{
+			PROCESS_MEMORY_COUNTERS_EX counters = {};
+			counters.cb = sizeof(counters);
+			GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
+
+			const auto& s = editor::get_scene();
+			const auto stats = s.renderer.stats();
+			const UINT texture_mb = game::glob::d3d9_device ? game::glob::d3d9_device->GetAvailableTextureMem() / (1024u * 1024u) : 0u;
+
+			game::printf_to_console("ed_mem %s: working set %d MB, private %d MB, device texture memory available %u MB, map %s, %d surfaces, %d meshes\n",
+				args.size() > 1 ? args[1].c_str() : "-", static_cast<int>(counters.WorkingSetSize / (1024 * 1024)), static_cast<int>(counters.PrivateUsage / (1024 * 1024)),
+				texture_mb, s.open ? s.map_name.c_str() : "( none )", stats.world_surface_count, stats.mesh_count);
+		});
 	}
 
 	codol_viewport_dialog::~codol_viewport_dialog()

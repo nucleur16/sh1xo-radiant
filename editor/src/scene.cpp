@@ -2082,6 +2082,11 @@ namespace editor
 
 	void scene::sync()
 	{
+		// Start of a frame: the last one is drawn, nothing refers to the textures the renderer dropped since ( the
+		// picture of the 3D view and the thumbnails of a map that was closed in the middle of that frame - by the
+		// "unsaved changes" question, a command typed into the console, the Assets window .. ).
+		renderer.release_retired();
+
 		if (!open)
 		{
 			return;

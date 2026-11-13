@@ -83,7 +83,8 @@ namespace codol::view
 	void map_renderer::impl::release_default_pool()
 	{
 		target_surface.reset();
-		target_texture.reset();
+		// the host was given this texture by render(): see host_retired
+		retire_host_texture(target_texture);
 		depth_surface.reset();
 		target_width = target_height = depth_width = depth_height = 0;
 		saved_state.reset();
@@ -141,6 +142,10 @@ namespace codol::view
 		material_name_list.clear();
 		model_names_built = material_names_built = false;
 		image_sizes.clear();
+		for (auto& entry : thumbnails)
+		{
+			retire_host_texture(entry.second);
+		}
 		thumbnails.clear();
 		surface_visible.clear();
 		visibility.reset();
@@ -195,6 +200,7 @@ namespace codol::view
 	void map_renderer::impl::shutdown()
 	{
 		unload();
+		host_retired.clear();
 		library.clear();
 		images = {};
 		model_archives.reset();
@@ -287,6 +293,11 @@ namespace codol::view
 		impl_->pending_edits = {};
 		impl_->unload();
 	}
+
+	void map_renderer::release_retired()
+	{
+		impl_->host_retired.clear();
+	}
 	bool map_renderer::loaded() const { return impl_->map_loaded; }
 	const std::string& map_renderer::map_name() const { return impl_->map_name; }
 
@@ -313,6 +324,8 @@ namespace codol::view
 		}
 		i.device_lost = true;
 		i.release_default_pool();
+		// Reset fails while anything of the default pool is alive, and the host draws nothing with a lost device
+		i.host_retired.clear();
 		if (!i.managed && i.map_loaded)
 		{
 			// everything lives in the default pool: it has to go before Reset and is loaded again after it; so are
@@ -320,6 +333,7 @@ namespace codol::view
 			const std::string name = i.map_name;
 			i.pending_edits = i.capture_edits();
 			i.unload();
+			i.host_retired.clear();
 			i.map_name = name;
 		}
 	}

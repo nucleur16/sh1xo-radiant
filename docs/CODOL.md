@@ -98,7 +98,18 @@ mouse of `ui_mouse`, on a pixel of the view ). `tests\ed3d\run.ps1 -Exe <CoDOLRa
 runs a command list and checks its `expect` lines against the console log: `object` ( Select tool ), `handles`
 ( vertices, edges, clipper, create, material ), `shipped` ( in a map of the install ) go through `ed3d press`;
 `mouse` and `matdrop` feed the mouse and the keyboard themselves ( `ui_mouse`, `ui_key` ) and so go through the
-gui, the gizmo and the shortcuts.
+gui, the gizmo and the shortcuts. `tests\ed3d\run_all.ps1 -Exe <CoDOLRadiant.exe>` runs them all.
+
+**Opening another map** is part of those runs since the editor crashed on it ( 2026-11-12, "from mp_abandon_sh_mk to
+mp_hunger" ): a map opened in the middle of a frame - by "Discard" in the unsaved changes question, by a command
+typed into the Console window, by the Assets window registering a zone again - released the picture of the 3D view
+and the thumbnails while the frame that was being built still drew them. The renderer now keeps the textures it
+handed out until the next frame starts ( `map_renderer::release_retired`, called by `scene::sync` ). `switch_discard`
+is the crash as it happened, `switch_click` the double click in the Maps window, `switch_stress` ( written by
+`make_switch_stress.py [rounds]` ) 33 switches over four shipped maps and a map of your own through the console
+window, the Maps window, the question, `map_new`, `map_load` and `map_close`, with a selection, the Materials and the
+Preview window open; after each it prints `ed_mem` ( working set, private bytes, free texture memory of the
+device ).
 
 ### A map of your own
 
