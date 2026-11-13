@@ -1,0 +1,198 @@
+# 3D editing: the vertex and edge tools, the clipper, the create tool, a dropped material.
+# Through edit3d::press / drag / release at the pixels world points project to ( see object.cmds ).
+map_new $MAP
+wait 6
+ed_box 0 0 0 128 128 64
+ed_camera -150 -150 400 55 45
+wait 1
+
+# ---- vertices: drag one corner on the grid
+ed3d tool vertex
+wait 0.3
+ed3d handles
+expect ed3d: 8 handles ( vertex tool ), 0 selected
+ed3d wpress 0 0 64
+ed3d wdrag -32 -32 64
+wait 0.3
+ed_shot $OUT\handles_1_vertex_drag.png
+wait 0.5
+ed3d release
+ed3d handles
+sel_info
+expect vertex #2  -32 -32 64
+expect bounds -32 -32 0 .. 128 128 64
+expect undo 2 ( Move vertices )
+
+# ---- Ctrl click adds a handle; Alt drag moves the selected handles along the third axis ( here: up )
+ed3d wclick 128 0 64 ctrl
+ed3d handles
+expect handles ( vertex tool ), 2 selected
+ed3d wpress 128 0 64 alt
+ed3d wdrag 128 0 96
+wait 0.3
+ed_shot $OUT\handles_2_vertex_alt.png
+wait 0.5
+ed3d release
+ed3d handles
+sel_info
+expect vertex #2  -32 -32 96
+expect vertex #2  128 0 96
+expect bounds -32 -32 0 .. 128 128 96
+ed_undo
+sel_info
+expect bounds -32 -32 0 .. 128 128 64
+ed_redo
+
+# ---- Shift drag: the handles in the rectangle ( the two northern corners of the top )
+ed3d wclick 0 128 64
+ed3d wpress -30 200 64 shift
+ed3d wdrag 190 110 64
+wait 0.3
+ed_shot $OUT\handles_3_vertex_rect.png
+wait 0.5
+ed3d release
+ed3d handles
+
+# ---- edges: a new box; its upper southern edge two grid steps to the south
+ed_box 320 0 0 448 128 64
+ed3d tool edge
+wait 0.3
+ed3d handles
+expect ed3d: 12 handles ( edge tool ), 0 selected
+ed3d wpress 384 0 64
+ed3d wdrag 384 -32 64
+wait 0.3
+ed_shot $OUT\handles_4_edge_drag.png
+wait 0.5
+ed3d release
+ed3d handles
+sel_info
+expect edge #3  384 -32 64
+expect bounds 320 -32 0 .. 448 128 64
+expect ( Move edges )
+
+# ---- clipper: two points on the top of a box cut straight down through it
+ed_box 0 320 0 128 448 64
+ed3d tool clip
+ed3d wclick 32 384 64
+ed3d wclick 96 384 64
+wait 0.3
+ed3d info
+expect 2 clip points ( axis 2 )
+ed_shot $OUT\handles_5_clip_two.png
+wait 0.5
+ed_clip_apply
+sel_info
+
+# three points: a slanted cut, split in two
+ed_box 0 640 0 128 768 64
+ed3d tool clip
+ed3d wclick 8 704 64
+ed3d wclick 120 704 64
+ed3d wclick 64 640 8
+wait 0.3
+ed3d info
+expect 3 clip points
+ed_shot $OUT\handles_6_clip_three.png
+wait 0.5
+ed_clip_apply both
+sel_info
+expect brushes, 0 patches; 2 selected
+
+# a point can be dragged over the surface
+ed_box 320 320 0 448 448 64
+ed3d tool clip
+ed3d wclick 352 384 64
+ed3d wclick 416 384 64
+ed3d wpress 416 384 64
+ed3d wdrag 416 416 64
+ed3d release
+ed3d info
+ed3d tool object
+
+# ---- create: a rectangle dragged on the top of a box becomes a brush that stands on it
+sel_none
+ed3d tool create
+ed3d wpress 336 336 64
+ed3d wdrag 400 432 64
+wait 0.3
+ed_shot $OUT\handles_7_create_drag.png
+wait 0.5
+ed3d release
+sel_info
+ed3d handles
+
+# .. the square on top of the new brush sets its height
+ed3d wpress 368 384 128
+ed3d wdrag 368 384 96
+ed3d release
+sel_info
+
+# the other shapes, on the floor of the stage
+sel_none
+ed3d primitive cylinder 12
+ed3d wpress 600 0 0
+ed3d wdrag 700 100 0
+ed3d release
+sel_info
+sel_none
+ed3d primitive cone 8
+ed3d wpress 600 200 0
+ed3d wdrag 700 300 0
+ed3d release
+sel_info
+sel_none
+ed3d primitive wedge
+ed3d wpress 600 400 0
+ed3d wdrag 760 480 0
+ed3d release
+sel_info
+sel_none
+ed3d primitive terrain
+ed3d wpress 600 600 0
+ed3d wdrag 860 800 0
+ed3d release
+sel_info
+expect ( Create terrain )
+
+# ---- the control points of a patch are handles of the vertex tool
+ed3d tool vertex
+wait 0.3
+ed3d handles
+expect ed3d: 20 handles ( vertex tool ), 0 selected
+ed3d wpress 600 600 0
+ed3d wdrag 568 568 0
+ed3d release
+ed3d wpress 568 568 0 alt
+ed3d wdrag 568 568 64
+ed3d release
+ed3d handles
+expect 568 568 64
+sel_info
+expect bounds 568 568 0 .. 864 800 64
+ed3d tool create
+wait 0.3
+ed_camera 300 -400 700 50 70
+wait 0.5
+ed_shot $OUT\handles_8_created.png
+wait 0.5
+
+# ---- a material dropped on one face, then on a whole brush
+ed_camera -150 -150 400 55 45
+wait 0.5
+ed3d tool object
+sel_none
+ed3d wdrop wc/gfx_impact_brick01 384 64 64
+sel_id 3
+ed3d faces
+sel_info
+expect wc/gfx_impact_brick01  size
+expect ( Set material )
+ed3d wdrop wc/gfx_impact_metal01 384 64 64 brush
+ed3d faces
+ed_undo
+ed_undo
+ed3d faces
+sel_info
+wait 0.5
+quit

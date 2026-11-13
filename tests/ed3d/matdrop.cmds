@@ -1,0 +1,54 @@
+# A material dragged with the ( injected ) mouse from the Materials window onto a face in the 3D view.
+# The pixel of the thumbnail belongs to the layout the editor is started with ( Materials docked on the left ).
+map_new $MAP
+wait 6
+ed_box 0 0 0 128 128 64
+ed_camera -150 -150 400 55 45
+ed_windows set
+ed_material_filter impact 2
+wait 1.5
+ed_focus_window Materials##window
+wait 1
+
+# third thumbnail of the first row
+ui_mouse 265 237
+wait 0.3
+ui_mouse down
+wait 0.2
+ui_mouse 300 300
+wait 0.2
+ui_mouse 500 400
+wait 0.3
+ed3d wmouse 100 100 64
+wait 0.4
+ed_shot $OUT\matdrop_1_dragging.png
+wait 0.5
+ui_mouse up
+wait 0.5
+ed3d faces
+sel_info
+expect ( Set material )
+expect normal 0 -0 1  mc/gfx_impact_asphalt01
+wait 0.3
+ed_shot $OUT\matdrop_2_dropped.png
+wait 0.5
+
+# with Shift: every face of the brush
+ui_mouse 64 365
+wait 0.3
+ui_mouse down
+wait 0.2
+ui_mouse 300 300
+wait 0.2
+ed3d wmouse 100 100 64
+wait 0.3
+ui_key shift down
+wait 0.3
+ui_mouse up
+wait 0.3
+ui_key shift up
+wait 0.3
+ed3d faces
+sel_info
+ui_mouse off
+quit

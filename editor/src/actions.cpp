@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "edit3d.hpp"
 #include "assets.hpp"
 #include "preview.hpp"
 
@@ -1298,6 +1299,12 @@ namespace editor::ui
 
 		// while the right button flies the camera the keys move it; a drag owns the document until it ends
 		if (!s.open || ImGui::IsMouseDown(ImGuiMouseButton_Right) || s.dragging())
+		{
+			return;
+		}
+
+		// the tools of the 3D view ( edit3d.cpp ): edge mode, create, texture keys
+		if (st.hovered_3d && edit3d::shortcuts())
 		{
 			return;
 		}

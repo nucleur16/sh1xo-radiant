@@ -1,0 +1,16 @@
+map_new $MAP
+wait 6
+ed_box 0 0 0 128 128 64
+ed_camera -260 -200 220 30 40
+wait 1
+sel_info
+ed3d info
+ed3d handles
+ed_shot $OUT\smoke_1.png
+wait 1
+ed3d tool vertex
+wait 0.5
+ed3d handles
+ed_shot $OUT\smoke_2.png
+wait 1
+quit

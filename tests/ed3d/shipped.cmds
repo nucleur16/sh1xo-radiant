@@ -1,0 +1,38 @@
+# 3D editing in a shipped map ( the world is the zone's, drawn by the renderer; the surfaces the tools work on are
+# its triangles ): create a brush on the ground the camera looks at, pull its top, show its vertex handles, clip it.
+map_open mp_killhouse_sh
+wait 25
+ed_camera 300 300 260 40 200
+wait 1
+ed_shot $OUT\shipped_0.png
+wait 0.5
+ed3d tool create
+ed3d press 380 560
+ed3d drag 520 660
+wait 0.3
+ed_shot $OUT\shipped_1_create_drag.png
+wait 0.5
+ed3d release
+sel_info
+expect ( Create box )
+ed3d handles
+ed3d tool vertex
+wait 0.5
+ed_shot $OUT\shipped_2_vertices.png
+wait 0.5
+ed3d tool clip
+ed3d click 440 560
+ed3d click 470 590
+wait 0.5
+ed3d info
+ed_shot $OUT\shipped_3_clip.png
+wait 0.5
+ed_clip_apply
+sel_info
+ed3d tool object
+wait 0.5
+ed_shot $OUT\shipped_4_clipped.png
+wait 0.5
+map_close
+wait 1
+quit

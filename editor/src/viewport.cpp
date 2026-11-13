@@ -8,6 +8,7 @@
 #include "assets.hpp"
 #include "preview.hpp"
 #include "ui.hpp"
+#include "edit3d.hpp"
 
 #include <ImGuizmo.h>
 
@@ -224,6 +225,7 @@ namespace ggui
 	{
 		g_impl = m.get();
 		ui::register_commands();
+		editor::edit3d::register_commands();
 	}
 
 	codol_viewport_dialog::~codol_viewport_dialog()
@@ -757,6 +759,18 @@ namespace ggui
 		auto& doc = s.doc;
 		auto& st = ui::get();
 		const auto& io = ImGui::GetIO();
+
+		// vertex / edge tool: the gizmo is on the selected handles; clipper: none
+		if (editor::edit3d::replaces_gizmo())
+		{
+			if (gizmo_active)
+			{
+				gizmo_active = false;
+				s.end_drag();
+			}
+
+			return editor::edit3d::handle_gizmo(dl, origin, width, height);
+		}
 
 		if (doc.selection().empty())
 		{
@@ -1441,6 +1455,15 @@ namespace ggui
 							ImGui::GetWindowDrawList()->AddRect(pos, ImVec2(pos.x + image, pos.y + image), chosen ? IM_COL32(255, 184, 64, 255) : IM_COL32(70, 72, 76, 255));
 						}
 
+						// drag it onto a face in the 3D view
+						if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+						{
+							ImGui::SetDragDropPayload("CODOL_MATERIAL", name.c_str(), name.size() + 1);
+							ImGui::TextUnformatted(name.c_str());
+							ImGui::TextDisabled("Drop on a face in the 3D view ( Shift: the whole brush )");
+							ImGui::EndDragDropSource();
+						}
+
 						if (ImGui::IsItemClicked())
 						{
 							doc.set_default_material(name);
@@ -1681,6 +1704,9 @@ namespace ggui
 			ImGui::EndPopup();
 		}
 
+		// ---- second row: the editing tools of this view ( edit3d.cpp )
+		editor::edit3d::toolbar();
+
 		const ImVec2 avail = ImGui::GetContentRegionAvail();
 		const float status_h = ImGui::GetTextLineHeightWithSpacing();
 		const int width = static_cast<int>(avail.x);
@@ -1860,9 +1886,54 @@ namespace ggui
 			st.next_hovered_3d = true;
 		}
 
+		// a material dragged out of the Materials window: on the face it is dropped on ( Shift: the whole brush )
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CODOL_MATERIAL"); payload && payload->Data)
+			{
+				editor::edit3d::drop_material(static_cast<const char*>(payload->Data), io.MousePos.x - image_pos.x, io.MousePos.y - image_pos.y, io.KeyShift);
+			}
+
+			ImGui::EndDragDropTarget();
+		}
+
 		// ---- gizmo on the selection of the document: it wins over driving the camera
 		const bool gizmo_busy = m->draw_gizmo(dl, image_pos, width, height);
 		m->gizmo_hover = gizmo_busy;
+
+		// ---- the editing tools ( edit3d.cpp ): they get the left button first. A tool that takes the press owns it
+		// until the release; one that does not leaves the click and the drag to the view, as before.
+		bool tool_press = false;
+
+		{
+			const float mx = io.MousePos.x - image_pos.x, my = io.MousePos.y - image_pos.y;
+
+			if (editor::edit3d::scripted())
+			{
+				// a press from the console ( ed3d press ): it ends with `ed3d release`
+			}
+			else if (editor::edit3d::busy())
+			{
+				if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+				{
+					editor::edit3d::drag(mx, my, false);
+				}
+				else
+				{
+					editor::edit3d::release();
+				}
+			}
+			else if (hovered && !gizmo_busy && s.open && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsMouseDown(ImGuiMouseButton_Right))
+			{
+				tool_press = editor::edit3d::press(mx, my, io.KeyShift, io.KeyCtrl, io.KeyAlt);
+			}
+
+			dl->PushClipRect(image_pos, ImVec2(image_pos.x + static_cast<float>(width), image_pos.y + static_cast<float>(height)), true);
+			editor::edit3d::draw(dl, image_pos, width, height, hovered && !gizmo_busy);
+			dl->PopClipRect();
+		}
+
+		const bool tool_busy = tool_press || editor::edit3d::busy();
 
 		// ---- navigation and picking
 		{
@@ -1885,7 +1956,7 @@ namespace ggui
 			if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			{
 				m->press_pos = io.MousePos;
-				m->press_valid = !gizmo_busy;
+				m->press_valid = !gizmo_busy && !tool_busy;
 			}
 
 			if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -1902,7 +1973,11 @@ namespace ggui
 				m->right_press_valid = false; // looking around, not a click
 			}
 
-			if (mmb || (lmb && rmb))
+			if (tool_busy)
+			{
+				// a tool has the left button: the camera stays where it is
+			}
+			else if (mmb || (lmb && rmb))
 			{
 				move(axes.left, dx * drag);
 				move(axes.up, dy * drag);
@@ -1950,7 +2025,8 @@ namespace ggui
 					if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) { m->overview = true; }
 					if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { m->focus = true; }
 					if (ImGui::IsKeyPressed(ImGuiKey_W, false)) { st.gizmo = ui::gizmo_tool::move; }
-					if (ImGui::IsKeyPressed(ImGuiKey_E, false)) { st.gizmo = ui::gizmo_tool::rotate; }
+					// while the handles are shown E is the edge mode ( edit3d::shortcuts ): nothing is rotated there
+					if (!st.vertex_mode && ImGui::IsKeyPressed(ImGuiKey_E, false)) { st.gizmo = ui::gizmo_tool::rotate; }
 					if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { st.gizmo = ui::gizmo_tool::scale; }
 				}
 			}
@@ -1984,15 +2060,16 @@ namespace ggui
 		}
 
 		// ---- hint
-		if (hovered && !active && !gizmo_busy)
+		if (hovered && !active && !gizmo_busy && !tool_busy)
 		{
-			const char* hint = "Click: select ( Ctrl / Shift adds, both: face )    Right click: create entity    W E R: move / rotate / scale    Arrows: nudge    Space: clone\n"
-				"Right drag: look + W A S D    Left drag: drive    Middle drag: pan    Wheel: forward / back    F: go to the selection";
-			const ImVec2 size = ImGui::CalcTextSize(hint);
+			// what the mouse and the keys do in the tool that is on
+			const char* hint = editor::edit3d::hint();
+			const float wrap = std::max(120.0f, static_cast<float>(width) - 24.0f);	// a narrow view: the lines wrap
+			const ImVec2 size = ImGui::CalcTextSize(hint, nullptr, false, wrap);
 			const ImVec2 at(image_pos.x + 8.0f, image_pos.y + static_cast<float>(height) - size.y - 10.0f);
 
 			dl->AddRectFilled(ImVec2(at.x - 4.0f, at.y - 3.0f), ImVec2(at.x + size.x + 4.0f, at.y + size.y + 3.0f), IM_COL32(0, 0, 0, 150), 3.0f);
-			dl->AddText(at, IM_COL32(230, 230, 230, 255), hint);
+			dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), at, IM_COL32(230, 230, 230, 255), hint, nullptr, wrap);
 		}
 
 		// ---- status

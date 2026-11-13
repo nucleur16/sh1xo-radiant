@@ -326,6 +326,15 @@ namespace codol::edit
 		bool move_brush_corners(object_id brush, std::span<const vec3> corners, const vec3& delta);
 		bool move_patch_vertices(object_id patch, std::span<const int> vertex_indices, const vec3& delta);
 
+		// ---- brush shape, several at once ( edit_ops_3d.cpp; the handles of a perspective view ) -----
+
+		// Each face moves along its normal by the part of `delta` that points that way ( one step ). Faces that
+		// would make their brush vanish stay; false when none moved.
+		bool move_faces(std::span<const face_ref> faces, const vec3& delta);
+		// move_brush_corners for every selected brush that has corners at `corners` ( one step ): a corner shared
+		// by brushes that touch moves in all of them. Brushes that would be flat stay; false when none moved.
+		bool move_corners(std::span<const vec3> corners, const vec3& delta);
+
 		// ---- textures ---------------------------------------------------------------------------
 		// Target: the selected faces, plus every face of the selected brushes and the selected patches.
 
