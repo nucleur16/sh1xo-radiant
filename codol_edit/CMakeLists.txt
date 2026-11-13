@@ -86,6 +86,8 @@ add_library(codol_edit STATIC
 	include/codol_edit/select_types.hpp
 	include/codol_edit/prefab.hpp
 	include/codol_edit/document_select.inc
+	src/edit_ops_3d.cpp
+	include/codol_edit/handles.hpp
 	src/import.cpp
 	src/class_catalog.cpp
 	src/class_catalog_data.inc
@@ -132,4 +134,9 @@ if(CODOL_EDIT_BUILD_TESTS)
 	target_link_libraries(codol_edit_select_tests PRIVATE codol_edit)
 	codol_edit_options(codol_edit_select_tests)
 	add_test(NAME codol_edit_select_tests COMMAND codol_edit_select_tests)
+	# the operations of 3D editing ( handles.hpp, move_faces, move_corners ); needs no test data
+	add_executable(codol_edit_3d_tests tests/codol_edit_3d_tests.cpp)
+	target_link_libraries(codol_edit_3d_tests PRIVATE codol_edit)
+	codol_edit_options(codol_edit_3d_tests)
+	add_test(NAME codol_edit_3d_tests COMMAND codol_edit_3d_tests)
 endif()

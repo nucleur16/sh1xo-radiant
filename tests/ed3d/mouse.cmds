@@ -1,0 +1,288 @@
+# 3D editing with the mouse and the keyboard themselves: ui_mouse / ui_key feed the gui's input queue, so this run
+# goes through ImGui's hit testing, the view's button, the gizmo and ui::process_shortcuts - not through `ed3d press`.
+# `ed3d wmouse x y z` puts the ( injected ) mouse on the pixel a world point projects to.
+map_new $MAP
+wait 6
+ed_box 0 0 0 128 128 64
+ed_camera -150 -150 400 55 45
+wait 1
+
+# ---- drag on the selection ( on its top, away from the gizmo ): it moves
+ed3d wmouse 120 120 64
+wait 0.3
+ui_mouse down
+wait 0.2
+ed3d wmouse 136 136 64
+wait 0.2
+ed3d wmouse 152 152 64
+wait 0.3
+ed_shot $OUT\mouse_1_move.png
+wait 0.5
+ui_mouse up
+wait 0.3
+sel_info
+expect bounds 32 32 0 .. 160 160 64
+expect undo 2 ( Move )
+
+# ---- next to the brush the faces a drag would move are outlined; drag: the south face
+ed3d wmouse 96 -40 64
+wait 0.5
+ed_shot $OUT\mouse_1b_hover_faces.png
+wait 0.5
+ui_mouse down
+wait 0.2
+ed3d wmouse 96 -56 64
+wait 0.2
+ed3d wmouse 96 -72 64
+wait 0.3
+ui_mouse up
+wait 0.3
+sel_info
+expect bounds 32 0 0 .. 160 160 64
+expect undo 3 ( Resize )
+
+# ---- the square on the east side of the selection's box
+ed3d wmouse 160 80 32
+wait 0.3
+ui_mouse down
+wait 0.2
+ed3d wmouse 176 80 32
+wait 0.2
+ed3d wmouse 192 80 32
+wait 0.3
+ed_shot $OUT\mouse_2_box_handle.png
+wait 0.5
+ui_mouse up
+wait 0.3
+sel_info
+expect bounds 32 0 0 .. 192 160 64
+
+# ---- a click on nothing deselects, a click on the brush selects, Ctrl+Shift click selects the face
+ed3d wmouse 400 -200 0
+wait 0.3
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.3
+sel_info
+expect brushes, 0 patches; 0 selected, 0 faces
+ed3d wmouse 100 100 64
+wait 0.3
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.3
+sel_info
+expect brushes, 0 patches; 1 selected, 0 faces
+ui_key ctrl down
+ui_key shift down
+wait 0.2
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.2
+ui_key ctrl up
+ui_key shift up
+wait 0.3
+sel_info
+expect brushes, 0 patches; 1 selected, 1 faces
+
+# ---- texture keys on the selected face: Shift+Right shifts, Ctrl+Up scales, Shift+PageUp rotates
+ed3d faces
+ui_key shift down
+wait 0.2
+ui_key right
+wait 0.2
+ui_key right
+wait 0.2
+ui_key pageup
+wait 0.2
+ui_key shift up
+wait 0.2
+ui_key ctrl down
+wait 0.2
+ui_key up
+wait 0.2
+ui_key ctrl up
+wait 0.3
+ed3d faces
+sel_info
+expect rotation 15  selected
+expect ( Scale texture )
+
+# ---- the keys of the tools: V vertices, E edges, V back to the vertices, V out; B create, Esc out; C clipper
+ui_key v
+wait 0.3
+ed3d info
+expect ed3d: tool vertex
+ui_key e
+wait 0.3
+ed3d info
+expect ed3d: tool edge
+ui_key v
+wait 0.3
+ed3d info
+ui_key v
+wait 0.3
+ed3d info
+expect ed3d: tool object
+ui_key b
+wait 0.3
+ed3d info
+expect ed3d: tool create
+ui_key escape
+wait 0.3
+ed3d info
+
+# E outside the vertex tool is still the rotate gizmo, W the move gizmo
+ui_key e
+wait 0.3
+ed_shot $OUT\mouse_3_rotate_gizmo.png
+wait 0.5
+ui_key w
+wait 0.3
+
+# ---- vertex tool with the mouse: click a corner, drag it; then the arrow of the gizmo on it
+ui_key v
+wait 0.3
+ed3d wmouse 32 0 64
+wait 0.3
+ui_mouse down
+wait 0.2
+ed3d wmouse 16 -16 64
+wait 0.2
+ed3d wmouse 0 -32 64
+wait 0.3
+ed_shot $OUT\mouse_4_vertex_drag.png
+wait 0.5
+ui_mouse up
+wait 0.3
+ed3d handles
+expect 0 -32 64  pixel
+expect ( Move vertices )
+sel_info
+
+# the gizmo's blue arrow ( up ) on the selected handle
+ed3d wmouse 0 -32 88
+wait 0.4
+ui_mouse down
+wait 0.2
+ed3d wmouse 0 -32 104
+wait 0.2
+ed3d wmouse 0 -32 120
+wait 0.3
+ed_shot $OUT\mouse_5_handle_gizmo.png
+wait 0.5
+ui_mouse up
+wait 0.3
+ed3d handles
+sel_info
+
+# Shift drag: the handles in the rectangle; Esc deselects them, V leaves
+ed3d wmouse 250 250 64
+wait 0.3
+ui_key shift down
+wait 0.2
+ui_mouse down
+wait 0.2
+ed3d wmouse 200 100 64
+wait 0.2
+ed3d wmouse 100 -100 64
+wait 0.3
+ed_shot $OUT\mouse_6_handle_rect.png
+wait 0.5
+ui_mouse up
+wait 0.2
+ui_key shift up
+wait 0.3
+ed3d handles
+ui_key escape
+wait 0.3
+ed3d info
+ui_key v
+wait 0.3
+
+# ---- clipper with the mouse: C, two clicks on the top, Shift+Enter splits
+ed_box 320 320 0 448 448 64
+wait 0.3
+ui_key c
+wait 0.3
+ed3d wmouse 352 384 64
+wait 0.3
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.3
+ed3d wmouse 416 384 64
+wait 0.3
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.3
+ed3d info
+expect 2 clip points ( axis 2 )
+ed_shot $OUT\mouse_7_clip.png
+wait 0.5
+ui_key shift down
+wait 0.2
+ui_key enter
+wait 0.2
+ui_key shift up
+wait 0.3
+sel_info
+expect brushes, 0 patches; 2 selected
+ui_key c
+wait 0.3
+
+# ---- create with the mouse: B, drag on the top of one of the halves
+ed3d wmouse 400 -200 0
+wait 0.3
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.3
+ui_key b
+wait 0.3
+ed3d wmouse 336 336 64
+wait 0.3
+ui_mouse down
+wait 0.2
+ed3d wmouse 368 352 64
+wait 0.2
+ed3d wmouse 400 368 64
+wait 0.3
+ed_shot $OUT\mouse_8_create.png
+wait 0.5
+ui_mouse up
+wait 0.3
+sel_info
+expect bounds 336 336 64 .. 400 368 128
+expect ( Create box )
+
+# ---- Shift drag in the Select tool: the rectangle; Alt click: what is behind
+ui_key escape
+wait 0.3
+ed3d wmouse 400 -200 0
+wait 0.3
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 0.3
+ed3d wmouse -60 -60 0
+wait 0.3
+ui_key shift down
+wait 0.2
+ui_mouse down
+wait 0.2
+ed3d wmouse 100 100 0
+wait 0.2
+ed3d wmouse 560 560 0
+wait 0.3
+ui_mouse up
+wait 0.2
+ui_key shift up
+wait 0.3
+sel_info
+ui_mouse off
+wait 0.3
+quit

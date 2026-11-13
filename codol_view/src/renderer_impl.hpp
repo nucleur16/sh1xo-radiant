@@ -440,6 +440,18 @@ namespace codol::view
 		bool model_names_built = false, material_names_built = false;
 		name_map<std::pair<int, int>> image_sizes;
 		name_map<com_ptr<IDirect3DTexture9>> thumbnails;		// null: failed
+		// Textures the host was given ( the colour target of render(), thumbnails ) that the renderer no longer needs.
+		// The host may have put them into draw commands of the frame it is building - a gui draws at the end of
+		// its frame -, so they are kept until it says that nothing refers to them ( release_retired ).
+		std::vector<com_ptr<IDirect3DTexture9>> host_retired;
+		void retire_host_texture(com_ptr<IDirect3DTexture9>& texture)
+		{
+			if (texture.get())
+			{
+				host_retired.push_back(std::move(texture));
+			}
+			texture.reset();
+		}
 		edit_snapshot pending_edits;							// between on_device_lost and on_device_reset
 		// what a zone that was registered again ( register_zone ) left behind: existing meshes and instances may
 		// still point at it, and the caches are keyed by these addresses
