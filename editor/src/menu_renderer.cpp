@@ -300,8 +300,6 @@ namespace editor::render_modes
 
 		void pick_vision(const std::string& name)
 		{
-			g_state.vision = name;
-
 			if (const auto it = g_visions.find(name); it != g_visions.end())
 			{
 				if (!apply_vision(it->second))
@@ -310,13 +308,15 @@ namespace editor::render_modes
 					return;
 				}
 
+				g_state.vision = name;
 				g_state.filmtweaks = true;
 				game::printf_to_console("[renderer] vision %s: contrast %g brightness %g desaturation %g  light %g %g %g  dark %g %g %g%s\n", name.c_str(), g_film.contrast, g_film.brightness,
 					g_film.desaturation, g_film.light_tint[0], g_film.light_tint[1], g_film.light_tint[2], g_film.dark_tint[0], g_film.dark_tint[1], g_film.dark_tint[2], g_film.enable ? "" : "  ( the file turns film off )");
 			}
 			else if (!name.empty())
 			{
-				if (!g_visions_read) { read_visions(); }
+				// the list is not there yet: the vision is applied when it is
+				if (!g_visions_read) { g_state.vision = name; read_visions(); }
 				else { game::printf_to_console("^1[renderer] no vision file %s in the zones\n", name.c_str()); }
 			}
 		}

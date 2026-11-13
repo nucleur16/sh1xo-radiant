@@ -380,6 +380,14 @@ namespace editor::prefs
 			g_autosave_due = ImGui::GetTime() + 60.0 * get_int("ed_autosave_minutes");
 		}
 
+		// another interval counts from now
+		static int interval = get_int("ed_autosave_minutes");
+		if (interval != get_int("ed_autosave_minutes"))
+		{
+			interval = get_int("ed_autosave_minutes");
+			g_autosave_due = ImGui::GetTime() + 60.0 * interval;
+		}
+
 		if (s.open && get_bool("ed_autosave") && ImGui::GetTime() >= g_autosave_due && !s.dragging() && !s.doc.in_transaction())
 		{
 			g_autosave_due = ImGui::GetTime() + 60.0 * get_int("ed_autosave_minutes");
@@ -731,13 +739,34 @@ namespace editor::colors
 			}
 		}
 
+		// the settings are what counts ( the file is read after the colours are registered, the console sets them
+		// by name ): the table follows them
+		void refresh()
+		{
+			for (int i = 0; i < count; i++)
+			{
+				ImU32 value = g_values[i];
+
+				if (from_text(prefs::get_string(setting_of(i).c_str()), value) && value != g_values[i])
+				{
+					g_values[i] = value;
+					g_serial++;
+				}
+			}
+		}
+
 		void set(const int which, const ImU32 value)
 		{
-			if (g_values[which] == value) { return; }
+			if (g_values[which] != value)
+			{
+				g_values[which] = value;
+				g_serial++;
+			}
 
-			g_values[which] = value;
-			g_serial++;
-			prefs::set_string(setting_of(which).c_str(), to_text(value));
+			if (const std::string text = to_text(value); prefs::get_string(setting_of(which).c_str()) != text)
+			{
+				prefs::set_string(setting_of(which).c_str(), text);
+			}
 		}
 
 		void apply_preset(const preset& p)
@@ -759,25 +788,6 @@ namespace editor::colors
 
 	std::uint64_t serial()
 	{
-		// a colour set from the console ( ed_color_selection "#FF0000FF" ) counts as well
-		static double checked = -1.0;
-
-		if (g_ready && ImGui::GetTime() - checked > 0.25)
-		{
-			checked = ImGui::GetTime();
-
-			for (int i = 0; i < count; i++)
-			{
-				ImU32 value = g_values[i];
-
-				if (from_text(prefs::get_string(setting_of(i).c_str()), value) && value != g_values[i])
-				{
-					g_values[i] = value;
-					g_serial++;
-				}
-			}
-		}
-
 		return g_serial;
 	}
 
@@ -790,6 +800,7 @@ namespace editor::colors
 	void draw_window()
 	{
 		ensure();
+		refresh();		// once per frame
 
 		// ed_colors [preset]: the window; a preset by name or number
 		static bool registered = false;

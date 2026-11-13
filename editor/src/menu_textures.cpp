@@ -702,10 +702,16 @@ namespace editor::textures
 		ImGui::TextUnformatted("Layer");
 		ImGui::SameLine(70.0f);
 
-		for (int i = 0; i < 3; i++)
+		ImGui::SetNextItemWidth(-1.0f);
+
+		if (ImGui::BeginCombo("##edit_layer", LAYER_NAMES[g_layer]))
 		{
-			if (i) { ImGui::SameLine(); }
-			if (ImGui::RadioButton(LAYER_NAMES[i], g_layer == i)) { set_layer(i); }
+			for (int i = 0; i < 3; i++)
+			{
+				if (ImGui::Selectable(LAYER_NAMES[i], g_layer == i)) { set_layer(i); }
+			}
+
+			ImGui::EndCombo();
 		}
 
 		if (ImGui::IsItemHovered())
