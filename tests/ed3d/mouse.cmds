@@ -24,9 +24,11 @@ sel_info
 expect bounds 32 32 0 .. 160 160 64
 expect undo 2 ( Move )
 
-# ---- drag next to the brush: the south face
+# ---- next to the brush the faces a drag would move are outlined; drag: the south face
 ed3d wmouse 96 -40 64
-wait 0.3
+wait 0.5
+ed_shot $OUT\mouse_1b_hover_faces.png
+wait 0.5
 ui_mouse down
 wait 0.2
 ed3d wmouse 96 -56 64

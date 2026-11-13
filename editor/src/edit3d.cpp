@@ -1247,9 +1247,16 @@ namespace editor::edit3d
 
 		const edit::ray ray = ray_at(px, py);
 
-		// the movement of the anchor on the drag plane ( with Alt: along the axis the plane is perpendicular to )
-		const auto planar = [&](edit::vec3& delta)
+		// The movement of the anchor on the drag plane ( with Alt: along the axis the plane is perpendicular to ).
+		// `to_grid`: the anchor itself lands on the grid ( a handle that was off the grid is on it after the drag );
+		// otherwise the movement is a multiple of the grid ( a selection keeps its offset to the grid ).
+		const auto planar = [&](edit::vec3& delta, const bool to_grid)
 		{
+			const auto snap = [&](const int axis, const double moved)
+			{
+				return to_grid ? s.snapped(g.anchor[axis] + moved) - g.anchor[axis] : s.snapped(moved);
+			};
+
 			if (g.alt)
 			{
 				double t = 0.0;
@@ -1258,7 +1265,7 @@ namespace editor::edit3d
 					return false;
 				}
 
-				delta = axis_vector(g.plane_axis, s.snapped(t));
+				delta = axis_vector(g.plane_axis, snap(g.plane_axis, t));
 				return true;
 			}
 
@@ -1268,8 +1275,11 @@ namespace editor::edit3d
 				return false;
 			}
 
-			delta = snapped(now - start);
-			delta[g.plane_axis] = 0.0;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				delta[axis] = axis == g.plane_axis ? 0.0 : snap(axis, now[axis] - start[axis]);
+			}
+
 			return true;
 		};
 
@@ -1278,7 +1288,7 @@ namespace editor::edit3d
 		case action::move:
 		{
 			edit::vec3 delta;
-			if (planar(delta))
+			if (planar(delta, false))
 			{
 				apply(delta, "Move", [&] { s.translate(delta); });
 			}
@@ -1325,7 +1335,7 @@ namespace editor::edit3d
 		case action::handle_drag:
 		{
 			edit::vec3 delta;
-			if (planar(delta))
+			if (planar(delta, current() == tool::vertex))
 			{
 				apply(delta, current() == tool::edge ? "Move edges" : "Move vertices", [&] { move_handles(delta); });
 
@@ -1903,6 +1913,34 @@ namespace editor::edit3d
 			if (over >= 0)
 			{
 				ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+			}
+		}
+
+		// ---- next to a selected brush: the faces a drag from here would move
+		if ((t == tool::object || t == tool::create) && !doc.selection().empty() && hovered && !g.pressed && g.hovered_bounds < 0
+			&& !io.KeyShift && !io.KeyCtrl && !io.KeyAlt && !ImGui::IsMouseDown(ImGuiMouseButton_Right) && doc.selection().size() <= 64 && selection_has_brush())
+		{
+			const edit::ray ray = ray_at(mx, my);
+			bool on_selection = false;
+
+			for (const auto& hit : doc_hits(ray, true))
+			{
+				on_selection |= doc.is_selected(hit.object);
+			}
+
+			for (const object_id id : doc.selection())
+			{
+				const auto* geo = on_selection ? nullptr : doc.geometry(id);
+
+				for (const int face : geo ? edit::drag_faces(*geo, ray) : std::vector<int>())
+				{
+					const auto& loop = geo->face_vertices[static_cast<std::size_t>(face)];
+
+					for (std::size_t i = 0; i < loop.size(); i++)
+					{
+						line3d(dl, geo->vertices[static_cast<std::size_t>(loop[i])], geo->vertices[static_cast<std::size_t>(loop[(i + 1) % loop.size()])], IM_COL32(255, 230, 60, 255), 3.0f);
+					}
+				}
 			}
 		}
 

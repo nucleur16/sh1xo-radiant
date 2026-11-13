@@ -194,5 +194,16 @@ ed_undo
 ed_undo
 ed3d faces
 sel_info
+
+# ---- a corner that is off the grid lands on it when it is dragged
+ed_box 953 3 0 1081 131 64
+ed_camera 800 -150 400 55 45
+ed3d tool vertex
+wait 0.5
+ed3d wpress 953 3 64
+ed3d wdrag 921 -29 64
+ed3d release
+ed3d handles
+expect 920 -32 64
 wait 0.5
 quit
