@@ -725,8 +725,21 @@ namespace codol::bsp
 			error = opts.map.string() + ": " + error;
 			return false;
 		}
+		// misc_prefab: the contents of the prefab's .map in its place ( prefabs inside prefabs too )
+		edit::prefab_result prefabs;
+		edit::expand_prefabs_from_disk(doc, opts.map, prefabs, opts.prefab_roots);
 		std::vector<std::uint8_t> zone_bytes;
-		if (!compile_document(doc, opts, key, zone_bytes, rep, error))
+		const bool compiled = compile_document(doc, opts, key, zone_bytes, rep, error);
+		if (prefabs.expanded)
+		{
+			rep.notes.push_back(format("prefabs: %d expanded into %d brushes, %d patches, %d entities", prefabs.expanded, prefabs.brushes, prefabs.patches,
+				prefabs.entities));
+		}
+		for (const std::string& warning : prefabs.warnings)
+		{
+			rep.warnings.push_back("prefab: " + warning);
+		}
+		if (!compiled)
 		{
 			return false;
 		}

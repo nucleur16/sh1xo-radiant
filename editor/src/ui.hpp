@@ -207,4 +207,19 @@ namespace editor::ui
 	void patch_vertex_marks(const std::function<void(const edit::vec3&, ImU32)>& mark);
 	// 3D view, terrain edge mode: a click along the ray turns the diagonal of the quad it hits; true when it did
 	bool patch_edge_click(const float3& origin, const float3& direction);
+	// ---- File / Edit / View additions, the Selection, Grid, Misc and Region menus, filters, prefabs
+	// ( menu_selection.cpp, filters.cpp, prefabs.cpp; what they share: menu_ext.hpp ) ---------------------------
+	void draw_file_menu_extra();		// after the entries of draw_file_menu_items
+	void draw_edit_menu_extra();
+	void draw_view_menu_extra();
+	void draw_extra_menus();			// Selection, Grid, Misc, Region
+	void draw_extra_windows();			// once per frame: Filter, Map Info, Entity Info, Prefabs, the dialogs
+	void process_extra_shortcuts();
+	void register_extra_commands();
+	// lines in world space every view draws: the contents of prefabs, the region, the leak line ( 2D: the grid blocks )
+	const std::vector<line_vertex>& extra_view_lines(bool view2d);
+	// the box of a misc_prefab entity relative to its origin; false for any other entity
+	bool prefab_box(const edit::entity& e, edit::bounds& local_box);
+	// the file File > Build map compiles: the map, or what the region shows ( after "Build region" )
+	std::filesystem::path build_source_file(const std::filesystem::path& map_file);
 }

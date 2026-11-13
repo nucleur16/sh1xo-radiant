@@ -80,6 +80,9 @@ asset project is `mod\mp_mymap\` ( [Your own assets](#your-own-assets) ).
   one should not walk through.
 * Doorways and windows between rooms become portals by themselves ( planar openings in a wall ); `portal` brushes
   of your own switch that search off.
+* Things that repeat can be **prefabs** ( `misc_prefab` entities that stand for another `.map` ), a large map can be
+  worked on through a **region**, and hidden faces get caulk with Selection > CSG > Auto Caulk:
+  [Selecting, regions, filters, prefabs](#selecting-regions-filters-prefabs).
 * *The 3D view* draws a map of your own in a *stage*: an empty world that `codol_bsp` compiles from the light keys
   of the worldspawn ( a second or two, kept in `compiled\cache\stage\` ). Brushes with their materials, models
   where their entities stand, lit by the sun, sky and ambient light the map will have. **It is not the light
@@ -265,6 +268,145 @@ expanded ); `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brus
 physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode; selecting patch vertices
 in the 3D view; patches in **File > Compile map** ( an edited shipped map: `codol_mapc` reports patches and leaves
 them out - build the map from scratch ).
+### Selecting, regions, filters, prefabs
+
+What CoD4 radiant has in its File, Edit, View, Selection, Grid, Misc and Region menus, written again for this
+editor ( nothing of it calls CoD4 radiant ). Every entry is a menu item, a console command and - where radiant
+has one and the key is free here - a key; every change of the map is one undo step. The document side is
+`codol_edit` ( `src/select_ops.cpp`, `src/prefab.cpp`, tests: `codol_edit_select_tests` ), the menus are
+`editor/src/menu_selection.cpp`, `filters.cpp` and `prefabs.cpp`.
+
+**File**
+
+| entry | command | what it does |
+|---|---|---|
+| Import .map into the map .. | `map_import <file.map>` | brushes of the file's worldspawn join this worldspawn, its entities are added; the new objects are selected |
+| Generate File > Save Selected .. | `map_save_selected <file.map>` | the selection as a complete `.map` with the worldspawn's keys and the layer table |
+| Generate File > Save Region .. | `map_save_region <file.map>` | everything that touches the region ( the whole map without one ) |
+| Generate File > Pointfile | `leak_load [report]` | reads the leak of the last File > Build map from its report ( `compiled\<map>\work\<map>.report.txt` ) and draws the line from the entity to the outside in the 2D and 3D views. `leak_next` / `leak_prev` ( Misc, Ctrl+Alt+K / Ctrl+Alt+L ) put the camera on its points, `leak_clear` takes it away |
+| Generate File > Errorfile | `map_errors` | collects the brushes that are no closed convex volume ( the compiler leaves them out ); next / previous leak spot selects them one by one |
+| Generate File > Createfx | `map_createfx` | says how many `script_fx` / `script_sound` entities the map has and where the build writes their script. There is no export of its own: `codol_bsp` generates `maps\createfx\<map>_fx.gsc` at every build |
+| Build region | `map_build_region [fast]` | File > Build map of what the region shows: it is written with six walls of caulk around it to `compiled\region\<map>.map` and compiled under the map's name |
+
+**Edit**
+
+| entry | key | command | |
+|---|---|---|---|
+| Copy / Cut | Ctrl+C / Ctrl+X | `ed_copy`, `ed_cut` | the selection goes to the Windows clipboard as `.map` text: paste works in the same map, another map and another CoDOL Radiant |
+| Paste | Ctrl+V | `ed_paste` | where the objects were |
+| Paste At Cursor / Camera | Ctrl+Shift+V | `ed_paste here`, `ed_paste <x y z>` | under the mouse in a 2D view, else on what the camera looks at |
+| Map Info | Ctrl+M | `ed_mapinfo [window]` | brushes, patches, entities, models, lights, prefabs, bounds, entities by class ( a click selects the class ), materials |
+| Entity Info | | `ed_entinfo [text] [window]` | every entity with class, targetname, target / model and origin; a filter over all four; a click selects the entity and brings the views to it |
+| Enter Prefab / Leave Prefab | | `prefab_enter`, `prefab_leave` | below |
+
+**View**: Filter ( F, `ed_filter` ), Center 2D On Camera ( `view2d_camera` ), Center Camera On Selection
+( `ed_focus` ), Up Floor / Down Floor ( Ctrl+PageUp / Ctrl+PageDown, `ed_floor up|down`: eye height above the next
+brush top above / below the camera ), Hide Unselected ( Ctrl+H, `ed_hide_unselected` ), Show Last Hidden
+( Ctrl+Shift+H, `ed_show_last` ), Show Grid Blocks ( `ed_gridblocks` ), Show Prefab Contents ( `prefab_show` ).
+
+**Selection**
+
+| entry | key | command |
+|---|---|---|
+| Select > Targetname / Classname | | `sel_targetname [pattern]`, `sel_classname [pattern]`: every entity with the value of the selected one; asks when nothing is selected |
+| Select > By Key / Value .. | Ctrl+Shift+F | `sel_key <key> [pattern] [add]`: `*` is any text, no pattern: the key exists |
+| Select > Connected | Ctrl+Shift+C | `sel_connected`: everything linked by `target` / `targetname`, in both directions, over any number of steps |
+| Select > Complete Tall / Partial Tall / Touching / Inside | | `sel_tall`, `sel_partial_tall`, `sel_touching`, `sel_inside` ( `sel_volume <kind> [x|y|z]` ). The selected brush marks the volume; as in radiant it is deleted by all but Touching ( the undo step brings it back ), and the tall kinds ignore the axis of the view the mouse is over |
+| Deselect, Clone, Invert, Delete | Esc, Space, I, Backspace | as before |
+| Flip X / Y / Z | | `ed_flip <x|y|z>` |
+| Rotate X / Y / Z, Arbitrary Rotation .. | Shift+D ( Z ) | `ed_rotate <axis> <degrees>`, `ed_rotate3 <x> <y> <z>` |
+| Free Rotation, Free Scaling | R | the rotate / scale handles of the 3D view ( `ed_gizmo` ) |
+| Scale > Lock X / Y / Z, Arbitrary Scale .. | | `ed_scale_lock <letters|none>`, `ed_scale3 <fx> [fy] [fz]` |
+| CSG > Hollow, Subtract | | `ed_hollow`, `ed_subtract` |
+| CSG > Merge | Ctrl+U | `ed_merge`: one brush out of the selected ones when together they are convex; faces keep their plane points and textures |
+| CSG > Auto Caulk ( the selection / the whole map ) | Alt+C | `ed_autocaulk [all]`: a face that other opaque world brushes cover completely gets `caulk`. Clip, trigger, portal and hint brushes hide nothing, nor do materials named glass, fence, grate, foliage, decal, water. "The whole map" leaves brush entities alone |
+| Clipper > Toggle, Clip, Split, Clip Other Side | C, Enter, Shift+Enter, Ctrl+Enter | `ed_tool clip`, `ed_clip_apply front|both|back` |
+| Prefabs > Enter, Leave, Stamp, Convert Selection To Prefab .., Prefab Browser | | below |
+| Connect Entities | Ctrl+K | `ed_connect` |
+| Link Entities | | `ed_link`: the selected brushes join the brush entity that has a brush in the selection |
+| Ungroup Entity | | `ed_worldspawn` |
+| Cycle Group Selection | Tab, Shift+Tab | `sel_group [prev]`: one brush of the brush entity after the other |
+| Make Detail / Structural | Ctrl+D / Ctrl+Shift+D | `ed_detail 1|0` |
+| Make Weapon Clip | Ctrl+Shift+W | `ed_contents weaponClip [0|1]` ( again: off ) |
+| Make Non-Colliding | Ctrl+Shift+- | `ed_contents nonColliding [0|1]` |
+| Make Split Coplanar Geo / Don't Split | | `ed_toolflag splitGeo 1|0` |
+| Don't Select > Curves, Entities, Sky, Models, World Brushes | | `ed_noselect <group> [0|1]` |
+
+How the flags are in the `.map` and what the compiler does with them:
+
+| in the brush block | set by | `codol_bsp` |
+|---|---|---|
+| `contents detail;` | Make Detail | does not split cells, hides no faces of other brushes |
+| `contents weaponClip;` | Make Weapon Clip | the brush is drawn with its materials; its collision gets the contents of the tool material `clip_weap` ( `0x20C0` in the shipped maps ): bullets and grenades stop, players and AI walk through. Checked by a trace through the compiled clip map with a player mask and a bullet mask ( `codol_bsp_prefab_tests` ) |
+| `contents nonColliding;` | Make Non-Colliding | drawn, no collision brush at all ( the same test ) |
+| `toolFlags splitGeo;` | Make Split Coplanar Geo | **kept in the file, not used**: `codol_bsp` never merges coplanar faces of different brushes, so there is nothing to switch |
+
+Several words stand on one line ( `contents detail weaponClip;` ), as radiant writes them. The caulk of this
+game is the material `caulk`: every shipped map has it on its collision brushes ( contents solid, never drawn );
+new brushes start with it and Auto Caulk uses it.
+
+**Grid**: 0.25, 0.5, 1 .. 512 ( `ed_grid <size>`; the number row sets 1 2 4 8 16 32 64 256 512 and `` ` `` 0.5 as
+in radiant ), Smaller / Larger ( [ ] ), Snap To Grid, Snap Selection To Grid ( Ctrl+G ), Show Grid Blocks ( the
+1024 unit blocks in the 2D views ).
+
+**Misc**
+
+| entry | key | command |
+|---|---|---|
+| Find Brush .. | | `ed_find <entity number> [brush number]`: counted from 0 in file order, as `// entity N` / `// brush M` say |
+| Go To Position .. | | `ed_goto <x> <y> <z>`: the camera there, the 2D views centred on it |
+| -> / <- Leak Spot / Error | Ctrl+Alt+K / Ctrl+Alt+L | `leak_next`, `leak_prev` |
+| Entity Color .. | K | `ed_color <r> <g> <b>`: `_color` of the selected entities |
+| Models Replace .. | | `ed_model_replace <from> <to> [selected]`: `*` in `<from>` is any text |
+| Cycle Preview Models | | `ed_models_cycle`: models shown / hidden ( the Models switch of the filter ) |
+| Drop Selected To Floor, Orient To Floor When Dropping | | `ed_drop [orient]`: the selected point entities fall onto the brush or terrain below them; models end with their origin on it, other classes with the bottom of their box; with "orient" pitch and roll follow the surface |
+| Plant New Models | | `ed_plant [0|1] [orient 0|1]`: a model that is placed falls to the floor by itself |
+| Script Group, Vehicle Group, Dyn Entity dialogs, Delete Exportables | | **not applicable** ( greyed, the tooltip says why ): no shipped 1.1.1.13 map has a `script_group` or `script_vehiclegroup` key, `dyn_brushmodel` / `dyn_model` do not occur ( only 64 `dyn_hingeconstraint` ), and "exportables" belong to CoD4 radiant's Maya export |
+
+**Region**: Region Off, Set XY ( what the top view shows, any height ), Set Tall Brush, Set Brush ( the brush that
+marks the region is deleted, as in radiant ), Set Selected Brush ( it stays ) - `region <off | xy | tall | brush |
+selected | x1 y1 z1 x2 y2 z2>`. A region is view state like hidden objects: only what touches its box is drawn,
+picked and selected by "select all"; a yellow box and "region" in the menu bar show that one is set. Save Region
+writes what touches it, Build Region compiles it inside a box of caulk.
+
+**The Filter window** ( View > Filter, F ): a tick means shown. Brushes by what they are - structural, detail, clip,
+weapon clip, non-colliding, caulk ( all faces ), triggers, portals, hint / skip, sky -, curves, terrain, all of
+the world; entities by group - all, models, lights, path nodes, spawns, brush entities, script origins / structs,
+info, prefabs, other - and any classname ( `*` allowed ). Below them the "don't select" switches: curves /
+terrain, entities, sky, models, world brushes - shown, but a click, a drag rectangle and "select all" pass them
+by. The filter is part of the document's visibility ( `codol_edit` `view_filter`, `select_filter` ): what is
+filtered is drawn by no view and cannot be picked. `ed_filter` prints what is hidden, `ed_filter <group> [0|1]`,
+`ed_filter class <pattern> [0|1]`, `ed_filter none`.
+
+**Prefabs.** A `misc_prefab` entity names another map - `"model" "prefabs/crate.map"`, relative to `map_source` -
+and stands for its contents at its `origin` and `angles`. The files are plain `.map` files of this editor.
+
+* **In the views** the contents of every prefab are drawn where the entity stands: brushes and models solid in
+  the 3D view, everything as green lines in all views ( yellow while selected ). The box of the entity is the box
+  of its contents, so a click on it picks the prefab. Prefabs inside prefabs are drawn too. A prefab whose file
+  is missing is a red cross. A file that changes on disk is read again.
+* **Prefab Browser** ( View, `prefab_browser` ): the files of `map_source\prefabs\`, with their size and counts;
+  a double click places one where the camera looks ( `prefab_place <prefabs/x.map> [x y z] [yaw]` ). No
+  thumbnails.
+* **Enter Prefab** ( with a prefab selected ) saves the map and opens the prefab's file as the map; the menu bar
+  shows `prefab: <map> > prefabs/x.map` and a Leave button. **Leave Prefab** saves the prefab and opens the map
+  again where it was, with the prefab selected. Prefabs inside can be entered in turn.
+* **Stamp Prefab** ( `prefab_stamp` ) replaces the selected prefab by its brushes and entities ( one level: the
+  prefabs inside it stay prefabs ). **Convert Selection To Prefab ..** ( `prefab_convert <name> [overwrite]` )
+  writes the selection as `map_source\prefabs\<name>.map` around the middle of its floor and puts a
+  `misc_prefab` in its place.
+* **Compiling**: `codol_bsp` ( File > Build map ) and `codol_mapc` ( File > Compile map ) replace every prefab,
+  and the prefabs inside prefabs, by its contents right after they read the map
+  ( `codol_edit` `expand_prefabs_from_disk` ). The file is looked for in the folder of the `.map`, its parent
+  folders and a `map_source` folder next to them; `codol_bsp --prefabs <folder>` adds a place. The report says
+  `prefabs: N expanded into ..`; a prefab that is missing, or that contains itself, is a warning and compiles
+  to nothing. Tests: `codol_edit_select_tests` ( expansion, turned and nested prefabs, cycles, stamp, convert ),
+  `codol_bsp_prefab_tests` ( a compiled map with a turned and a nested prefab, traced ).
+* `prefab_info` lists the prefabs of the map with what each one holds, `prefab_list [text]` the files.
+
+Keys that differ from radiant, because the key is taken here: Hide Unselected is Ctrl+H ( Alt+H shows all ),
+Select Connected is Ctrl+Shift+C ( Ctrl+Alt+E selects whole entities ), next / previous leak spot are Ctrl+Alt+K /
+Ctrl+Alt+L, the floors are Ctrl+PageUp / Ctrl+PageDown ( PageUp / PageDown nudge the selection ), the clipper is C.
 
 ### Your own assets
 
@@ -540,6 +682,12 @@ Be aware of these before planning work around this branch:
   ( an edited shipped map ) leaves patches out.
 - **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
   the shipped animtrees are not extended ( the list under [In the built map](#in-the-built-map) ).
+- **Menus of CoD4 radiant that are not here** ( of File, Edit, View, Selection, Grid, Misc, Region ): the Script
+  Group, Vehicle Group and Dyn Entity dialogs and Delete Exportables have nothing to work on in this game's maps;
+  Createfx is not an export of its own ( the build writes the script ); `toolFlags splitGeo` is kept in the `.map`
+  but the compiler has no use for it; the Prefab Browser has no thumbnails; there is no Maya export. A click in
+  the 3D view on a model or brush that the "don't select" switches lock does nothing ( it does not pick what is
+  behind it ). The list with every entry: [Selecting, regions, filters, prefabs](#selecting-regions-filters-prefabs).
 - **Entity overrides are mp only.** The server applies `<map>.d3dbsp.ents` in mp matches; co-op and
   zombies compose their own entities.
 - The sections below this one describe the radiant plugin ( `iw3r.dll` in CoD4 radiant ), which the standalone

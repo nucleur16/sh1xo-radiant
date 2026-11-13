@@ -3,6 +3,7 @@
 #include "mapc_impl.hpp"
 
 #include "codol_mapc/server_check.hpp"
+#include "codol_edit/prefab.hpp"
 
 #include <cstdio>
 #include <set>
@@ -490,6 +491,10 @@ namespace codol::mapc
 			error = opts.map.string() + ": " + error;
 			return false;
 		}
+		// misc_prefab entities of the edited map: their contents in their place, so that the brushes and entities of
+		// a prefab are new brushes and entities like any other
+		edit::prefab_result prefabs;
+		edit::expand_prefabs_from_disk(edited, opts.map, prefabs);
 		std::filesystem::path baseline_file = opts.baseline;
 		if (baseline_file.empty())
 		{
@@ -535,6 +540,15 @@ namespace codol::mapc
 		if (!compile_zone(editor, baseline, edited, with_donors, key, zone_bytes, rep, error))
 		{
 			return false;
+		}
+		if (prefabs.expanded)
+		{
+			rep.notes.push_back("prefabs: " + std::to_string(prefabs.expanded) + " expanded into " + std::to_string(prefabs.brushes) + " brushes, "
+				+ std::to_string(prefabs.patches) + " patches, " + std::to_string(prefabs.entities) + " entities");
+		}
+		for (const std::string& warning : prefabs.warnings)
+		{
+			rep.warnings.push_back("prefab: " + warning);
 		}
 		if (!opts.zone_out.empty())
 		{

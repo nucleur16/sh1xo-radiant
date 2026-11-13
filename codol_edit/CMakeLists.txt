@@ -81,6 +81,11 @@ add_library(codol_edit STATIC
 	src/edit_ops.cpp
 	include/codol_edit/patch_ops.hpp
 	src/patch_ops.cpp
+	src/select_ops.cpp
+	src/prefab.cpp
+	include/codol_edit/select_types.hpp
+	include/codol_edit/prefab.hpp
+	include/codol_edit/document_select.inc
 	src/import.cpp
 	src/class_catalog.cpp
 	src/class_catalog_data.inc
@@ -122,4 +127,9 @@ if(CODOL_EDIT_BUILD_TESTS)
 	target_link_libraries(codol_patch_ops_tests PRIVATE codol_edit)
 	codol_edit_options(codol_patch_ops_tests)
 	add_test(NAME codol_patch_ops_tests COMMAND codol_patch_ops_tests)
+	# selection menu, clipboard, filters, regions, prefabs
+	add_executable(codol_edit_select_tests tests/codol_edit_select_tests.cpp)
+	target_link_libraries(codol_edit_select_tests PRIVATE codol_edit)
+	codol_edit_options(codol_edit_select_tests)
+	add_test(NAME codol_edit_select_tests COMMAND codol_edit_select_tests)
 endif()
