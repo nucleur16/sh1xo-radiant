@@ -234,18 +234,31 @@ namespace codol::edit
 
 		// ---- transforms -----------------------------------------------------------------------------
 
+		// the two layers of a face before it is transformed: the material with the lock of moves / rotations, the
+		// lightmap with Texture Lock > Lightmaps ( off: its projection stays in the world )
+		void lock_layers(const impl& d, face& f, const transform& t, const bool lock_material)
+		{
+			int w, h;
+			if (lock_material)
+			{
+				d.texture_dims(f.texture.material, w, h);
+				lock_texture(f.texture, f, t, w, h);
+			}
+
+			if (d.texture_lock_lightmap)
+			{
+				d.texture_dims(f.lightmap.material, w, h);
+				lock_texture(f.lightmap, f, t, w, h);
+			}
+		}
+
 		void transform_faces(const impl& d, std::vector<face>& faces, const transform& t, const bool lock)
 		{
 			const bool mirrored = t.determinant() < 0.0;
 
 			for (face& f : faces)
 			{
-				if (lock)
-				{
-					int w, h;
-					d.texture_dims(f.texture.material, w, h);
-					lock_texture(f.texture, f, t, w, h);
-				}
+				lock_layers(d, f, t, lock);
 
 				for (vec3& p : f.points)
 				{
@@ -259,7 +272,34 @@ namespace codol::edit
 			}
 		}
 
-		void transform_patch(patch& p, const transform& t)
+		// the lightmap coordinates of a patch from where its vertices are, as radiant makes them: along the axis the patch
+		// faces most, one luxel per lightmap sample size ( the third number of the size line; 16 units without one )
+		void world_lightmap(patch& p)
+		{
+			if (p.width < 2 || p.height < 2 || p.vertices.size() < static_cast<std::size_t>(p.width) * p.height)
+			{
+				return;
+			}
+
+			const vec3 a = p.at(p.width - 1, p.height - 1).xyz - p.at(0, 0).xyz;
+			const vec3 b = p.at(0, p.height - 1).xyz - p.at(p.width - 1, 0).xyz;
+			const vec3 n = cross(a, b);
+			vec3 u, v;
+			face_texture_axes(length(n) > 1e-9 ? normalize(n) : vec3{ 0, 0, 1 }, 0.0, u, v);
+			const double per_unit = 1.0 / (p.has_header_scale && p.header_scale > 0.0 ? p.header_scale : 16.0);
+
+			for (auto& vertex : p.vertices)
+			{
+				// only coordinates that are there: a patch without lightmap coordinates stays without
+				if (vertex.tex.size() >= 4)
+				{
+					vertex.tex[2] = tidy(dot(vertex.xyz, u) * per_unit);
+					vertex.tex[3] = tidy(dot(vertex.xyz, v) * per_unit);
+				}
+			}
+		}
+
+		void transform_patch(const impl& d, patch& p, const transform& t)
 		{
 			for (auto& v : p.vertices)
 			{
@@ -276,6 +316,13 @@ namespace codol::edit
 						std::swap(p.at(c, r), p.at(p.width - 1 - c, r));
 					}
 				}
+			}
+
+			// the lightmap coordinates of the vertices went with them ( the lock ); without it they are made again
+			// from the world
+			if (!d.texture_lock_lightmap && !(t.is_translation() && length(t.t) == 0.0))
+			{
+				world_lightmap(p);
 			}
 		}
 
@@ -334,7 +381,7 @@ namespace codol::edit
 				break;
 
 			case object_kind::patch:
-				transform_patch(d.edit_patch(id), t);
+				transform_patch(d, d.edit_patch(id), t);
 				break;
 
 			case object_kind::entity:
@@ -1544,12 +1591,7 @@ namespace codol::edit
 		face& target = faces[f.face];
 		const transform move = transform::translation(normal * distance);
 
-		if (d->texture_lock)
-		{
-			int w, h;
-			d->texture_dims(target.texture.material, w, h);
-			lock_texture(target.texture, target, move, w, h);
-		}
+		lock_layers(*d, target, move, d->texture_lock);
 
 		for (vec3& p : target.points)
 		{
@@ -1602,12 +1644,7 @@ namespace codol::edit
 					continue;
 				}
 
-				if (d->texture_lock)
-				{
-					int w, h;
-					d->texture_dims(faces[f].texture.material, w, h);
-					lock_texture(faces[f].texture, faces[f], move, w, h);
-				}
+				lock_layers(*d, faces[f], move, d->texture_lock);
 
 				for (vec3& p : faces[f].points)
 				{

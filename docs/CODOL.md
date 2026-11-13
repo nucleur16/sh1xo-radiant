@@ -534,14 +534,29 @@ action does not exist keeps its place and shows up when it does.
   flip and natural change the layer that is picked ( `tex_layer material|lightmap|smoothing|cycle`, `Shift+L` );
   in the lightmap layer the material and the size of the layer can be typed ( `tex_lightmap <material> [size]` ),
   in the smoothing layer the word of the selected patches ( `tex_smoothing <word>` ). The map compiler bakes
-  lightmaps from the geometry and does not read the lightmap layer: it is kept for the file. **Patches** are
+  lightmaps from the geometry, at the density the lightmap layer asks for: `codol_bsp` makes the luxels of a face
+  as much larger as the size of its lightmap layer is over radiant's 16384, per axis ( 8192: twice as many luxels
+  each way; clamped to 1/16 .. 16 ), and the luxels of a patch as much larger as its lightmap sample size ( the
+  third number of its size line ) is over 16 - `codol_bsp_patch_tests` compiles a room with every face at 4096 and
+  finds more than four times the luxels. The projection itself ( shift, rotation ) of the layer is not used: the
+  compiler lays its own luxel grid on each face. **Patches** are
   targets of all of these: their texture coordinates move ( scale and rotate about the middle, fit over the whole
   patch, natural from the vertex positions ). Natural is the alignment of a new face - the format has one
   projection, along the world axis closest to the face; there is no separate "face" projection to reset to.
 * **Find / Replace**: material A becomes B in the whole map, the selection, or the selected faces only
   ( `tex_replace <a> <b> [map|selection|faces]` ); "Select the faces using Find" ( `tex_select <material>` ). One
   undo step; a name with `wc/` in front and one without are the same material.
-* **Texture Lock > Moves / Rotations** ( `tex_lock moves|rotations [0|1]` ): apart. Lightmaps: nothing to lock.
+* **Texture Lock > Moves / Rotations** ( `tex_lock moves|rotations [0|1]` ): apart. **Texture Lock > Lightmaps**
+  ( `tex_lock lightmaps [0|1]`, action `texture.lock_lightmaps`, setting `ed_texlock_lightmaps`, a box in the
+  Surface inspector; off by default ): on, the lightmap layer goes with the geometry in every transform - moves,
+  rotations, scales, flips ( the gizmo, 2D drags, nudges, the numeric fields, the Selection menu ), clones with an
+  offset, a face dragged along its normal in the 3D view or resized - with the same maths as the material's lock
+  ( `codol_edit` `lock_layers` ); patches keep the lightmap coordinates of their vertices. Off, as radiant: faces keep
+  their lightmap projection in the world, patches get their lightmap coordinates again from where their vertices
+  are ( along the axis the patch faces most, a luxel per lightmap sample size ). Paste puts objects where they were,
+  so nothing changes there; stamping and making prefabs always keep both layers. A scale that is not the same
+  along the axes of a turned projection shears it, which the format cannot hold ( as for the material ). Tests:
+  `codol_edit_tests` ( `test_lightmap_lock` ).
 * Flip X / Y, rotate 90, fit, natural, "select all faces with the material of the selection" as actions
   ( `tex_flip x|y`, `tex_natural` ).
 * **Materials** window: filters for usage, locale and surface type ( also in the menu ), the lists *in use*
@@ -841,7 +856,7 @@ form of this work; what the standalone editor does is above.
 
 Be aware of these before planning work around this branch:
 
-- **Top bar of CoD4 Radiant: what is not there.** Separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), a lock for lightmaps ( they are baked from the geometry ), a "face"
+- **Top bar of CoD4 Radiant: what is not there.** Separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), a "face"
   texture projection ( the format has the axial one ), PhysX movement. The light preview and the fake lights are a
   post process from the depth pre-pass, not the game's light techniques; effects in the map view are the editor's
   particle simulation without depth.

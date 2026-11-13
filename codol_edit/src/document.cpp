@@ -681,6 +681,7 @@ namespace codol::edit
 	{
 		fresh.texture_lock = old.texture_lock;
 		fresh.texture_lock_rotations = old.texture_lock_rotations;
+		fresh.texture_lock_lightmap = old.texture_lock_lightmap;
 		fresh.edit_layer = old.edit_layer;
 		fresh.default_material = old.default_material;
 		fresh.texture_size = old.texture_size;

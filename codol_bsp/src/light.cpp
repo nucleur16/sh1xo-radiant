@@ -692,6 +692,8 @@ namespace codol::bsp
 			int page = 0;
 			std::size_t first = 0;				// its first luxel in the arrays of the bake
 			std::uint32_t first_vertex = 0;		// of its face, in the surface
+			// the luxel size of the face over the map's ( the lightmap layer of the .map: map_face / map_patch::lightmap_scale )
+			double scale_u = 1.0, scale_v = 1.0;
 		};
 
 		// Row 0 of every page belongs to the falloff curves of the light definitions ( see the head of this file ).
@@ -1356,8 +1358,8 @@ namespace codol::bsp
 				}
 			}
 			const chart& c = charts[pick];
-			const int lx = std::clamp(static_cast<int>(std::floor(1.0 + (dot(p - c.origin, c.u_axis) - c.u_min) / luxel)), 0, c.w - 1);
-			const int ly = std::clamp(static_cast<int>(std::floor(1.0 + (dot(p - c.origin, c.v_axis) - c.v_min) / luxel)), 0, c.h - 1);
+			const int lx = std::clamp(static_cast<int>(std::floor(1.0 + (dot(p - c.origin, c.u_axis) - c.u_min) / (luxel * c.scale_u))), 0, c.w - 1);
+			const int ly = std::clamp(static_cast<int>(std::floor(1.0 + (dot(p - c.origin, c.v_axis) - c.v_min) / (luxel * c.scale_v))), 0, c.h - 1);
 			return c.first + static_cast<std::size_t>(ly) * static_cast<std::size_t>(c.w) + static_cast<std::size_t>(lx);
 		};
 
@@ -1933,6 +1935,16 @@ namespace codol::bsp
 					c.brush = rf.brush;
 					c.face = rf.face;
 					c.first_vertex = rf.first_vertex;
+					if (rf.brush >= 0)
+					{
+						const map_face& source = w.brushes[static_cast<std::size_t>(rf.brush)].faces[static_cast<std::size_t>(rf.face)];
+						c.scale_u = source.lightmap_scale[0];
+						c.scale_v = source.lightmap_scale[1];
+					}
+					else if (-1 - rf.brush < static_cast<int>(w.patches.size()))
+					{
+						c.scale_u = c.scale_v = w.patches[static_cast<std::size_t>(-1 - rf.brush)].lightmap_scale;
+					}
 					c.normal = cross(polygon[1] - polygon[0], polygon[2] - polygon[0]);
 					if (length(c.normal) < 1e-6)
 					{
@@ -1970,8 +1982,8 @@ namespace codol::bsp
 			{
 				for (chart& c : charts)
 				{
-					c.w = static_cast<int>(std::ceil((c.u_max - c.u_min) / luxel)) + 2;
-					c.h = static_cast<int>(std::ceil((c.v_max - c.v_min) / luxel)) + 2;
+					c.w = static_cast<int>(std::ceil((c.u_max - c.u_min) / (luxel * c.scale_u))) + 2;
+					c.h = static_cast<int>(std::ceil((c.v_max - c.v_min) / (luxel * c.scale_v))) + 2;
 				}
 				if (pack(charts, of_surface, 30, page_count) || luxel > 4096)
 				{
@@ -2027,7 +2039,7 @@ namespace codol::bsp
 			const auto position = [&](const chart& c, const double lx, const double ly)
 			{
 				// lx, ly: luxels from the chart's corner; the padding repeats the edge of the face
-				const double u = std::clamp(c.u_min + (lx - 1.0) * luxel, c.u_min, c.u_max), v = std::clamp(c.v_min + (ly - 1.0) * luxel, c.v_min, c.v_max);
+				const double u = std::clamp(c.u_min + (lx - 1.0) * luxel * c.scale_u, c.u_min, c.u_max), v = std::clamp(c.v_min + (ly - 1.0) * luxel * c.scale_v, c.v_min, c.v_max);
 				return c.origin + c.u_axis * u + c.v_axis * v + c.normal * 1.0;
 			};
 
@@ -2392,7 +2404,7 @@ namespace codol::bsp
 					{
 						c1::GfxWorldVertex& v = surface.vertices[rf.first_vertex + k];
 						const vec3 p{ v.xyz[0], v.xyz[1], v.xyz[2] };
-						const double lx = 1.0 + (dot(p - c.origin, c.u_axis) - c.u_min) / luxel, ly = 1.0 + (dot(p - c.origin, c.v_axis) - c.v_min) / luxel;
+						const double lx = 1.0 + (dot(p - c.origin, c.u_axis) - c.u_min) / (luxel * c.scale_u), ly = 1.0 + (dot(p - c.origin, c.v_axis) - c.v_min) / (luxel * c.scale_v);
 						v.lmapCoord[0] = static_cast<float>((c.x + lx) / LM_W);
 						v.lmapCoord[1] = static_cast<float>((c.y + ly) / LM_H);
 					}
