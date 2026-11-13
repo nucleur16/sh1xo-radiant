@@ -745,13 +745,13 @@ namespace codol::edit
 
 					p.width = static_cast<int>(numbers[0]);
 					p.height = static_cast<int>(numbers[1]);
-					p.has_header_scale = numbers.size() > 2;
-					p.has_header_int = numbers.size() > 3;
-					p.header_scale = numbers.size() > 2 ? numbers[2] : 16.0;
-					p.header_int = numbers.size() > 3 ? static_cast<int>(numbers[3]) : 8;
+					p.has_lightmap_sample_size = numbers.size() > 2;
+					p.has_subdivision = numbers.size() > 3;
+					p.lightmap_sample_size = numbers.size() > 2 ? numbers[2] : 16.0;
+					p.subdivision = numbers.size() > 3 ? static_cast<int>(numbers[3]) : 8;
 
 					if (numbers[0] != p.width || numbers[1] != p.height || p.width < 1 || p.height < 1 || p.width > 4096 || p.height > 4096
-						|| (numbers.size() > 3 && numbers[3] != p.header_int))
+						|| (numbers.size() > 3 && numbers[3] != p.subdivision))
 					{
 						fail("patch: bad size line", pos);
 					}
@@ -1266,17 +1266,17 @@ namespace codol::edit
 			}
 
 			out += "   " + std::to_string(p.width) + " " + std::to_string(p.height);
-			if (p.has_header_scale)
+			if (p.has_lightmap_sample_size)
 			{
 				out += ' ';
 				char buf[48];
-				std::snprintf(buf, sizeof(buf), "%g", p.header_scale);
+				std::snprintf(buf, sizeof(buf), "%g", p.lightmap_sample_size);
 				out += buf;
 
-				if (p.has_header_int)
+				if (p.has_subdivision)
 				{
 					out += ' ';
-					out += std::to_string(p.header_int);
+					out += std::to_string(p.subdivision);
 				}
 			}
 

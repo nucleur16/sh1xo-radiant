@@ -1259,7 +1259,7 @@ namespace editor::ui
 
 			if (curve)
 			{
-				ImGui::Text("Subdivision: %d quads per segment", edit::patch_subdivisions(*p));
+				ImGui::Text("Subdivision %d ( %s ): %d quads per segment", p->has_subdivision ? p->subdivision : 8, p->has_subdivision ? "the error bound in units; smaller is finer" : "none in the file", edit::patch_subdivisions(*p));
 				ImGui::SameLine();
 				if (ImGui::SmallButton("-##subdiv")) { done(edit::patch_change_subdivision(doc, -1), "Decrease subdivision"); }
 				ImGui::SameLine();
@@ -1737,7 +1737,7 @@ namespace editor::ui
 				int flags = 0;
 				for (const auto& v : p->vertices) { flags += v.has_flag && v.flag != 0; }
 
-				game::printf_to_console("#%u %s %d x %d  %s  subdivision %d  mins %.6g %.6g %.6g  maxs %.6g %.6g %.6g  %d turned edges  %d locked\n", id,
+				game::printf_to_console("#%u %s %d x %d  %s  subdivision %d quads per segment  mins %.6g %.6g %.6g  maxs %.6g %.6g %.6g  %d turned edges  %d locked\n", id,
 					p->type == edit::patch_type::curve ? "curve" : "terrain", p->width, p->height, p->material.c_str(), edit::patch_subdivisions(*p),
 					box.mins.x, box.mins.y, box.mins.z, box.maxs.x, box.maxs.y, box.maxs.z, flags, static_cast<int>(locked_of(id).size()));
 			}

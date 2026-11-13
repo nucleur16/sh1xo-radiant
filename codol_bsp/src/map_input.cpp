@@ -387,9 +387,9 @@ namespace codol::bsp
 					}
 					patch.vertices = mesh.vertices;
 					patch.indices = mesh.indices;
-					if (source_patch->has_header_scale && source_patch->header_scale > 0.0)
+					if (source_patch->has_lightmap_sample_size && source_patch->lightmap_sample_size > 0.0)
 					{
-						patch.lightmap_scale = std::clamp(source_patch->header_scale / 16.0, 1.0 / 16.0, 16.0);
+						patch.lightmap_scale = std::clamp(source_patch->lightmap_sample_size / 16.0, 1.0 / 16.0, 16.0);
 					}
 					for (const edit::mesh_vertex& v : mesh.vertices)
 					{

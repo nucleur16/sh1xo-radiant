@@ -72,7 +72,7 @@ namespace
 			const edit::object_id arch = edit::create_curve_patch(doc, { -180, -40, 1 }, { -100, 40, 1 }, 5, 3, 2, m.crate);
 			const int middle[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11 };
 			doc.move_patch_vertices(arch, middle, { 0, 0, 48 });
-			edit::patch_change_subdivision(doc, 2);		// 6 quads per segment
+			edit::patch_change_subdivision(doc, 2);		// two steps finer: the subdivision number goes down until the tessellation changed twice
 			keep(out.patches);
 
 			// terrain with noise and a turned edge

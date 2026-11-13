@@ -818,7 +818,30 @@ namespace codol::edit
 			return 1;
 		}
 
-		return p.has_header_scale && p.has_header_int ? std::clamp(p.header_int / 2, 1, 16) : 4;
+		// the subdivision is the largest distance a quad may keep from the curve ( world units, as the error bound of
+		// the quake family's patches; at least 1, 8 when the line has none ): every segment of three control points is
+		// cut into n parts with | P0 - 2 P1 + P2 | / ( 4 n^2 ) <= the bound ( the most a quadratic bezier leaves its
+		// chord over 1 / n of its parameter ), the same n for the whole patch, 1 .. 16
+		const double bound = std::max(1, p.has_subdivision ? p.subdivision : 8);
+		double most = 0.0;
+
+		for (int c = 0; c + 2 < p.width; c += 2)
+		{
+			for (int r = 0; r < p.height; r++)
+			{
+				most = std::max(most, length(p.at(c, r).xyz - p.at(c + 1, r).xyz * 2.0 + p.at(c + 2, r).xyz));
+			}
+		}
+
+		for (int r = 0; r + 2 < p.height; r += 2)
+		{
+			for (int c = 0; c < p.width; c++)
+			{
+				most = std::max(most, length(p.at(c, r).xyz - p.at(c, r + 1).xyz * 2.0 + p.at(c, r + 2).xyz));
+			}
+		}
+
+		return std::clamp(static_cast<int>(std::ceil(std::sqrt(most / (4.0 * bound)) - 1e-9)), 1, 16);
 	}
 
 	// ---- brush primitives ---------------------------------------------------------------------------
@@ -1445,16 +1468,53 @@ namespace codol::edit
 				return false;
 			}
 
-			const int now = p.has_header_scale && p.has_header_int ? p.header_int : 8;
-			const int next = std::clamp(now + steps * 2, 2, 32);
-			if (next == now && p.has_header_int)
+			// as CoD4 radiant ( 0x44CDE0 ): the number goes down ( finer ) or up ( coarser ) one at a time until the
+			// tessellation changes, never below 1; each step of steps is one such change
+			patch next = p;
+			if (!next.has_subdivision)
+			{
+				next.subdivision = 8;
+			}
+
+			bool changed = false;
+			for (int step = 0; step < std::abs(steps); step++)
+			{
+				const int before = patch_subdivisions(next);
+				const int start = next.subdivision;
+				next.has_subdivision = true;
+				bool moved = false;
+
+				while (steps > 0 ? next.subdivision > 1 : next.subdivision < 4096)
+				{
+					next.subdivision += steps > 0 ? -1 : 1;
+					if (patch_subdivisions(next) != before)
+					{
+						moved = true;
+						break;
+					}
+				}
+
+				if (!moved)
+				{
+					next.subdivision = start;		// at the limit: the number stays
+					break;
+				}
+
+				changed = true;
+			}
+
+			if (!changed)
 			{
 				return false;
 			}
 
-			p.has_header_scale = true;
-			p.has_header_int = true;
-			p.header_int = next;
+			if (!p.has_lightmap_sample_size)
+			{
+				next.has_lightmap_sample_size = true;
+				next.lightmap_sample_size = 16.0;
+			}
+
+			p = std::move(next);
 			return true;
 		});
 	}

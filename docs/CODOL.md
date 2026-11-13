@@ -286,7 +286,7 @@ the grid itself, two triangles per cell.
 | Weld > Connect Selection / Weld | `patch_weld [tolerance]` | vertices of the selected patches closer than 0.1 units ( Tolerant Weld: one grid step ) become one place |
 | Weld > Weld to Brush Vertices | `patch_weld_brushes [tolerance]` | onto brush corners |
 | Weld > Tolerant Weld, Weld Equal Patch Points During Moves | `patch_tolerant [0\|1]`, `patch_weld_moves [0\|1]` | the second: a vertex dragged in a 2D view takes along every vertex of the selected patches in the same place ( the seam of a cylinder ) |
-| Inc / Dec Subdivision | `patch_subdiv <+n\|-n>` | curves: 1 - 16 quads per segment, in the views and in the compiled map |
+| Inc / Dec Subdivision | `patch_subdiv <+n\|-n>` | curves: the subdivision number goes down ( finer ) / up until the tessellation changes, as in radiant; 1 - 16 quads per segment, in the views and in the compiled map ( below: the size line ) |
 | Split | `patch_split [column\|row] [index]` | two patches, at the line of the selected vertices or in the middle |
 | Invert ( Ctrl+I ) | `patch_invert` | faces the other way; a terrain keeps its triangles |
 | Thicken .. ( Ctrl+T ) | `patch_thicken <units> [seams 0\|1]` | a second surface behind the patch, facing away, and strips that close the edges |
@@ -307,9 +307,34 @@ by row and column. The vertex selection is what "the selected vertices" above me
 **In the file** a curve is a `curve` block and a terrain a `mesh` block, as CoD4 radiant writes them: material,
 `lightmap_gray`, an optional `smoothing` line, `columns rows 16 8` and per vertex `v x y z [c r g b a] t s t ls lt
 [f 1]` ( texture coordinates in texels, lightmap coordinates, `f 1` = turned edge of the quad the vertex starts ).
-Unedited patches are written back byte for byte. **The fourth number of the size line is read as the subdivision
-of a curve** ( 8 = 4 quads per segment ) - an assumption of this editor: CoD4 radiant always writes 8 and its own
-meaning of the number was not verified.
+Unedited patches are written back byte for byte.
+
+**The size line is `columns rows <lightmap sample size> <subdivision>`.** Established from the CoD4 mod tools'
+binaries and maps ( read only, 2026-11-12 ):
+
+* `CoD4Radiant.exe` writes it with `"%i %i %g %i"` ( 0x445AEB ): the third number is a float of the patch
+  ( `patchMesh_t` + 0x5048, written as 0 unless the flag at + 0x5043 is set ), the fourth an int ( + 0x14 ). Its
+  reader ( 0x444CC0 ) takes the third with `atof` and sets the flag when it is not 0, the fourth with `atoi`,
+  clamped to at least 1. A new patch has 0 and 8. The function that makes a patch's lightmap coordinates
+  ( 0x4397B0 ) computes them from a sample size and stores it in + 0x5048: **the third number is the lightmap
+  sample size** ( units per luxel; 16 as radiant's default ).
+* Inc Subdivision ( 0x44CDE0 ) passes -1 to the fourth number, Dec +1, and repeats until the patch's vertex count
+  changes, never going below 1; terrain is excluded. So **the fourth number is the subdivision of a curve, and
+  smaller is finer**; that it is an error bound in world units ( the largest distance a quad may keep from the
+  curve, as the quake family's patches have it ) is this editor's reading - the tessellation code of radiant and
+  of `cod4map.exe` was not traced. `cod4map.exe` ( ParsePatch 0x428914 ) reads four ints, drops the third and
+  keeps the fourth.
+* 406 `.map` prefabs of the stock CoD4 mod tools ( 481,000 patch blocks ): curves have sample size 16 ( 2,859 ),
+  0, 4, 512, 8, 32, 1024 and subdivisions 8 ( 2,306 ), 1, 3, 2, 5, 4, 12, 7, 34, 23 .. 209; terrain meshes always
+  8 ( 20 blocks: 1 ). Neither number follows the smoothing, contents or tool flags lines. Two open-source
+  OBJ-to-CoD-map converters write `2 2 16 8` without naming the numbers; no documentation names them.
+
+So here: `patch::lightmap_sample_size` and `patch::subdivision` ( `codol_edit` `model.hpp` ), both kept exactly as
+read. A curve is drawn and compiled with n quads per segment, the smallest n with | P0 - 2 P1 + P2 | / ( 4 n² ) <=
+the subdivision for every segment of three control points ( the most a quadratic bezier leaves its chord ), 1 - 16,
+one n for the whole patch. Inc / Dec Subdivision step the number as radiant does: down ( up ) until n changes. The
+lightmap sample size sets the luxel size of the patch in `codol_bsp` ( [Textures](#keys-preferences-toolbar-the-textures-renderer-effects-and-tools-menus) ) and the world
+lightmap coordinates of an unlocked patch.
 
 **In the built map** ( File > Build map ) every patch - curves at their subdivision, terrain as it is - becomes
 drawn triangles with a lightmap and collision triangles of the clip map's terrain. Triangles without area ( the
@@ -900,8 +925,10 @@ Be aware of these before planning work around this branch:
 - **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
   worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
 - **Patches**: no welding to model or prefab vertices, no `physics_box` / `physics_cylinder` blocks, patch vertices
-  are selected in the 2D views and the Advanced Edit dialog only, the subdivision number of a curve is this editor's
-  reading of the file ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map
+  are selected in the 2D views and the Advanced Edit dialog only. The subdivision number of a curve is radiant's
+  ( smaller is finer, verified in its binary ), but how many triangles a number gives is this editor's reading ( an
+  error bound in units ) - radiant's and cod4map's tessellation were not traced
+  ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map
   ( an edited shipped map ) leaves patches out.
 - **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
   the shipped animtrees are not extended ( the list under [In the built map](#in-the-built-map) ).

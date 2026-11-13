@@ -286,7 +286,7 @@ namespace codol::edit
 			const vec3 n = cross(a, b);
 			vec3 u, v;
 			face_texture_axes(length(n) > 1e-9 ? normalize(n) : vec3{ 0, 0, 1 }, 0.0, u, v);
-			const double per_unit = 1.0 / (p.has_header_scale && p.header_scale > 0.0 ? p.header_scale : 16.0);
+			const double per_unit = 1.0 / (p.has_lightmap_sample_size && p.lightmap_sample_size > 0.0 ? p.lightmap_sample_size : 16.0);
 
 			for (auto& vertex : p.vertices)
 			{

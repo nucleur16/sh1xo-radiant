@@ -130,10 +130,16 @@ namespace codol::edit
 		std::string smoothing;				// "smoothing <word>" line, "" when absent
 		int width = 0;						// number of "( .. )" groups
 		int height = 0;						// vertices per group
-		double header_scale = 16.0;			// third number of the "W H 16 8" line ( meaning not verified )
-		int header_int = 8;					// fourth number
-		bool has_header_scale = true;
-		bool has_header_int = true;
+		// The size line is "<columns> <rows> <lightmap sample size> <subdivision>" ( "3 3 16 8" ), what CoD4Radiant.exe
+		// writes with "%i %i %g %i": its reader ( 0x444CC0 ) takes the third number with atof as the patch's lightmap
+		// sample size ( 0: none stored; its lightmap texturing at 0x4397B0 sets it ) and the fourth with atoi as the
+		// subdivision of a curve, at least 1; a new patch has 0 / 8 ( written "16 8" once its lightmap is made ). The
+		// subdivision is an error bound: smaller is finer ( Inc Subdivision lowers it until the tessellation changes ),
+		// cod4map.exe ( ParsePatch 0x428914 ) keeps it and drops the sample size. Both are kept exactly as read.
+		double lightmap_sample_size = 16.0;
+		int subdivision = 8;
+		bool has_lightmap_sample_size = true;		// the line has a third number
+		bool has_subdivision = true;				// .. and a fourth
 		std::vector<patch_vertex> vertices;	// width * height, vertices[ column * height + row ]
 
 		[[nodiscard]] const patch_vertex& at(const int column, const int row) const { return vertices[static_cast<std::size_t>(column) * height + row]; }
