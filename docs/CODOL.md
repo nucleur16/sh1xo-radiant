@@ -457,9 +457,150 @@ and stands for its contents at its `origin` and `angles`. The files are plain `.
   `codol_bsp_prefab_tests` ( a compiled map with a turned and a nested prefab, traced ).
 * `prefab_info` lists the prefabs of the map with what each one holds, `prefab_list [text]` the files.
 
-Keys that differ from radiant, because the key is taken here: Hide Unselected is Ctrl+H ( Alt+H shows all ),
-Select Connected is Ctrl+Shift+C ( Ctrl+Alt+E selects whole entities ), next / previous leak spot are Ctrl+Alt+K /
-Ctrl+Alt+L, the floors are Ctrl+PageUp / Ctrl+PageDown ( PageUp / PageDown nudge the selection ), the clipper is C.
+Default keys that differ from radiant, because the key is taken here: Hide Unselected is Ctrl+H ( Alt+H, radiant's,
+is its second key ), Select Connected is Ctrl+Shift+C ( Ctrl+Alt+E selects whole entities ), next / previous leak
+spot are Ctrl+Alt+K / Ctrl+Alt+L ( second keys: radiant's Ctrl+Shift+K / L ), the floors are Ctrl+PageUp /
+Ctrl+PageDown ( PageUp / PageDown nudge the selection ), the clipper is C. Every key can be changed: Edit > Edit
+Hotkeys.
+
+### Keys, preferences, toolbar; the Textures, Renderer, Effects and Tools menus
+
+What the top bar of CoD4 Radiant has beyond the menus above, natively ( `editor/src/hotkeys.cpp`,
+`action_table.cpp`, `preferences.cpp`, `toolbar.cpp`, `menu_textures.cpp`, `menu_renderer.cpp`, `effects.cpp`,
+`tools.cpp`; shared declarations in `ext.hpp` ).
+
+**Actions and keys.** Everything the editor can be told to do is an *action*: an id ( `edit.clone` ), a label, a
+default key, a function. Menu entries, toolbar buttons, keys and the console all run the same action:
+`act <id>` runs one, `actions [text]` lists them with their keys. A new shortcut is one line -
+`actions::add( "edit.clone", "Clone", "Space", [] { clone_selection(); }, actions::views );` in the file that owns
+the function, or `command_action( "patch.invert", "Invert patch", "Ctrl+I", "patch_invert" );` in
+`action_table.cpp` for something that has a console command. The last argument says where the mouse has to be for
+the key to count: `anywhere`, `views` ( a 3D or 2D view: plain keys must not act while a list has the mouse ),
+`view_3d`, `view_2d`. When two actions have the same key, the one that looks at the smaller place runs ( V is the
+vertex mode in any view and "back to vertices" in the 3D view's edge mode ).
+
+* **Edit > Edit Hotkeys** ( `ed_hotkeys [text]` ): search, click a key and press the new one ( Esc cancels ), a
+  second key per action, `x` for none, `default` per row, "Reset all to defaults". A key that two actions share
+  where both can hear it is shown in red with the other action's name. Console: `bind <id> <key> [2]`,
+  `unbind <id>`, `bind_reset`. Saved to `codol_editor_hotkeys.cfg` next to the settings, one line per action
+  ( `edit.clone "Space" ""` ); a line for an action that does not exist ( yet ) is kept.
+* Defaults are Radiant's where the key is free: the grid sizes on `~` and the digits, `T` materials, `U` materials
+  in use, `L` layers, `P` preferences, `J` / `Shift+J` outline / tint selected, `Shift+L` cycle the edit layer,
+  `Shift+T` / `Shift+R` texture lock of moves / rotations, `Shift+X` crosshair of the 2D views, `Shift+W` patches
+  as wireframes, `Ctrl+F` fit texture, `Ctrl+[` / `Ctrl+]` cubic clipping nearer / farther, `F1` help. The texture
+  keys are one set for the 3D view and the 2D views: **Shift + arrows** shift by the grid size, **Ctrl + arrows**
+  scale by 5 %, **Shift + PageUp / PageDown** rotate by the angle snap; a key that is held is one undo step. Hide Unselected has Alt+H as its second key, the leak spots Ctrl+Shift+K / L.
+* **Help** ( `F1`, `ed_help` ): the mouse in the 3D view and the 2D views, and the list of keys made from the
+  registry. The shortcut texts of the File, Edit, Brush, Patch, Selection .. menus are still written out by hand:
+  they show the default key, not a changed one ( the Textures, Renderer, Effects and Tools menus, the toolbar and
+  Help show the key as it is ).
+
+**Preferences** ( Edit > Preferences, File > Settings, `P`, `ed_prefs [group]` ) replace the raw list of settings:
+General ( text size `ed_ui_scale`, toolbar, undo levels `ed_undo_levels` ), Paths, Camera ( `ed_cam_fov`,
+`ed_cam_speed`, `ed_cam_invert_y`, `ed_wire_distance`, cubic clipping ), Grid and snapping ( `ed_grid`,
+`ed_snap`, `ed_snap_angle`, what the 2D views show ), Autosave, Selection, Textures ( `ed_texlock_moves`,
+`ed_texlock_rotations` ), Game and scripts ( the remaining settings ). Each is a line of `codol_editor.cfg` and
+can be set on the console by its name. The camera popup of the 3D view and the grid of the views change the same
+values.
+
+* **Autosave**: every `ed_autosave_minutes` ( 5 ) a changed map is written to
+  `map_source\autosave\<map>.autosave.1.map`; the older copies move to `.2`, `.3` .. up to `ed_autosave_keep`
+  ( 5 ), the oldest goes. The map itself and its "modified" mark are not touched. `autosave_now` does it at once.
+* **File > Open Recent**: the last ten maps, whether opened as a `.map` or as a zone of the game
+  ( `ed_recent`, `ed_recent <n>`, `ed_recent clear` ).
+* **Edit > Edit Colors** ( `ed_colors [preset]` ): background, grid lines, axes, coordinates and blocks of the 2D
+  views, the selection, brushes ( new, of the zone, detail, tool ), patches, entities without a class colour,
+  target lines, the camera, the background of the 3D view. Presets: CoDOL dark, Radiant classic, Night blue,
+  High contrast. Settings `ed_color_<name>` ( `#RRGGBBAA` ).
+
+**Toolbar.** Under the menu bar, wrapping to as many rows as the window needs. A button is an action; its picture
+is drawn by the editor from lines ( no image files; an action without a picture shows its letters ). **Edit >
+Edit Toolbar** ( right click on the bar, `ed_toolbar` ): the bar on the left ( drag a row to move it, Up / Down /
+Remove / Add a gap ), every action on the right ( double click adds ), Reset. `toolbar_add <id> [position]`,
+`toolbar_remove <id>`, `toolbar_reset`, `toolbar_list`. Saved to `codol_editor_toolbar.cfg` as ids; an id whose
+action does not exist keeps its place and shows up when it does.
+
+**Textures menu.**
+
+* **Surface inspector** ( `S` ): below the fields it had - the **edit layer**, steps for shift and scale per axis,
+  rotate, flip X / Y, rotate 90, **Natural**, the two texture locks. A face line of a `.map` has two layers: the
+  material with its alignment and the lightmap with its own ( `lightmap_gray 16384 16384 0 0 0 0` ); a patch has a
+  material, a lightmap material, two sets of texture coordinates and a smoothing word. Shift, scale, rotate, fit,
+  flip and natural change the layer that is picked ( `tex_layer material|lightmap|smoothing|cycle`, `Shift+L` );
+  in the lightmap layer the material and the size of the layer can be typed ( `tex_lightmap <material> [size]` ),
+  in the smoothing layer the word of the selected patches ( `tex_smoothing <word>` ). The map compiler bakes
+  lightmaps from the geometry and does not read the lightmap layer: it is kept for the file. **Patches** are
+  targets of all of these: their texture coordinates move ( scale and rotate about the middle, fit over the whole
+  patch, natural from the vertex positions ). Natural is the alignment of a new face - the format has one
+  projection, along the world axis closest to the face; there is no separate "face" projection to reset to.
+* **Find / Replace**: material A becomes B in the whole map, the selection, or the selected faces only
+  ( `tex_replace <a> <b> [map|selection|faces]` ); "Select the faces using Find" ( `tex_select <material>` ). One
+  undo step; a name with `wc/` in front and one without are the same material.
+* **Texture Lock > Moves / Rotations** ( `tex_lock moves|rotations [0|1]` ): apart. Lightmaps: nothing to lock.
+* Flip X / Y, rotate 90, fit, natural, "select all faces with the material of the selection" as actions
+  ( `tex_flip x|y`, `tex_natural` ).
+* **Materials** window: filters for usage, locale and surface type ( also in the menu ), the lists *in use*
+  ( `U` ), *favourites* and *recently used*, the size of the pictures; right click on a material: apply, select
+  all faces using it, favourite, find / replace with it, preview. Usage and locale are properties of a material's
+  GDT entry, which a zone does not have: here the **usage** is read off words of the name ( wall, floor, roof,
+  metal .. ), the **locale** is the prefix of the name when at least a dozen materials share it ( `me_`, `ch_` .. ),
+  the **surface type** is the material's surface type bits ( read while the filter is on ). Favourites and the
+  recent list: `codol_editor_materials.cfg`. `ed_material_browser all|inuse|favourites|recent | usage <n> |
+  locale <prefix> | surface <name> | thumb <px> | favourite <material>`.
+* **Reload the project's images and materials**: `asset_rescan` + `asset_build`.
+
+**Renderer menu.** Settings `ed_r_*`; `r_status` says what the 3D view does.
+
+| | |
+|---|---|
+| General | Outline Selected ( `J` ), Tint Selected ( `Shift+J` ), Show Connections, Show Angles ( an arrow where an entity looks ), Draw Model Origins |
+| Grid Window | names of entities, grid blocks ( the flag of the Grid menu ), coordinates at the edges and of the blocks, a cross under the mouse with its position |
+| Render Method | `r_mode game|fullbright|fake_normal|fake_view|depth`, Wireframe. **Fullbright** is the game's own `unlit` technique of each technique set: the colour maps without lightmap, sun or specular. The **fake lights** shade the fullbright picture by the way a surface faces / by its angle to the camera. Case Textures: not there ( a technique of Radiant's own technique sets ). |
+| Draw Water | off: nothing whose technique set is one of water |
+| Texture Filter | as the materials say, point, bilinear, trilinear, anisotropic ( material textures; lightmaps keep theirs ) |
+| Texture Resolution | maximum .. an eighth: the mip level every material texture is read at. One setting for colour, specular and normal maps. |
+| Specular / Normal maps | off: the game's own stand-ins ( black, flat ) are bound in their place |
+| Show Patches As | textured, wireframe, textured + wireframe ( `r_patches`, `Shift+W`; the Patch menu's entry is the same setting ) |
+| Show Entities As | models, boxes, models and boxes ( `r_entities` ) |
+| Light / Sun Preview | **Light preview**: the light of the selected `light` entities, and of the ones kept in the preview list, falls on what the 3D view shows - radius, colour, intensity, the cone of a spot; up to 8, the nearest. Sun shadows on / off. For a map of your own "Sun Preview" builds the stage again with the worldspawn's light. |
+| Filmtweaks | the film values of a `.vision` file of the game's zones ( `r_vision <name>`, `r_vision list`, the window lists and filters them ), or typed ( `r_film contrast brightness desaturation [light rgb] [dark rgb]` ) |
+| Cubic Clipping | only what touches a cube around the camera is drawn ( `r_cubic <distance|off>`, `Ctrl+\`, `Ctrl+[`, `Ctrl+]` ) |
+
+The fake lights, the depth view, the light preview and the film values are one **post process** over the picture
+of the renderer: a pixel shader compiled at run time with the system's `d3dcompiler_47.dll` ( nothing is linked
+against it; without it these modes say so and the view stays as it is ). Position and normal of a pixel come from
+the depth pre-pass of the game's shaders ( `map_renderer::depth_texture()` ), so they exist for what that pass
+draws - the opaque world, models and meshes - and not for blended surfaces. The light preview is an
+approximation ( a point light that falls off in a line to its radius, no shadows ), not the bake and not the
+game's primary light techniques: those light a surface with one primary light, which the previewed light would
+have to replace. The vision files of 1.1.1.13 name their settings by number; 520 .. 528 are the film values
+( measured on the shipped `mp_crash.vision` ), the glow values 511 .. 519 are not shown.
+
+**Effects menu.** An effect plays in the 3D view where an entity has an `fx` key ( the name: `fx\<name>.efx` of
+the project, else the effect of the map's zone or a common zone ) and where the createfx script of the map puts
+one ( `<script root>\maps\createfx\<map>_fx.gsc` with the names of `maps\mp\<map>_fx.gsc`; read only ). **Effects
+Browser**: the project's and the zones' effects; double click places a `script_origin` with the `fx` key where the
+camera looks ( `fx place <name>` ). Play / Pause / Stop / Repeat, **Edit Current Effect** ( the Preview window,
+and the project's `.efx` in the program that opens it ), Reload, **Effect Settings** ( timescale, repeat delay,
+draw distance, debug tris ). "Write the createfx script" turns the `fx` entities of the map into
+`map_source\<map>_createfx.gsc` for the level script to call. `fx play|pause|stop|repeat|time|timescale|delay|
+tris|place|list|zone [text]|status|reload|createfx`. The particles are the editor's simulation, as in the
+Preview window: sprites, tails and lines, drawn over the picture without depth; entity angles are not applied.
+
+**Tools menu.**
+
+* **Rope Generator** ( `tool_rope x1 y1 z1 x2 y2 z2 [slack] [radius] [segments] [sides] [material]` ): a cable
+  between two points that hangs by its slack, as terrain meshes ( a tube; more than 15 segments is a chain of
+  meshes that share a ring ), or as a chain of models along the curve ( `tool_rope chain <model> .. [slack]
+  [spacing]` ). The points: typed, the camera's target, two selected entities, or the ends of the selection's box.
+* **Noise Generator** ( `tool_noise [amplitude] [wave length] [seed] [octaves] [x|y|z] [edges 0|1]` ): hills on
+  the selected terrain meshes; the same numbers give the same hills, meshes that touch keep touching. "Next seed
+  + apply" flips through hills. `tool_noise terrain [size] [points]` makes a mesh to start with.
+* **Mesh Painter** ( the toolbar button, `tool_paint on|off` ): left drag in the 3D view scatters models onto what
+  the mouse is over - models ( a list ), radius, density per step, spacing of the steps, random yaw, scale range,
+  align to the surface, sink. A stroke is one undo step; the right button still flies the camera.
+  `tool_paint models .. | radius | density | spacing | scale | align | yaw | at <px> <py>`.
+* PhysX Movement: not in this editor ( it is the PhysX runtime of the mod tools ).
 
 ### Your own assets
 
@@ -695,6 +836,12 @@ form of this work; what the standalone editor does is above.
 
 Be aware of these before planning work around this branch:
 
+- **Top bar of CoD4 Radiant: what is not there.** Case Textures ( a technique of Radiant's own technique sets ),
+  separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), "selected
+  wireframe / selected skinned" entities, a lock for lightmaps ( they are baked from the geometry ), a "face"
+  texture projection ( the format has the axial one ), PhysX movement. The light preview and the fake lights are a
+  post process from the depth pre-pass, not the game's light techniques; effects in the map view are the editor's
+  particle simulation without depth. The shortcut texts of the hand written menus do not follow a changed key.
 - **Maps of your own: lighting is simpler than the game's own maps.** Surfaces are cut by the reach of the
   primary lights along a grid of 32 units, not as finely as the game's compiler does, and a surface is lit at run
   time by one primary light. Bounced light has the mean colour of a material, not its pattern. An omni light

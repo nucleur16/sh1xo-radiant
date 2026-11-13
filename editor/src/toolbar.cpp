@@ -412,13 +412,56 @@ namespace editor::toolbar
 			command::register_command("ed_toolbar", [](args_t) { g_show_edit = true; });
 		}
 
-		if (!prefs::get_bool("ed_toolbar"))
+		// CODOL_NO_TOOLBAR: unattended runs whose scripts click at pixels of the layout without the bar ( tests\ed3d )
+		static const bool suppressed = GetEnvironmentVariableA("CODOL_NO_TOOLBAR", nullptr, 0) != 0;
+
+		if (!prefs::get_bool("ed_toolbar") || suppressed)
 		{
 			return;
 		}
 
 		const float size = static_cast<float>(std::clamp(prefs::get_int("ed_toolbar_size"), 18, 48));
-		const float height = size + 8.0f;
+
+		// what is shown: the actions that exist, a gap between two groups ( never two in a row, none at the ends )
+		struct slot
+		{
+			const actions::action* action;		// nullptr: a gap
+		};
+
+		std::vector<slot> slots;
+		{
+			bool gap = false;
+
+			for (const auto& id : g_layout)
+			{
+				if (id == SEPARATOR)
+				{
+					gap = !slots.empty();
+				}
+				else if (const actions::action* a = actions::find(id))
+				{
+					if (gap) { slots.push_back({ nullptr }); gap = false; }
+					slots.push_back({ a });
+				}
+			}
+		}
+
+		// as many rows as the window is narrow: a button that does not fit starts the next row
+		const float step = size + 2.0f, gap_width = 11.0f;
+		const float room = ImGui::GetMainViewport()->WorkSize.x - 12.0f;
+		int rows = 1;
+		{
+			float x = 0.0f;
+
+			for (const auto& item : slots)
+			{
+				const float w = item.action ? step : gap_width;
+				if (x + w > room && x > 0.0f) { rows++; x = 0.0f; }
+				x += w;
+			}
+		}
+
+		const float height = static_cast<float>(rows) * (size + 4.0f) + 4.0f;
 
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.0f, 4.0f));
 		ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 0.0f));
@@ -430,36 +473,27 @@ namespace editor::toolbar
 
 		if (ImGui::BeginViewportSideBar("##global_toolbar", ImGui::GetMainViewport(), ImGuiDir_Up, height, flags))
 		{
-			bool gap = false, first = true;
 			const actions::action* clicked = nullptr;
+			const ImVec2 origin = ImGui::GetCursorScreenPos();
+			float x = 0.0f, y = 0.0f;
 
-			for (const auto& id : g_layout)
+			for (const auto& item : slots)
 			{
-				if (id == SEPARATOR)
+				const float w = item.action ? step : gap_width;
+				if (x + w > room && x > 0.0f) { x = 0.0f; y += size + 4.0f; }
+
+				if (!item.action)
 				{
-					gap = !first;
-					continue;
+					// a thin line between two groups
+					ImGui::GetWindowDrawList()->AddLine(ImVec2(origin.x + x + 5.0f, origin.y + y + 3.0f), ImVec2(origin.x + x + 5.0f, origin.y + y + size - 3.0f), ImGui::GetColorU32(ImGuiCol_Separator));
+				}
+				else
+				{
+					ImGui::SetCursorScreenPos(ImVec2(origin.x + x, origin.y + y));
+					if (button(*item.action, size)) { clicked = item.action; }
 				}
 
-				const actions::action* a = actions::find(id);
-				if (!a)
-				{
-					continue;	// a slot of an action that does not exist ( yet )
-				}
-
-				if (gap)
-				{
-					// a thin line between two groups; never two in a row, none at the ends
-					const ImVec2 at = ImGui::GetCursorScreenPos();
-					ImGui::GetWindowDrawList()->AddLine(ImVec2(at.x + 4.0f, at.y + 3.0f), ImVec2(at.x + 4.0f, at.y + size - 3.0f), ImGui::GetColorU32(ImGuiCol_Separator));
-					ImGui::Dummy(ImVec2(9.0f, size));
-					ImGui::SameLine();
-					gap = false;
-				}
-
-				if (button(*a, size)) { clicked = a; }
-				ImGui::SameLine();
-				first = false;
+				x += w;
 			}
 
 			if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))

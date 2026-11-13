@@ -332,7 +332,8 @@ namespace editor::textures
 		add("texture.fit", "Fit texture", "Ctrl+F", [step] { step("Fit texture", doc().fit_texture(1.0, 1.0)); }).when(targets);
 		add("texture.natural", "Natural texture ( reset the alignment )", "", [step] { step("Natural texture", doc().natural_texture()); }).when(targets);
 
-		// Radiant's keys, in the 3D view and the 2D views. A key that is held is one undo step.
+		// Radiant's keys, in the 3D view and the 2D views: shift by the grid size, rotate by the angle snap, scale by 5 %.
+		// A key that is held is one undo step.
 		const auto held = [](const char* name, const std::uint64_t key, const auto& fn)
 		{
 			auto& d = doc();
@@ -342,12 +343,12 @@ namespace editor::textures
 			ui::report(ok, name);
 		};
 
-		add("texture.shift_left", "Shift texture left", "Shift+Left", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(-g_shift_h, 0.0); }); }, views, repeat).when(targets);
-		add("texture.shift_right", "Shift texture right", "Shift+Right", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(g_shift_h, 0.0); }); }, views, repeat).when(targets);
-		add("texture.shift_up", "Shift texture up", "Shift+Up", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(0.0, g_shift_v); }); }, views, repeat).when(targets);
-		add("texture.shift_down", "Shift texture down", "Shift+Down", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(0.0, -g_shift_v); }); }, views, repeat).when(targets);
-		add("texture.rotate_ccw", "Rotate texture", "Shift+PageUp", [held] { held("Rotate texture", 0x3D7E0002, [](auto& d) { return d.rotate_texture(g_rotate); }); }, views, repeat).when(targets);
-		add("texture.rotate_cw", "Rotate texture back", "Shift+PageDown", [held] { held("Rotate texture", 0x3D7E0002, [](auto& d) { return d.rotate_texture(-g_rotate); }); }, views, repeat).when(targets);
+		add("texture.shift_left", "Shift texture left", "Shift+Left", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(-std::max(1.0, get_scene().grid), 0.0); }); }, views, repeat).when(targets);
+		add("texture.shift_right", "Shift texture right", "Shift+Right", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(std::max(1.0, get_scene().grid), 0.0); }); }, views, repeat).when(targets);
+		add("texture.shift_up", "Shift texture up", "Shift+Up", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(0.0, std::max(1.0, get_scene().grid)); }); }, views, repeat).when(targets);
+		add("texture.shift_down", "Shift texture down", "Shift+Down", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(0.0, -std::max(1.0, get_scene().grid)); }); }, views, repeat).when(targets);
+		add("texture.rotate_ccw", "Rotate texture", "Shift+PageUp", [held] { held("Rotate texture", 0x3D7E0002, [](auto& d) { return d.rotate_texture(get_scene().snap_angle); }); }, views, repeat).when(targets);
+		add("texture.rotate_cw", "Rotate texture back", "Shift+PageDown", [held] { held("Rotate texture", 0x3D7E0002, [](auto& d) { return d.rotate_texture(-get_scene().snap_angle); }); }, views, repeat).when(targets);
 		add("texture.scale_h_down", "Texture narrower", "Ctrl+Left", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.0 / 1.05, 1.0); }); }, views, repeat).when(targets);
 		add("texture.scale_h_up", "Texture wider", "Ctrl+Right", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.05, 1.0); }); }, views, repeat).when(targets);
 		add("texture.scale_v_up", "Texture taller", "Ctrl+Up", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.0, 1.05); }); }, views, repeat).when(targets);
@@ -780,7 +781,7 @@ namespace editor::textures
 			pair("Shift V", "sv", g_shift_v, "%.3g texels", [&] { report(d.shift_texture(0.0, -g_shift_v), "Shift texture"); }, [&] { report(d.shift_texture(0.0, g_shift_v), "Shift texture"); });
 			pair("Scale H", "ch", g_scale_h, "x %.3g", [&] { if (g_scale_h > 0.0f) { report(d.scale_texture(1.0 / g_scale_h, 1.0), "Scale texture"); } }, [&] { if (g_scale_h > 0.0f) { report(d.scale_texture(g_scale_h, 1.0), "Scale texture"); } });
 			pair("Scale V", "cv", g_scale_v, "x %.3g", [&] { if (g_scale_v > 0.0f) { report(d.scale_texture(1.0, 1.0 / g_scale_v), "Scale texture"); } }, [&] { if (g_scale_v > 0.0f) { report(d.scale_texture(1.0, g_scale_v), "Scale texture"); } });
-			pair("Rotate", "ro", g_rotate, "%.3g deg ( keys )", [&] { report(d.rotate_texture(-g_rotate), "Rotate texture"); }, [&] { report(d.rotate_texture(g_rotate), "Rotate texture"); });
+			pair("Rotate", "ro", g_rotate, "%.3g deg", [&] { report(d.rotate_texture(-g_rotate), "Rotate texture"); }, [&] { report(d.rotate_texture(g_rotate), "Rotate texture"); });
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextUnformatted("Flip");
