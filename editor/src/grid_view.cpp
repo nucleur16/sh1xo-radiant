@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "menu_ext.hpp"
 
 // The 2D views: the classic orthographic XY / XZ / YZ grid view of Radiant, drawn with ImGui draw lists from
 // the line caches of the scene. Mouse handling is split in press / drag / release on world coordinates so that
@@ -337,6 +338,8 @@ namespace editor::ui
 							}
 						}
 
+						patch_vertices_grabbed(id, target.vertices, 3 - ah - av);	// Patch menu: vertex selection, drill down
+
 						if (!target.corners.empty() || !target.vertices.empty())
 						{
 							targets.push_back(std::move(target));
@@ -467,7 +470,7 @@ namespace editor::ui
 					}
 					else
 					{
-						doc.move_patch_vertices(target.object, target.vertices, delta);
+						move_patch_vertices(target.object, target.vertices, delta);		// Patch menu: weld, locked vertices
 					}
 				}
 
@@ -644,6 +647,23 @@ namespace editor::ui
 			const ImU32 selected_color = IM_COL32(255, 58, 32, 255);
 
 			const auto& doc = get_scene().doc;
+
+			// below everything else: the grid blocks, the contents of prefabs, the region, the leak line
+			if (!is_selection)
+			{
+				const auto& extra = extra_view_lines(true);
+
+				for (std::size_t i = 0; i + 1 < extra.size(); i += 2)
+				{
+					const float* pf = &extra[i].x;
+					const float* qf = &extra[i + 1].x;
+
+					if (std::fabs(pf[ah] - qf[ah]) + std::fabs(pf[av] - qf[av]) >= 1e-3f)
+					{
+						dl->AddLine(to_screen(pf[ah], pf[av]), to_screen(qf[ah], qf[av]), to_d3d_color(extra[i].color));
+					}
+				}
+			}
 
 			for (const auto& o : cache.objects)
 			{
@@ -1029,6 +1049,16 @@ namespace editor::ui
 				}
 			}
 
+			// Patch menu: the selected ( yellow ) and locked ( red ) patch vertices
+			if (st.vertex_mode)
+			{
+				patch_vertex_marks([&](const edit::vec3& p, const ImU32 color)
+				{
+					const ImVec2 at = to_screen(p[h()], p[v()]);
+					dl->AddRect(ImVec2(at.x - 5.0f, at.y - 5.0f), ImVec2(at.x + 6.0f, at.y + 6.0f), color, 0.0f, 0, 2.0f);
+				});
+			}
+
 			if (st.clipper.on && st.clipper.axis == axis && !st.clipper.points.empty())
 			{
 				const auto& points = st.clipper.points;
@@ -1202,6 +1232,34 @@ namespace editor::ui
 			{
 				g_views.back().fit_request = true;
 			}
+		}
+	}
+
+	// what other code has to know of a 2D view ( menu_ext.hpp ); false when there is no view `index`
+	bool grid_view_info(const int index, ext::view2d_info& out)
+	{
+		const auto* view = view_at(index);
+		if (!view)
+		{
+			return false;
+		}
+
+		out.axis = view->axis;
+		out.center[0] = view->center[0];
+		out.center[1] = view->center[1];
+		out.zoom = view->zoom;
+		out.canvas_pos = view->canvas_pos;
+		out.canvas_size = view->canvas_size;
+		out.open = view->open;
+		return true;
+	}
+
+	void grid_view_center(const int index, const double h, const double v)
+	{
+		if (auto* view = view_at(index))
+		{
+			view->center[0] = h;
+			view->center[1] = v;
 		}
 	}
 

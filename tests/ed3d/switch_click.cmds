@@ -1,0 +1,28 @@
+# The crash of 2026-11-12: "I went from mp_abandon_sh_mk to mp_hunger and the editor crashed".
+# Double clicks in the Maps window with the ( injected ) mouse; the pixels of the rows belong to the layout the
+# editor is started with ( Maps docked on the left, the list not scrolled, "Maps only" on ).
+wait 2
+ui_mouse 79 166
+wait 0.5
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 3
+sel_info
+expect mp_abandon_sh_mk:
+ed_shot $OUT\switch_click_1.png
+wait 1
+ui_mouse 51 622
+wait 0.5
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 3
+sel_info
+expect mp_hunger:
+ed_shot $OUT\switch_click_2.png
+wait 1
+ui_mouse off
+quit

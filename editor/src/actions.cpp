@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "edit3d.hpp"
 #include "assets.hpp"
 #include "preview.hpp"
 
@@ -950,7 +951,7 @@ namespace editor::ui
 			}
 		}
 
-		const auto map_file = s.map_file;
+		const auto map_file = build_source_file(s.map_file);
 		const std::string name = to_utf8(map_file.stem());
 		const auto out_dir = base_dir / "compiled";
 		std::filesystem::create_directories(out_dir / "cache", ec);
@@ -1298,6 +1299,18 @@ namespace editor::ui
 
 		// while the right button flies the camera the keys move it; a drag owns the document until it ends
 		if (!s.open || ImGui::IsMouseDown(ImGuiMouseButton_Right) || s.dragging())
+		{
+			return;
+		}
+
+		// the tools of the 3D view ( edit3d.cpp ): edge mode, create, texture keys
+		if (st.hovered_3d && edit3d::shortcuts())
+		{
+			return;
+		}
+
+		// the Brush / Patch menus have their own keys ( menu_brush_patch.cpp )
+		if (process_brush_patch_shortcuts())
 		{
 			return;
 		}
@@ -2067,6 +2080,8 @@ namespace editor::ui
 		// ---- the project's assets: asset_new_material, asset_import_model, asset_gdt, asset_build, asset_list ..
 		assets::register_commands();
 		preview::register_commands();
+		register_brush_patch_commands();
+		register_extra_commands();
 
 		command::register_command("help", [](args_t)
 		{

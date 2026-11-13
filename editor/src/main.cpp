@@ -326,6 +326,7 @@ namespace editor
 			if (ImGui::BeginMenu("File"))
 			{
 				ui::draw_file_menu_items();
+				ui::draw_file_menu_extra();
 				ImGui::Separator();
 				ImGui::MenuItem("Settings ..", nullptr, &g_show_settings);
 				ImGui::Separator();
@@ -341,6 +342,19 @@ namespace editor
 			if (ImGui::BeginMenu("Edit"))
 			{
 				ui::draw_edit_menu();
+				ui::draw_edit_menu_extra();
+				ImGui::EndMenu();
+			}
+
+			if (ImGui::BeginMenu("Brush"))
+			{
+				ui::draw_brush_menu();
+				ImGui::EndMenu();
+			}
+
+			if (ImGui::BeginMenu("Patch"))
+			{
+				ui::draw_patch_menu();
 				ImGui::EndMenu();
 			}
 
@@ -371,8 +385,12 @@ namespace editor
 				item("Script Workbench", GET_GUI(ggui::script_workbench_dialog));
 				item("Game", GET_GUI(ggui::game_view_dialog));
 				ImGui::MenuItem("Console", nullptr, &g_show_console);
+				ui::draw_view_menu_extra();
 				ImGui::EndMenu();
 			}
+
+			// Selection, Grid, Misc, Region
+			ui::draw_extra_menus();
 
 			if (ImGui::BeginMenu("Game"))
 			{
@@ -564,6 +582,7 @@ namespace editor
 			}
 
 			ui::process_shortcuts();
+			ui::process_extra_shortcuts();
 			draw_menu();
 
 			const ImGuiID dockspace = ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
@@ -596,6 +615,8 @@ namespace editor
 			ui::draw_create_entity_popup();
 			ui::draw_modals();
 			ui::draw_install_window();
+			ui::draw_brush_patch_windows();
+			ui::draw_extra_windows();
 
 			// map name and the modified mark in the title bar
 			if (std::string title = get_scene().title(); title != g_title)

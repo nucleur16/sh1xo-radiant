@@ -376,6 +376,13 @@ namespace codol::view
 		// releases the zone memory again. Replaces a loaded map.
 		bool load_map(const std::string& map_name, std::string* error = nullptr);
 		void unload();
+		// The textures the host is given - the result of render(), material_thumbnail() - are not released at the
+		// moment the renderer drops them ( unload(), load_map(), a zone registered again, a target of another size
+		// keeps its own rule: see render() ): a gui has usually put them into draw commands of the frame it is
+		// building and draws that frame later. They are released here. Call it once per frame at a point where no
+		// draw command of an earlier frame is left - before the first window of a frame. ( on_device_lost() and
+		// shutdown() release them as well. )
+		void release_retired();
 		bool loaded() const;
 		const std::string& map_name() const;
 
@@ -477,8 +484,9 @@ namespace codol::view
 		bool material_details(const std::string& name, material_info& out);
 		// The colour map of a material as a texture no larger than `max_size` ( the nearest mip level; the whole
 		// image when it has no mips ), loaded on first use and cached per name ( the first max_size asked for a
-		// name wins ). Owned by the renderer: valid until unload() / load_map() / shutdown(), and with the default
-		// pool until on_device_lost(). nullptr when the material has no 2D colour map or it cannot be read.
+		// name wins ). Owned by the renderer: valid until the release_retired() after unload() / load_map(), until
+		// shutdown(), and with the default pool until on_device_lost(). nullptr when the material has no 2D colour
+		// map or it cannot be read.
 		IDirect3DTexture9* material_thumbnail(const std::string& name, int max_size = 128);
 
 		// ---- selection highlight ----------------------------------------------------------------------------

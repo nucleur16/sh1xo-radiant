@@ -8,6 +8,8 @@
 #include "assets.hpp"
 #include "preview.hpp"
 #include "scene.hpp"
+#include "ui.hpp"
+#include <codol_edit/patch_ops.hpp>
 
 #include <charconv>
 
@@ -30,7 +32,8 @@ namespace editor
 
 		bool is_xmodel_name(const std::string_view model)
 		{
-			return !model.empty() && model[0] != '*' && model[0] != '?';
+			// "model" of a misc_prefab is a .map, not an xmodel
+			return !model.empty() && model[0] != '*' && model[0] != '?' && model.find(".map") == std::string_view::npos;
 		}
 
 		bool read_file(const std::filesystem::path& file, std::string& out)
@@ -146,6 +149,12 @@ namespace editor
 		// box of a point entity: what the renderer draws for it, else the class catalog
 		doc.set_entity_box_callback([this](const edit::entity& e, edit::bounds& box)
 		{
+			// a prefab: the box of what it holds
+			if (ui::prefab_box(e, box))
+			{
+				return true;
+			}
+
 			const auto model = e.value("model");
 
 			// the box of the object in the zone, as long as the entity is turned and scaled as it is there
@@ -1371,8 +1380,15 @@ namespace editor
 		destroy_mesh(m);
 		m.revision = doc.revision(id);
 
+		// a curve at its own subdivision ( Patch > Inc / Dec Subdivision ); nothing solid while patches are shown as wires
+		const edit::patch* as_patch = doc.find_patch(id);
+		if (as_patch && ui::patches_as_wire())
+		{
+			return;
+		}
+
 		edit::mesh mesh;
-		if (!doc.build_mesh(id, mesh, 4) || mesh.indices.empty())
+		if (!doc.build_mesh(id, mesh, as_patch ? edit::patch_subdivisions(*as_patch) : 4) || mesh.indices.empty())
 		{
 			return;
 		}
@@ -2082,6 +2098,11 @@ namespace editor
 
 	void scene::sync()
 	{
+		// Start of a frame: the last one is drawn, nothing refers to the textures the renderer dropped since ( the
+		// picture of the 3D view and the thumbnails of a map that was closed in the middle of that frame - by the
+		// "unsaved changes" question, a command typed into the console, the Assets window .. ).
+		renderer.release_retired();
+
 		if (!open)
 		{
 			return;
@@ -2494,7 +2515,7 @@ namespace editor
 
 	void scene::set_grid(const double g)
 	{
-		grid = std::clamp(g, 1.0, 512.0);
+		grid = std::clamp(g, 0.125, 512.0);
 	}
 
 	edit::vec3 scene::ray_target(const float3& origin, const float3& direction, const float fallback) const

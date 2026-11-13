@@ -723,7 +723,12 @@ namespace codol::view
 			scope.zones.erase(scope.zones.begin() + static_cast<std::ptrdiff_t>(i));
 			for (const auto& [material_name, material] : old->materials)
 			{
-				thumbnails.erase(material_name);
+				if (const auto thumbnail = thumbnails.find(material_name); thumbnail != thumbnails.end())
+				{
+					// the host may be drawing it in the frame it is building
+					retire_host_texture(thumbnail->second);
+					thumbnails.erase(thumbnail);
+				}
 				for (const auto& texture : material->asset.textures)
 				{
 					image_sizes.erase(texture.image_name);

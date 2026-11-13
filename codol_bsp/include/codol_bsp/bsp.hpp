@@ -9,6 +9,7 @@
 // See codol_bsp/README.md for formats, algorithms, what is approximate and what is taken on trust.
 
 #include "codol_edit/document.hpp"
+#include "codol_edit/prefab.hpp"
 #include "codol_zone/fastfile.hpp"
 
 #include <cstdint>
@@ -49,6 +50,10 @@ namespace codol::bsp
 		// named ( r_glow .. ) or numbered as the game's files have them. Default: <map name>.vision / .sun next to
 		// the .map; without one a default vision file is written, and a default flare for a map with a sun and a sky.
 		std::filesystem::path vision, sun;
+		// folders the files of misc_prefab entities are looked for in ( "model" "prefabs/x.map" below one of them ),
+		// ahead of the folder of the .map, its parents and a map_source folder next to them. compile() replaces every
+		// prefab by its contents before anything else; compile_document() takes the document as it is.
+		std::vector<std::filesystem::path> prefab_roots;
 		bool verbose = false;
 	};
 

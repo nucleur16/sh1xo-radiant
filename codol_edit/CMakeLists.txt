@@ -79,6 +79,15 @@ add_library(codol_edit STATIC
 	src/map_io.cpp
 	src/document.cpp
 	src/edit_ops.cpp
+	include/codol_edit/patch_ops.hpp
+	src/patch_ops.cpp
+	src/select_ops.cpp
+	src/prefab.cpp
+	include/codol_edit/select_types.hpp
+	include/codol_edit/prefab.hpp
+	include/codol_edit/document_select.inc
+	src/edit_ops_3d.cpp
+	include/codol_edit/handles.hpp
 	src/import.cpp
 	src/class_catalog.cpp
 	src/class_catalog_data.inc
@@ -114,4 +123,20 @@ if(CODOL_EDIT_BUILD_TESTS)
 		target_link_options(codol_edit_tests PRIVATE /LARGEADDRESSAWARE)
 	endif()
 	add_test(NAME codol_edit_tests COMMAND codol_edit_tests)
+
+	# brush primitives and patch operations ( patch_ops.hpp )
+	add_executable(codol_patch_ops_tests tests/patch_ops_tests.cpp)
+	target_link_libraries(codol_patch_ops_tests PRIVATE codol_edit)
+	codol_edit_options(codol_patch_ops_tests)
+	add_test(NAME codol_patch_ops_tests COMMAND codol_patch_ops_tests)
+	# selection menu, clipboard, filters, regions, prefabs
+	add_executable(codol_edit_select_tests tests/codol_edit_select_tests.cpp)
+	target_link_libraries(codol_edit_select_tests PRIVATE codol_edit)
+	codol_edit_options(codol_edit_select_tests)
+	add_test(NAME codol_edit_select_tests COMMAND codol_edit_select_tests)
+	# the operations of 3D editing ( handles.hpp, move_faces, move_corners ); needs no test data
+	add_executable(codol_edit_3d_tests tests/codol_edit_3d_tests.cpp)
+	target_link_libraries(codol_edit_3d_tests PRIVATE codol_edit)
+	codol_edit_options(codol_edit_3d_tests)
+	add_test(NAME codol_edit_3d_tests COMMAND codol_edit_3d_tests)
 endif()

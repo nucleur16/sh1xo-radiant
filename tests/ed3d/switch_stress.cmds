@@ -1,0 +1,598 @@
+# Map after map ( 33 switches ), opened from every place in a frame a user opens one from:
+#   typed into the Console window        - the command runs where that window is drawn: at the end of the frame
+#   a double click in the Maps window    - in the middle of the frame
+#   "Discard" of the unsaved changes     - at the end of the frame ( the crash of 2026-11-12 )
+#   map_new / map_close / map_load        - a map of your own in the stage, no map at all
+# with a selection and its gizmo, the Materials window ( thumbnails ) and the Preview window in the frame.
+# `ed_mem` after every switch: working set and private bytes must level off, not climb.
+# Written by make_switch_stress.py; the pixels belong to the layout the editor is started with.
+wait 2
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_abandon_sh_mk"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 01_mp_abandon_sh_mk
+expect ed_mem 01_mp_abandon_sh_mk:
+ed_shot $OUT\switch_stress_01_mp_abandon_sh_mk.png
+wait 1
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_hunger"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 02_mp_hunger
+expect ed_mem 02_mp_hunger:
+ed_shot $OUT\switch_stress_02_mp_hunger.png
+wait 1
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 66 646
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 03_mp_killhouse_sh
+expect ed_mem 03_mp_killhouse_sh:
+ed_shot $OUT\switch_stress_03_mp_killhouse_sh.png
+wait 1
+ed_box 0 0 0 64 64 64
+wait 0.5
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 41 790
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 04_mp_rust
+expect ed_mem 04_mp_rust:
+ed_shot $OUT\switch_stress_04_mp_rust.png
+wait 1
+sel_class mp_dm_spawn 0
+ed_focus
+ed_windows set
+wait 0.5
+ed_focus_window Materials##window
+wait 1
+asset_preview material mc/gfx_impact_asphalt01
+wait 1
+ed_shot $OUT\switch_stress_materials.png
+wait 1
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_abandon_sh_mk"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 05_mp_abandon_sh_mk
+expect ed_mem 05_mp_abandon_sh_mk:
+ed_shot $OUT\switch_stress_05_mp_abandon_sh_mk.png
+wait 1
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_new $MAP"
+wait 0.2
+ui_key enter
+wait 2
+ed_box 0 0 0 128 128 64
+ed_camera -150 -150 400 55 45
+ed3d tool vertex
+ed3d wclick 0 0 64
+wait 0.5
+map_save
+wait 0.5
+wait 1
+sel_info
+expect $MAP:
+ed_mem 06_$MAP
+expect ed_mem 06_$MAP:
+ed_shot $OUT\switch_stress_06_$MAP.png
+wait 1
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_hunger"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 07_mp_hunger
+expect ed_mem 07_mp_hunger:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_load map_source/$MAP.map"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect $MAP:
+ed_mem 08_$MAP
+expect ed_mem 08_$MAP:
+ed_shot $OUT\switch_stress_08_$MAP.png
+wait 1
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_close"
+wait 0.2
+ui_key enter
+wait 2
+ed_mem closed
+wait 0.5
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_killhouse_sh"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 09_mp_killhouse_sh
+expect ed_mem 09_mp_killhouse_sh:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_rust"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 10_mp_rust
+expect ed_mem 10_mp_rust:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 79 166
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 11_mp_abandon_sh_mk
+expect ed_mem 11_mp_abandon_sh_mk:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 51 622
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 12_mp_hunger
+expect ed_mem 12_mp_hunger:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_killhouse_sh"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 13_mp_killhouse_sh
+expect ed_mem 13_mp_killhouse_sh:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 41 790
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 14_mp_rust
+expect ed_mem 14_mp_rust:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 79 166
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 15_mp_abandon_sh_mk
+expect ed_mem 15_mp_abandon_sh_mk:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_hunger"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 16_mp_hunger
+expect ed_mem 16_mp_hunger:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 66 646
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 17_mp_killhouse_sh
+expect ed_mem 17_mp_killhouse_sh:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 41 790
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 18_mp_rust
+expect ed_mem 18_mp_rust:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_abandon_sh_mk"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 19_mp_abandon_sh_mk
+expect ed_mem 19_mp_abandon_sh_mk:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 51 622
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 20_mp_hunger
+expect ed_mem 20_mp_hunger:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 66 646
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 21_mp_killhouse_sh
+expect ed_mem 21_mp_killhouse_sh:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_rust"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 22_mp_rust
+expect ed_mem 22_mp_rust:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 79 166
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 23_mp_abandon_sh_mk
+expect ed_mem 23_mp_abandon_sh_mk:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 51 622
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 24_mp_hunger
+expect ed_mem 24_mp_hunger:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_killhouse_sh"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 25_mp_killhouse_sh
+expect ed_mem 25_mp_killhouse_sh:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 41 790
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 26_mp_rust
+expect ed_mem 26_mp_rust:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 79 166
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 27_mp_abandon_sh_mk
+expect ed_mem 27_mp_abandon_sh_mk:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_hunger"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 28_mp_hunger
+expect ed_mem 28_mp_hunger:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 66 646
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 29_mp_killhouse_sh
+expect ed_mem 29_mp_killhouse_sh:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 41 790
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_rust:
+ed_mem 30_mp_rust
+expect ed_mem 30_mp_rust:
+ui_mouse 700 1349
+wait 0.2
+ui_mouse down
+ui_mouse up
+wait 0.3
+ui_text "map_open mp_abandon_sh_mk"
+wait 0.2
+ui_key enter
+wait 2
+wait 1
+sel_info
+expect mp_abandon_sh_mk:
+ed_mem 31_mp_abandon_sh_mk
+expect ed_mem 31_mp_abandon_sh_mk:
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 51 622
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_hunger:
+ed_mem 32_mp_hunger
+expect ed_mem 32_mp_hunger:
+sel_class misc_model 0
+ed_move 8 0 0
+wait 0.3
+ed_focus_window Maps##window
+wait 0.4
+ui_mouse 66 646
+wait 0.3
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 2
+ui_mouse 1278 713
+wait 0.4
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 2
+wait 1
+sel_info
+expect mp_killhouse_sh:
+ed_mem 33_mp_killhouse_sh
+expect ed_mem 33_mp_killhouse_sh:
+ed_shot $OUT\switch_stress_33_mp_killhouse_sh.png
+wait 1
+ui_mouse off
+wait 1
+quit

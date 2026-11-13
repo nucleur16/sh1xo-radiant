@@ -1,0 +1,103 @@
+# 3D editing, Select tool: move, the squares on the box, drag next to a brush, a selected face, rectangle, Alt click.
+# Everything here goes through edit3d::press / drag / release ( the code the mouse calls ) at pixels the view
+# projects world points to. The camera is at -150 -150 400 and looks down at the box from the south west.
+map_new $MAP
+wait 6
+ed_box 0 0 0 128 128 64
+ed_camera -150 -150 400 55 45
+wait 1
+ed3d handles
+ed_shot $OUT\object_0_start.png
+wait 0.5
+
+# ---- drag on the selection: it moves on the grid ( the camera looks down: on the floor plane )
+ed3d wpress 40 40 64
+ed3d wdrag 72 72 64
+wait 0.3
+ed_shot $OUT\object_1_move_drag.png
+wait 0.5
+ed3d release
+sel_info
+expect bounds 32 32 0 .. 160 160 64
+expect undo 2 ( Move )
+
+# ---- the square on top of the box: the top goes up
+ed3d wpress 96 96 64
+ed3d wdrag 96 96 128
+wait 0.3
+ed_shot $OUT\object_2_box_handle.png
+wait 0.5
+ed3d release
+sel_info
+expect bounds 32 32 0 .. 160 160 128
+expect undo 3 ( Resize )
+
+# ---- drag next to the brush, on the side the camera sees ( south of it ): the south face follows the mouse
+ed3d wpress 96 -40 64
+ed3d wdrag 96 -72 64
+wait 0.3
+ed_shot $OUT\object_3_drag_outside.png
+wait 0.5
+ed3d release
+sel_info
+expect bounds 32 0 0 .. 160 160 128
+
+# ---- .. and behind the brush ( east of it ). The ray passes over the top on its way there: both faces follow,
+# as in Radiant when the drag starts past a corner.
+ed3d wpress 300 96 64
+ed3d wdrag 340 96 64
+ed3d release
+sel_info
+expect bounds 32 0 0 .. 176 160 136
+expect undo 5 ( Resize )
+
+# ---- Ctrl+Shift click: the top face; then drag it along its normal
+ed3d wclick 60 140 128 shift ctrl
+ed3d faces
+expect rotation 0  selected
+ed3d wpress 60 140 128
+ed3d wdrag 60 140 160
+wait 0.3
+ed_shot $OUT\object_4_face_drag.png
+wait 0.5
+ed3d release
+sel_info
+expect bounds 32 0 0 .. 176 160 168
+expect undo 6 ( Move face )
+
+# ---- undo takes each drag back as one step
+ed_undo
+ed_undo
+sel_info
+expect undo 4 ( Resize ), redo 2 ( Resize )
+ed_redo
+ed_redo
+
+# ---- Shift drag: what is in the rectangle
+ed_box 320 0 0 384 64 64
+ed_box 560 88 -160 624 152 -96
+sel_none
+ed3d wpress -40 60 0 shift
+ed3d wdrag 700 60 -160
+wait 0.3
+ed_shot $OUT\object_5_rect.png
+wait 0.5
+ed3d release
+sel_info
+expect brushes, 0 patches; 3 selected
+
+# ---- Alt click: through what is behind each other ( the box at z 0 .. 64, then the one the ray meets below it )
+sel_none
+ed3d wclick 352 32 64 alt
+sel_info
+expect bounds 320 0 0 .. 384 64 64
+ed3d wclick 352 32 64 alt
+sel_info
+expect bounds 560 88 -160 .. 624 152 -96
+ed3d wclick 352 32 64 alt shift
+sel_info
+expect bounds 320 0 -160 .. 624 152 64
+wait 0.3
+ed_shot $OUT\object_6_alt_click.png
+wait 0.5
+quit

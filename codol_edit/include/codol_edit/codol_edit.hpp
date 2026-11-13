@@ -7,3 +7,4 @@
 #include "codol_edit/geometry.hpp"
 #include "codol_edit/document.hpp"
 #include "codol_edit/class_catalog.hpp"
+#include "codol_edit/prefab.hpp"
