@@ -404,7 +404,7 @@ namespace editor::prefs
 
 	void draw_recent_menu()
 	{
-		if (!ImGui::BeginMenu("Open Recent"))
+		if (!editor::menu::begin("Open Recent"))
 		{
 			return;
 		}
@@ -420,7 +420,7 @@ namespace editor::prefs
 			const std::string label = zone ? entry.substr(5) + "   ( map of the game )" : to_utf8(std::filesystem::u8path(entry).filename());
 			ImGui::PushID(i);
 
-			if (ImGui::MenuItem(label.c_str()))
+			if (editor::menu::item(label.c_str()))
 			{
 				if (zone) { ui::open_zone(entry.substr(5)); }
 				else { ui::open_map_file(std::filesystem::u8path(entry)); }
@@ -433,19 +433,19 @@ namespace editor::prefs
 
 		if (!shown)
 		{
-			ImGui::MenuItem("( nothing yet )", nullptr, false, false);
+			editor::menu::item("( nothing yet )", nullptr, false, false);
 		}
 		else
 		{
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Clear the list"))
+			if (editor::menu::item("Clear the list"))
 			{
 				for (int i = 0; i < RECENT_COUNT; i++) { set_string(recent_name(i).c_str(), ""); }
 			}
 		}
 
-		ImGui::EndMenu();
+		editor::menu::end();
 	}
 
 	void open_window()

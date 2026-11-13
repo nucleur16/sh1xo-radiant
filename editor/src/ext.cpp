@@ -75,6 +75,7 @@ namespace editor::ext
 		colors::get(colors::grid_background);		// registers the colours
 
 		actions::register_defaults();
+		menu::register_commands();		// actions_check
 		register_window_actions();
 		textures::register_actions();
 		render_modes::register_actions();

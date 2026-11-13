@@ -1101,7 +1101,7 @@ namespace editor::ui
 	{
 		auto& s = get_scene();
 
-		if (ImGui::BeginMenu("New map"))
+		if (editor::menu::begin("New map"))
 		{
 			static std::string name = "mp_mymap";
 			ImGui::SetNextItemWidth(220.0f);
@@ -1115,31 +1115,31 @@ namespace editor::ui
 			}
 
 			ImGui::TextDisabled("saved as map_source\\<name>.map");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::MenuItem("Open map ..", "Ctrl+O"))
+		if (editor::menu::item("Open map ..", editor::menu::key("file.open")))
 		{
 			GET_GUI(ggui::codol_map_ents_dialog)->open();
 			ImGui::SetWindowFocus("Maps##window");
 		}
 
-		if (ImGui::MenuItem("Open .map .."))
+		if (editor::menu::item("Open .map .."))
 		{
 			open_map_dialog();
 		}
 
-		if (ImGui::MenuItem("Save", "Ctrl+S", false, s.open))
+		if (editor::menu::item("Save", editor::menu::key("file.save"), false, s.open))
 		{
 			save();
 		}
 
-		if (ImGui::MenuItem("Save as ..", nullptr, false, s.open))
+		if (editor::menu::item("Save as ..", nullptr, false, s.open))
 		{
 			save_as_dialog();
 		}
 
-		if (ImGui::MenuItem("Close map", nullptr, false, s.open))
+		if (editor::menu::item("Close map", nullptr, false, s.open))
 		{
 			close_map();
 		}
@@ -1148,16 +1148,16 @@ namespace editor::ui
 
 		auto* maps = GET_GUI(ggui::codol_map_ents_dialog);
 
-		if (ImGui::MenuItem("Export entities to the server", "Ctrl+E", false, s.open))
+		if (editor::menu::item("Export entities to the server", editor::menu::key("file.export"), false, s.open))
 		{
 			export_entities(maps->m_reload_after_export);
 		}
 
-		ImGui::MenuItem("Load the map on the server after the export", nullptr, &maps->m_reload_after_export);
+		editor::menu::item("Load the map on the server after the export", nullptr, &maps->m_reload_after_export);
 
 		ImGui::Separator();
 
-		if (ImGui::MenuItem("Build map ( from scratch )", nullptr, false, s.open))
+		if (editor::menu::item("Build map ( from scratch )", nullptr, false, s.open))
 		{
 			build_map(false);
 		}
@@ -1167,12 +1167,12 @@ namespace editor::ui
 			ImGui::SetTooltip("For maps of your own: compiles the whole map zone from the .map alone - collision, BSP, cells and portals,\nrender geometry and a light bake - into compiled\\<map>.ff and its load zone.");
 		}
 
-		if (ImGui::MenuItem("Build map, fast ( no light bake quality )", nullptr, false, s.open))
+		if (editor::menu::item("Build map, fast ( no light bake quality )", nullptr, false, s.open))
 		{
 			build_map(true);
 		}
 
-		if (ImGui::MenuItem("Install the built map ..", nullptr, false, s.open))
+		if (editor::menu::item("Install the built map ..", nullptr, false, s.open))
 		{
 			open_install_window();
 		}
@@ -1183,7 +1183,7 @@ namespace editor::ui
 				"folder, and - when asked for - the map into the create-room list. Replaced files are kept as backups; Uninstall undoes it.");
 		}
 
-		if (ImGui::MenuItem("Compile map to a fastfile", nullptr, false, s.open))
+		if (editor::menu::item("Compile map to a fastfile", nullptr, false, s.open))
 		{
 			compile_map();
 		}
@@ -1205,11 +1205,11 @@ namespace editor::ui
 		const std::string undo_label = open && doc.can_undo() ? "Undo " + std::string(doc.undo_name()) : "Undo";
 		const std::string redo_label = open && doc.can_redo() ? "Redo " + std::string(doc.redo_name()) : "Redo";
 
-		if (ImGui::MenuItem(undo_label.c_str(), "Ctrl+Z", false, open && doc.can_undo())) { undo(); }
-		if (ImGui::MenuItem(redo_label.c_str(), "Ctrl+Y", false, open && doc.can_redo())) { redo(); }
+		if (editor::menu::item(undo_label.c_str(), editor::menu::key("edit.undo"), false, open && doc.can_undo())) { undo(); }
+		if (editor::menu::item(redo_label.c_str(), editor::menu::key("edit.redo"), false, open && doc.can_redo())) { redo(); }
 		ImGui::Separator();
 
-		if (ImGui::MenuItem("Add gameplay entities", nullptr, false, open)) { add_gameplay_entities(); }
+		if (editor::menu::item("Add gameplay entities", nullptr, false, open)) { add_gameplay_entities(); }
 		if (ImGui::IsItemHovered())
 		{
 			ImGui::SetTooltip("Adds what the game's scripts ask of every multiplayer map and the map does not have yet:\na care package with its collision ( airdrop ) and a helicopter path ( script_origins ).");
@@ -1217,35 +1217,35 @@ namespace editor::ui
 
 		ImGui::Separator();
 
-		if (ImGui::MenuItem("Delete", "Backspace", false, any)) { delete_selection(); }
-		if (ImGui::MenuItem("Clone", "Space", false, any)) { clone_selection(); }
-		if (ImGui::MenuItem("Hide selected", "H", false, any)) { hide_selected(); }
-		if (ImGui::MenuItem("Show all", "Shift+H", false, open)) { show_all(); }
+		if (editor::menu::item("Delete", editor::menu::key("edit.delete"), false, any)) { delete_selection(); }
+		if (editor::menu::item("Clone", editor::menu::key("edit.clone"), false, any)) { clone_selection(); }
+		if (editor::menu::item("Hide selected", editor::menu::key("view.hide_selected"), false, any)) { hide_selected(); }
+		if (editor::menu::item("Show all", editor::menu::key("view.show_all"), false, open)) { show_all(); }
 		ImGui::Separator();
 
-		if (ImGui::MenuItem("Select all", "Ctrl+A", false, open)) { select_all(); }
-		if (ImGui::MenuItem("Invert selection", "I", false, open)) { invert_selection(); }
-		if (ImGui::MenuItem("Select whole entities", "Ctrl+Alt+E", false, any)) { select_whole_entities(); }
-		if (ImGui::MenuItem("Deselect", "Esc", false, any || s.inspecting)) { deselect(); }
+		if (editor::menu::item("Select all", editor::menu::key("select.all"), false, open)) { select_all(); }
+		if (editor::menu::item("Invert selection", editor::menu::key("select.invert"), false, open)) { invert_selection(); }
+		if (editor::menu::item("Select whole entities", editor::menu::key("select.whole_entities"), false, any)) { select_whole_entities(); }
+		if (editor::menu::item("Deselect", editor::menu::key("edit.escape"), false, any || s.inspecting)) { deselect(); }
 		ImGui::Separator();
 
-		if (ImGui::MenuItem("Snap to grid", "Ctrl+G", false, any)) { snap_to_grid(); }
-		if (ImGui::MenuItem("CSG subtract", nullptr, false, any)) { csg_subtract(); }
-		if (ImGui::MenuItem("CSG hollow", nullptr, false, any)) { csg_hollow(); }
-		if (ImGui::MenuItem("Make detail", "Ctrl+D", false, any)) { set_detail(true); }
-		if (ImGui::MenuItem("Make structural", "Ctrl+Shift+D", false, any)) { set_detail(false); }
-		if (ImGui::MenuItem("Connect entities", "Ctrl+K", false, any)) { connect_selected(); }
-		if (ImGui::MenuItem("Move brushes to the worldspawn", nullptr, false, any)) { move_to_worldspawn(); }
+		if (editor::menu::item("Snap to grid", editor::menu::key("edit.snap_to_grid"), false, any)) { snap_to_grid(); }
+		if (editor::menu::item("CSG subtract", nullptr, false, any)) { csg_subtract(); }
+		if (editor::menu::item("CSG hollow", nullptr, false, any)) { csg_hollow(); }
+		if (editor::menu::item("Make detail", editor::menu::key("brush.make_detail"), false, any)) { set_detail(true); }
+		if (editor::menu::item("Make structural", editor::menu::key("brush.make_structural"), false, any)) { set_detail(false); }
+		if (editor::menu::item("Connect entities", editor::menu::key("entity.connect"), false, any)) { connect_selected(); }
+		if (editor::menu::item("Move brushes to the worldspawn", nullptr, false, any)) { move_to_worldspawn(); }
 		ImGui::Separator();
 
 		bool lock = doc.texture_lock();
-		if (ImGui::MenuItem("Texture lock", "Shift+T", &lock, open)) { toggle_texture_lock(); }
+		if (editor::menu::item("Texture lock", editor::menu::key("texture.lock_toggle"), &lock, open)) { toggle_texture_lock(); }
 
 		bool clipper = st.clipper.on;
-		if (ImGui::MenuItem("Clipper ( 2D views )", "C", &clipper, open)) { set_clipper(clipper); }
+		if (editor::menu::item("Clipper ( 2D views )", editor::menu::key("tool.clipper"), &clipper, open)) { set_clipper(clipper); }
 
 		bool vertex = st.vertex_mode;
-		if (ImGui::MenuItem("Vertex / edge mode ( 2D views )", "V", &vertex, open)) { set_vertex_mode(vertex); }
+		if (editor::menu::item("Vertex / edge mode ( 2D views )", editor::menu::key("tool.vertex"), &vertex, open)) { set_vertex_mode(vertex); }
 	}
 
 	// ---- shortcuts -------------------------------------------------------------------------------------------
@@ -1261,7 +1261,7 @@ namespace editor::ui
 
 		// Every key is an action of the registry ( hotkeys.cpp: actions::register_defaults ), so that it can be given
 		// another key in Edit > Edit Hotkeys. A new shortcut is one line there:
-		//   actions::add( "edit.clone", "Clone", "Space", [] { clone_selection(); }, actions::views );
+		//   actions::add( "edit.clone", "Clone", editor::menu::key("edit.clone"), [] { clone_selection(); }, actions::views );
 		actions::process_keys();
 	}
 

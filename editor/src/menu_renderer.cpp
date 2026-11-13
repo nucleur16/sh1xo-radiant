@@ -929,31 +929,31 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
 	void draw_menu()
 	{
-		if (!ImGui::BeginMenu("Renderer"))
+		if (!editor::menu::begin("Renderer"))
 		{
 			return;
 		}
 
-		if (ImGui::BeginMenu("General"))
+		if (editor::menu::begin("General"))
 		{
 			actions::menu_item("render.outline");
 			actions::menu_item("render.tint");
 			actions::menu_item("render.connections");
 			actions::menu_item("render.angles");
 			actions::menu_item("render.model_origins");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Grid Window"))
+		if (editor::menu::begin("Grid Window"))
 		{
 			actions::menu_item("render.grid_names", "Show Names");
 			actions::menu_item("render.grid_blocks", "Show Grid Blocks");
 			actions::menu_item("render.grid_coordinates", "Draw Edge and Block Coordinates");
 			actions::menu_item("render.grid_crosshair", "Draw Crosshair");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Render Method / Features"))
+		if (editor::menu::begin("Render Method / Features"))
 		{
 			actions::menu_item("render.game_lighting");
 			actions::menu_item("render.fullbright");
@@ -962,7 +962,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			actions::menu_item("render.depth", "Depth ( of the pre-pass )");
 			ImGui::Separator();
 			actions::menu_item("render.wireframe");
-			ImGui::MenuItem("Case Textures", nullptr, false, false);
+			editor::menu::item("Case Textures", nullptr, false, false);
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { ImGui::SetTooltip("Radiant's own tool textures ( the case of a prefab ): the zones of the game have no such technique."); }
 			ImGui::Separator();
 			actions::menu_item("render.water");
@@ -978,50 +978,50 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 				ImGui::TextDisabled("%s", g_post.problem.c_str());
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Texture Filter"))
+		if (editor::menu::begin("Texture Filter"))
 		{
 			for (int i = 0; i < 5; i++)
 			{
-				if (ImGui::MenuItem(FILTER_NAMES[i], nullptr, g_state.texture_filter == i)) { g_state.texture_filter = i; }
+				if (editor::menu::item(FILTER_NAMES[i], nullptr, g_state.texture_filter == i)) { g_state.texture_filter = i; }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Texture Resolution"))
+		if (editor::menu::begin("Texture Resolution"))
 		{
 			for (int i = 0; i < 4; i++)
 			{
-				if (ImGui::MenuItem(RESOLUTION_NAMES[i], nullptr, g_state.texture_resolution == i)) { g_state.texture_resolution = i; }
+				if (editor::menu::item(RESOLUTION_NAMES[i], nullptr, g_state.texture_resolution == i)) { g_state.texture_resolution = i; }
 			}
 
 			ImGui::Separator();
 			ImGui::TextDisabled("One setting for colour, specular and normal maps:\nthe mip level every material texture is read at.");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
 		actions::menu_item("texture.reload", "Reload the project's images and materials");
 		ImGui::Separator();
 
-		if (ImGui::BeginMenu("Show Patches As"))
+		if (editor::menu::begin("Show Patches As"))
 		{
 			for (int i = 0; i < 3; i++)
 			{
-				if (ImGui::MenuItem(PATCH_NAMES[i], i == 0 ? actions::shortcut("render.patches_cycle") : nullptr, static_cast<int>(g_state.show_patches) == i)) { set_patches(static_cast<patches>(i)); }
+				if (editor::menu::item(PATCH_NAMES[i], i == 0 ? editor::menu::key("render.patches_cycle") : nullptr, static_cast<int>(g_state.show_patches) == i)) { set_patches(static_cast<patches>(i)); }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Show Entities As"))
+		if (editor::menu::begin("Show Entities As"))
 		{
 			for (int i = 0; i < 3; i++)
 			{
-				if (ImGui::MenuItem(ENTITY_NAMES[i], nullptr, static_cast<int>(g_state.show_entities) == i))
+				if (editor::menu::item(ENTITY_NAMES[i], nullptr, static_cast<int>(g_state.show_entities) == i))
 				{
 					g_state.show_entities = static_cast<entities>(i);
 					refresh_view_lines();
@@ -1030,16 +1030,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
 			ImGui::Separator();
 			ImGui::TextDisabled("Wireframe is the render method of that name.");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Light / Sun Preview"))
+		if (editor::menu::begin("Light / Sun Preview"))
 		{
 			actions::menu_item("render.light_preview", "Enable Light Preview");
 			actions::menu_item("render.sun_shadows", "Enable Sun Shadows");
 
 			const bool stage = get_scene().open && get_scene().stage;
-			if (ImGui::MenuItem("Sun Preview: rebuild the stage with the worldspawn's light", nullptr, false, stage)) { command::execute("ed_restage"); }
+			if (editor::menu::item("Sun Preview: rebuild the stage with the worldspawn's light", nullptr, false, stage)) { command::execute("ed_restage"); }
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			{
 				ImGui::SetTooltip("A map of your own is drawn in a stage with the sun, sky and ambient light of its worldspawn keys.\nA map of the game is drawn with its own baked light: there is nothing to preview.");
@@ -1052,7 +1052,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			ImGui::Separator();
 			actions::menu_item("render.light_max", "Preview At Max Intensity");
 			ImGui::TextDisabled("%d light( s ) in the list. Selected lights are always previewed;\nthe radius and cone of a selected light are drawn as lines.", static_cast<int>(g_preview_lights.size()));
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
@@ -1061,7 +1061,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		actions::menu_item("render.cubic_shrink");
 		ImGui::SetNextItemWidth(220.0f);
 		ImGui::SliderFloat("##cubic_distance", &g_state.cubic_distance, 256.0f, 65536.0f, "cube: %.0f units", ImGuiSliderFlags_Logarithmic);
-		ImGui::EndMenu();
+		editor::menu::end();
 	}
 
 	// ---- windows ---------------------------------------------------------------------------------------------------

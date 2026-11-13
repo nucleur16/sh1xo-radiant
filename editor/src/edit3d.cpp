@@ -1755,33 +1755,46 @@ namespace editor::edit3d
 		}
 	}
 
+	// the key of an action as the hint lines say it: as it is bound now ( "-" when it has none )
+	std::string key_of(const char* id)
+	{
+		const char* k = actions::shortcut(id);
+		return k ? k : "-";
+	}
+
 	const char* hint()
 	{
+		const auto k = [](const char* id) { return key_of(id); };
+
 		switch (current())
 		{
 		case tool::vertex:
 		case tool::edge:
 			g.hint_text = current() == tool::edge ? "EDGES" : "VERTICES";
 			g.hint_text += "    Click a handle: select ( Ctrl / Shift adds )    Shift drag: handles in the rectangle    Drag a handle: move on the grid ( Alt: along the third axis )\n"
-				"Arrows of the gizmo: along one axis    E: edges / vertices    V: leave    Esc: deselect handles    Ctrl+Z: undo    Right drag: look + W A S D";
+				"Arrows of the gizmo: along one axis    " + k("tool.edge_mode") + ": edges / vertices    " + k("tool.vertex") + ": leave    " + k("edit.escape_3d")
+				+ ": deselect handles    " + k("edit.undo") + ": undo    Right drag: look + W A S D";
 			break;
 
 		case tool::clip:
-			g.hint_text = "CLIPPER    Click on a surface: a clip point ( two or three; drag to move them )    Enter: clip, the side of the arrow stays\n"
-				"Ctrl+Enter: keep the other side    Shift+Enter: split    Esc: remove the points / leave    Right drag: look + W A S D";
+			g.hint_text = "CLIPPER    Click on a surface: a clip point ( two or three; drag to move them )    " + k("clip.apply") + ": clip, the side of the arrow stays\n"
+				+ k("clip.apply_back") + ": keep the other side    " + k("clip.split") + ": split    " + k("edit.escape") + ": remove the points / leave    Right drag: look + W A S D";
 			break;
 
 		case tool::create:
 			g.hint_text = "CREATE ";
 			g.hint_text += primitive_name(g.prim);
 			g.hint_text += "    Drag on a surface: the base of a new brush, as high as the last selection    Then drag the squares on its box to size it\n"
-				"Click: select    B / Esc: leave    Right drag: look + W A S D";
+				"Click: select    " + k("tool.create_toggle") + " / " + k("edit.escape_3d") + ": leave    Right drag: look + W A S D";
 			break;
 
 		default:
-			g.hint_text = "Click: select ( Ctrl / Shift adds, both: face, Alt: what is behind )    Shift drag: select in the rectangle    Right click: create entity    Space: clone\n"
+			g.hint_text = "Click: select ( Ctrl / Shift adds, both: face, Alt: what is behind )    Shift drag: select in the rectangle    Right click: create entity    "
+				+ k("edit.clone") + ": clone\n"
 				"Drag the selection: move    Drag next to a brush: its faces on that side    Squares: resize    Drag a selected face: along its normal\n"
-				"V vertices   C clipper   B create   W E R gizmo   Arrows: nudge   Shift / Ctrl+Arrows, Shift+PgUp / PgDn: texture shift / scale / rotate   Right drag: look + W A S D";
+				+ k("tool.vertex") + " vertices   " + k("tool.clipper") + " clipper   " + k("tool.create_toggle") + " create   " + k("gizmo.move") + " " + k("gizmo.rotate") + " "
+				+ k("gizmo.scale") + " gizmo   " + k("edit.nudge_left") + " / " + k("edit.nudge_right") + " / " + k("edit.nudge_up") + " / " + k("edit.nudge_down") + ": nudge   "
+				+ k("texture.shift_left") + " / " + k("texture.scale_h_up") + " / " + k("texture.rotate_ccw") + " ..: texture shift / scale / rotate   Right drag: look + W A S D";
 			break;
 		}
 

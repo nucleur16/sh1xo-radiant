@@ -668,7 +668,7 @@ namespace editor::ui
 		// a menu item that says why it is grey
 		bool item(const char* label, const char* shortcut, const bool enabled, const char* why, const char* tip = nullptr)
 		{
-			const bool clicked = ImGui::MenuItem(label, shortcut, false, enabled);
+			const bool clicked = editor::menu::item(label, shortcut, false, enabled);
 
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			{
@@ -681,7 +681,7 @@ namespace editor::ui
 
 		bool toggle(const char* label, bool& value, const char* tip)
 		{
-			const bool clicked = ImGui::MenuItem(label, nullptr, &value);
+			const bool clicked = editor::menu::item(label, nullptr, &value);
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tip); }
 			return clicked;
 		}
@@ -827,15 +827,15 @@ namespace editor::ui
 			g.show_brush = true;
 		}
 
-		if (ImGui::BeginMenu("N Sided", can))
+		if (editor::menu::begin("N Sided", can))
 		{
 			for (int n = 3; n <= 9; n++)
 			{
 				const std::string label = std::to_string(n) + " sides";
-				if (ImGui::MenuItem(label.c_str())) { make_brush(brush_shape::prism, n, g.axis); }
+				if (editor::menu::item(label.c_str())) { make_brush(brush_shape::prism, n, g.axis); }
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		if (item("Cone ..", nullptr, can, why)) { g.brush_shape_index = static_cast<int>(brush_shape::cone); g.show_brush = true; }
@@ -867,7 +867,7 @@ namespace editor::ui
 		const char* why_curve = open ? NO_CURVE : NO_MAP;
 		const char* why_terrain = open ? NO_TERRAIN : NO_MAP;
 
-		if (item("Simple Curve Patch ..", "Shift+P", box, why_box)) { g.show_simple = true; g.simple_terrain = false; }
+		if (item("Simple Curve Patch ..", editor::menu::key("patch.simple_curve"), box, why_box)) { g.show_simple = true; g.simple_terrain = false; }
 		if (item("Simple Terrain Patch ..", nullptr, box, why_box)) { g.show_simple = true; g.simple_terrain = true; }
 		if (item("Curve To Terrain", nullptr, curve, why_curve, "The selected curves become terrain meshes with the vertices they are drawn with.")) { done(edit::curve_to_terrain(doc), "Curve to terrain"); }
 		if (item("Faces To Terrain", nullptr, open && (info.brushes > 0 || info.faces > 0), open ? "Select brushes or brush faces." : NO_MAP,
@@ -878,7 +878,7 @@ namespace editor::ui
 
 		ImGui::Separator();
 
-		if (ImGui::BeginMenu("Primitives"))
+		if (editor::menu::begin("Primitives"))
 		{
 			for (int i = 0; i < static_cast<int>(std::size(PATCH_SHAPE_LABELS)); i++)
 			{
@@ -891,46 +891,46 @@ namespace editor::ui
 			ImGui::SameLine();
 			axis_radio(g.axis, false);
 			ImGui::Checkbox("Delete the brush the box came from", &g.delete_original);
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		ImGui::Separator();
 
 		if (item("Vert Edit Dialog", nullptr, open, NO_MAP, "Vertex colours and noise.")) { g.show_vertex = true; }
-		if (item("Advanced Edit Dialog", "Shift+S", open, NO_MAP, "The control points of the selected patch as a table: select rows and columns, edit positions and texture coordinates.")) { g.show_advanced = true; }
+		if (item("Advanced Edit Dialog", editor::menu::key("patch.advanced_edit"), open, NO_MAP, "The control points of the selected patch as a table: select rows and columns, edit positions and texture coordinates.")) { g.show_advanced = true; }
 		ImGui::Separator();
 
-		if (ImGui::BeginMenu("Insert"))
+		if (editor::menu::begin("Insert"))
 		{
 			if (item("Insert 2 Columns", nullptr, any, why_any, "At the start ( or in the segment of the selected vertices ); a curve keeps its shape.")) { op_insert(patch_line::column, false); }
 			if (item("Insert 2 Rows", nullptr, any, why_any)) { op_insert(patch_line::row, false); }
-			if (item("Add 2 Columns", "Ctrl+Shift+Num +", any, why_any, "At the end.")) { op_insert(patch_line::column, true); }
-			if (item("Add 2 Rows", "Ctrl+Num +", any, why_any)) { op_insert(patch_line::row, true); }
+			if (item("Add 2 Columns", editor::menu::key("patch.add_columns"), any, why_any, "At the end.")) { op_insert(patch_line::column, true); }
+			if (item("Add 2 Rows", editor::menu::key("patch.add_rows"), any, why_any)) { op_insert(patch_line::row, true); }
 			if (item("Add Terrain Row / Column", nullptr, terrain, why_terrain, "One line after the row / column of the selected vertices; without them a column in the last cell.")) { op_terrain_add(); }
 			if (item("Extrude Terrain Row", nullptr, terrain, why_terrain, "One more line beyond the edge the selected vertices lie on; without them beyond the last row.")) { op_extrude(); }
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Delete"))
+		if (editor::menu::begin("Delete"))
 		{
-			if (item("First 2 Columns", "Ctrl+Shift+Num -", any, why_any)) { done(edit::patch_delete(doc, patch_line::column, false), "Delete first 2 columns"); }
-			if (item("First 2 Rows", "Ctrl+Num -", any, why_any)) { done(edit::patch_delete(doc, patch_line::row, false), "Delete first 2 rows"); }
-			if (item("Last 2 Columns", nullptr, any, why_any)) { done(edit::patch_delete(doc, patch_line::column, true), "Delete last 2 columns"); }
-			if (item("Last 2 Rows", nullptr, any, why_any)) { done(edit::patch_delete(doc, patch_line::row, true), "Delete last 2 rows"); }
+			if (item("First 2 Columns", nullptr, any, why_any)) { done(edit::patch_delete(doc, patch_line::column, false), "Delete first 2 columns"); }
+			if (item("First 2 Rows", nullptr, any, why_any)) { done(edit::patch_delete(doc, patch_line::row, false), "Delete first 2 rows"); }
+			if (item("Last 2 Columns", editor::menu::key("patch.delete_columns"), any, why_any)) { done(edit::patch_delete(doc, patch_line::column, true), "Delete last 2 columns"); }
+			if (item("Last 2 Rows", editor::menu::key("patch.delete_rows"), any, why_any)) { done(edit::patch_delete(doc, patch_line::row, true), "Delete last 2 rows"); }
 			if (item("Remove Terrain Row / Column", nullptr, terrain, why_terrain, "The row / column of the selected vertices; without them the last column.")) { op_terrain_remove(); }
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Matrix"))
+		if (editor::menu::begin("Matrix"))
 		{
-			if (item("Transpose", "Ctrl+Shift+M", any, why_any, "Rows become columns; the patch then faces the other way.")) { done(edit::patch_transpose(doc), "Transpose patch"); }
+			if (item("Transpose", editor::menu::key("patch.transpose"), any, why_any, "Rows become columns; the patch then faces the other way.")) { done(edit::patch_transpose(doc), "Transpose patch"); }
 			if (item("Re-disperse Vertices", nullptr, any, why_any, "Even spacing along the lines the control points form, both ways.")) { done(edit::patch_redisperse(doc, edit::patch_disperse::vertices), "Redisperse vertices"); }
 			if (item("Re-disperse Columns", nullptr, any, why_any, "The columns evenly on the straight line from the first to the last.")) { done(edit::patch_redisperse(doc, edit::patch_disperse::columns), "Redisperse columns"); }
 			if (item("Re-disperse Rows", nullptr, any, why_any)) { done(edit::patch_redisperse(doc, edit::patch_disperse::rows), "Redisperse rows"); }
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Weld"))
+		if (editor::menu::begin("Weld"))
 		{
 			if (item("Connect Selection / Weld", nullptr, any, why_any, "Vertices of the selected patches that lie closer together than the tolerance become one place.")) { done(edit::patch_weld(doc, weld_tolerance()), "Weld patches"); }
 			if (item("Weld to Brush Vertices", nullptr, any, why_any, "Vertices of the selected patches move onto brush corners within the tolerance.")) { done(edit::patch_weld_to_brushes(doc, weld_tolerance()), "Weld to brushes"); }
@@ -939,15 +939,15 @@ namespace editor::ui
 			toggle("Weld Equal Patch Points During Moves", g.weld_moves, "A vertex dragged in a 2D view takes along every vertex of the selected patches in the same place\n( the seam of a cylinder, the edge two patches share ).");
 			item("Weld to Model Vertices", nullptr, false, "Not available: the editor does not read the vertices of placed models for snapping yet.");
 			item("Weld to Prefab Vertices", nullptr, false, "Not available: prefabs are not expanded into editable geometry.");
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		if (item("Inc Subdivision", nullptr, curve, why_curve, "Curve patches: more triangles ( in the views and in the compiled map ).")) { done(edit::patch_change_subdivision(doc, 1), "Increase subdivision"); }
 		if (item("Dec Subdivision", nullptr, curve, why_curve, "Curve patches: fewer triangles.")) { done(edit::patch_change_subdivision(doc, -1), "Decrease subdivision"); }
 		if (item("Split", nullptr, any, why_any, "Two patches: at the row / column of the selected vertices, else in the middle along the columns.")) { op_split(); }
-		if (item("Invert", "Ctrl+I", any, why_any, "The patch faces the other way.")) { done(edit::patch_invert(doc), "Invert patch"); }
-		if (item("Thicken ..", "Ctrl+T", any, why_any)) { g.show_thicken = true; }
-		if (item("Cap ..", "Shift+C", curve, why_curve)) { g.show_cap = true; }
+		if (item("Invert", editor::menu::key("patch.invert"), any, why_any, "The patch faces the other way.")) { done(edit::patch_invert(doc), "Invert patch"); }
+		if (item("Thicken ..", editor::menu::key("patch.thicken"), any, why_any)) { g.show_thicken = true; }
+		if (item("Cap ..", editor::menu::key("patch.cap"), curve, why_curve)) { g.show_cap = true; }
 		ImGui::Separator();
 
 		if (item("Turn Terrain Edges", nullptr, terrain, why_terrain, "Turns the diagonal of the quads the selected vertices start; without them of every quad.")) { op_turn_edges(); }
@@ -955,10 +955,10 @@ namespace editor::ui
 		if (item("Unlock Vertices", nullptr, any, why_any, "Unlocks the selected vertices; without a selection all of the patch.")) { lock_vertices(false, false); }
 		ImGui::Separator();
 
-		if (item("Cycle Cap Texture", "Ctrl+Shift+P", any, why_any, "Projects the texture along the next world axis.")) { done(edit::patch_cycle_cap_texture(doc), "Cycle cap texture"); }
+		if (item("Cycle Cap Texture", editor::menu::key("patch.cycle_cap_texture"), any, why_any, "Projects the texture along the next world axis.")) { done(edit::patch_cycle_cap_texture(doc), "Cycle cap texture"); }
 		if (item("Cap Texture", nullptr, any, why_any, "Projects the texture flat onto the patch, along the axis it faces most.")) { done(edit::patch_cap_texture(doc), "Cap texture"); }
 		if (item("Natural Texture", nullptr, any, why_any, "The texture follows the surface at radiant's default scale.")) { done(edit::patch_natural_texture(doc), "Natural texture"); }
-		if (item("Fit Texture", nullptr, any, why_any, "The texture covers the patch once.")) { done(edit::patch_fit_texture(doc), "Fit texture"); }
+		if (item("Fit Texture", editor::menu::key("texture.fit"), any, why_any, "The texture covers the patch once.")) { done(edit::patch_fit_texture(doc), "Fit texture"); }
 		ImGui::Separator();
 
 		// the toolbar toggles of radiant

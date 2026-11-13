@@ -1483,7 +1483,7 @@ namespace editor::ui::ext
 
 		void not_applicable(const char* label, const char* why)
 		{
-			ImGui::MenuItem(label, nullptr, false, false);
+			editor::menu::item(label, nullptr, false, false);
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 			{
 				ImGui::SetTooltip("%s", why);
@@ -1499,121 +1499,121 @@ namespace editor::ui::ext
 			const bool open = s.open;
 			const bool any = open && !doc.selection().empty();
 
-			if (ImGui::BeginMenu("Select"))
+			if (editor::menu::begin("Select"))
 			{
-				if (ImGui::MenuItem("Select Targetname", nullptr, false, open)) { select_same("targetname"); }
+				if (editor::menu::item("Select Targetname", nullptr, false, open)) { select_same("targetname"); }
 				if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Every entity with the targetname of the selected one ( asks when nothing is selected )."); }
-				if (ImGui::MenuItem("Select Classname", nullptr, false, open)) { select_same("classname"); }
-				if (ImGui::MenuItem("Select By Key / Value ..", "Ctrl+Shift+F", false, open)) { st.open_key_value = true; }
-				if (ImGui::MenuItem("Select Connected", "Ctrl+Shift+C", false, any)) { select_connected(); }
+				if (editor::menu::item("Select Classname", nullptr, false, open)) { select_same("classname"); }
+				if (editor::menu::item("Select By Key / Value ..", editor::menu::key("select.key_value"), false, open)) { st.open_key_value = true; }
+				if (editor::menu::item("Select Connected", editor::menu::key("select.connected"), false, any)) { select_connected(); }
 				ImGui::Separator();
-				if (ImGui::MenuItem("Select Complete Tall", nullptr, false, any)) { select_volume(edit::volume_select::complete_tall); }
-				if (ImGui::MenuItem("Select Partial Tall", nullptr, false, any)) { select_volume(edit::volume_select::partial_tall); }
-				if (ImGui::MenuItem("Select Touching", nullptr, false, any)) { select_volume(edit::volume_select::touching); }
-				if (ImGui::MenuItem("Select Inside", nullptr, false, any)) { select_volume(edit::volume_select::inside); }
+				if (editor::menu::item("Select Complete Tall", nullptr, false, any)) { select_volume(edit::volume_select::complete_tall); }
+				if (editor::menu::item("Select Partial Tall", nullptr, false, any)) { select_volume(edit::volume_select::partial_tall); }
+				if (editor::menu::item("Select Touching", nullptr, false, any)) { select_volume(edit::volume_select::touching); }
+				if (editor::menu::item("Select Inside", nullptr, false, any)) { select_volume(edit::volume_select::inside); }
 				ImGui::Separator();
-				if (ImGui::MenuItem("Select All", "Ctrl+A", false, open)) { select_all(); }
-				if (ImGui::MenuItem("Select Whole Entities", "Ctrl+Alt+E", false, any)) { select_whole_entities(); }
-				ImGui::EndMenu();
+				if (editor::menu::item("Select All", editor::menu::key("select.all"), false, open)) { select_all(); }
+				if (editor::menu::item("Select Whole Entities", editor::menu::key("select.whole_entities"), false, any)) { select_whole_entities(); }
+				editor::menu::end();
 			}
 
-			if (ImGui::MenuItem("Deselect", "Esc", false, any)) { deselect(); }
-			if (ImGui::MenuItem("Clone", "Space", false, any)) { clone_selection(); }
-			if (ImGui::MenuItem("Invert", "I", false, open)) { invert_selection(); }
-			if (ImGui::MenuItem("Delete", "Backspace", false, any)) { delete_selection(); }
+			if (editor::menu::item("Deselect", editor::menu::key("edit.escape"), false, any)) { deselect(); }
+			if (editor::menu::item("Clone", editor::menu::key("edit.clone"), false, any)) { clone_selection(); }
+			if (editor::menu::item("Invert", editor::menu::key("select.invert"), false, open)) { invert_selection(); }
+			if (editor::menu::item("Delete", editor::menu::key("edit.delete"), false, any)) { delete_selection(); }
 			ImGui::Separator();
 
-			if (ImGui::BeginMenu("Flip", any))
+			if (editor::menu::begin("Flip", any))
 			{
-				if (ImGui::MenuItem("Flip X")) { flip(0); }
-				if (ImGui::MenuItem("Flip Y")) { flip(1); }
-				if (ImGui::MenuItem("Flip Z")) { flip(2); }
-				ImGui::EndMenu();
+				if (editor::menu::item("Flip X")) { flip(0); }
+				if (editor::menu::item("Flip Y")) { flip(1); }
+				if (editor::menu::item("Flip Z")) { flip(2); }
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Rotate", open))
+			if (editor::menu::begin("Rotate", open))
 			{
-				if (ImGui::MenuItem("Rotate X", nullptr, false, any)) { rotate(0, 90.0); }
-				if (ImGui::MenuItem("Rotate Y", nullptr, false, any)) { rotate(1, 90.0); }
-				if (ImGui::MenuItem("Rotate Z", "Shift+D", false, any)) { rotate(2, 90.0); }
-				if (ImGui::MenuItem("Free Rotation", "R", ust.gizmo == gizmo_tool::rotate)) { ust.gizmo = ust.gizmo == gizmo_tool::rotate ? gizmo_tool::move : gizmo_tool::rotate; }
-				if (ImGui::MenuItem("Arbitrary Rotation ..")) { st.open_rotate = true; }
-				ImGui::EndMenu();
+				if (editor::menu::item("Rotate X", nullptr, false, any)) { rotate(0, 90.0); }
+				if (editor::menu::item("Rotate Y", nullptr, false, any)) { rotate(1, 90.0); }
+				if (editor::menu::item("Rotate Z", editor::menu::key("select.rotate_z"), false, any)) { rotate(2, 90.0); }
+				if (editor::menu::item("Free Rotation", editor::menu::key("gizmo.rotate_toggle"), ust.gizmo == gizmo_tool::rotate)) { ust.gizmo = ust.gizmo == gizmo_tool::rotate ? gizmo_tool::move : gizmo_tool::rotate; }
+				if (editor::menu::item("Arbitrary Rotation ..")) { st.open_rotate = true; }
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Scale", open))
+			if (editor::menu::begin("Scale", open))
 			{
-				ImGui::MenuItem("Lock X", nullptr, &st.scale_lock[0]);
-				ImGui::MenuItem("Lock Y", nullptr, &st.scale_lock[1]);
-				ImGui::MenuItem("Lock Z", nullptr, &st.scale_lock[2]);
-				if (ImGui::MenuItem("Free Scaling", nullptr, ust.gizmo == gizmo_tool::scale)) { ust.gizmo = ust.gizmo == gizmo_tool::scale ? gizmo_tool::move : gizmo_tool::scale; }
-				if (ImGui::MenuItem("Arbitrary Scale ..")) { st.open_scale = true; }
-				ImGui::EndMenu();
+				editor::menu::item("Lock X", nullptr, &st.scale_lock[0]);
+				editor::menu::item("Lock Y", nullptr, &st.scale_lock[1]);
+				editor::menu::item("Lock Z", nullptr, &st.scale_lock[2]);
+				if (editor::menu::item("Free Scaling", nullptr, ust.gizmo == gizmo_tool::scale)) { ust.gizmo = ust.gizmo == gizmo_tool::scale ? gizmo_tool::move : gizmo_tool::scale; }
+				if (editor::menu::item("Arbitrary Scale ..")) { st.open_scale = true; }
+				editor::menu::end();
 			}
 
-			if (ImGui::MenuItem("Gizmo: World / Local", nullptr, !ust.gizmo_world)) { ust.gizmo_world = !ust.gizmo_world; }
+			if (editor::menu::item("Gizmo: World / Local", nullptr, !ust.gizmo_world)) { ust.gizmo_world = !ust.gizmo_world; }
 			ImGui::Separator();
 
-			if (ImGui::BeginMenu("CSG", open))
+			if (editor::menu::begin("CSG", open))
 			{
-				if (ImGui::MenuItem("Hollow", nullptr, false, any)) { csg_hollow(); }
-				if (ImGui::MenuItem("Subtract", nullptr, false, any)) { csg_subtract(); }
-				if (ImGui::MenuItem("Merge", "Ctrl+U", false, any)) { report(doc.csg_merge(), "CSG merge"); }
+				if (editor::menu::item("Hollow", nullptr, false, any)) { csg_hollow(); }
+				if (editor::menu::item("Subtract", nullptr, false, any)) { csg_subtract(); }
+				if (editor::menu::item("Merge", editor::menu::key("csg.merge"), false, any)) { report(doc.csg_merge(), "CSG merge"); }
 				if (ImGui::IsItemHovered()) { ImGui::SetTooltip("One brush out of the selected ones, when together they are convex."); }
-				if (ImGui::MenuItem("Auto Caulk", "Alt+C", false, any)) { auto_caulk(false); }
+				if (editor::menu::item("Auto Caulk", editor::menu::key("csg.auto_caulk"), false, any)) { auto_caulk(false); }
 				if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Faces of the selected brushes that other brushes cover completely get the material \"caulk\"."); }
-				if (ImGui::MenuItem("Auto Caulk The Whole Map")) { auto_caulk(true); }
-				ImGui::EndMenu();
+				if (editor::menu::item("Auto Caulk The Whole Map")) { auto_caulk(true); }
+				editor::menu::end();
 			}
 
-			if (ImGui::BeginMenu("Clipper", open))
+			if (editor::menu::begin("Clipper", open))
 			{
 				bool clipper = ust.clipper.on;
-				if (ImGui::MenuItem("Toggle Clipper", "C", &clipper)) { set_clipper(clipper); }
-				if (ImGui::MenuItem("Clip Selected", "Enter", false, ust.clipper.on)) { apply_clip(0); }
-				if (ImGui::MenuItem("Split Selected", "Shift+Enter", false, ust.clipper.on)) { apply_clip(2); }
-				if (ImGui::MenuItem("Clip, Other Side ( flip )", "Ctrl+Enter", false, ust.clipper.on)) { apply_clip(1); }
-				ImGui::EndMenu();
+				if (editor::menu::item("Toggle Clipper", editor::menu::key("tool.clipper"), &clipper)) { set_clipper(clipper); }
+				if (editor::menu::item("Clip Selected", editor::menu::key("clip.apply"), false, ust.clipper.on)) { apply_clip(0); }
+				if (editor::menu::item("Split Selected", editor::menu::key("clip.split"), false, ust.clipper.on)) { apply_clip(2); }
+				if (editor::menu::item("Clip, Other Side ( flip )", editor::menu::key("clip.apply_back"), false, ust.clipper.on)) { apply_clip(1); }
+				editor::menu::end();
 			}
 
 			ImGui::Separator();
 
-			if (ImGui::BeginMenu("Prefabs", open))
+			if (editor::menu::begin("Prefabs", open))
 			{
 				draw_prefab_menu_items();
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 
 			ImGui::Separator();
-			if (ImGui::MenuItem("Connect Entities", "Ctrl+K", false, any)) { connect_selected(); }
-			if (ImGui::MenuItem("Link Entities", nullptr, false, any)) { report(doc.move_selection_to_entity(), "Link"); }
+			if (editor::menu::item("Connect Entities", editor::menu::key("entity.connect"), false, any)) { connect_selected(); }
+			if (editor::menu::item("Link Entities", nullptr, false, any)) { report(doc.move_selection_to_entity(), "Link"); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("The selected brushes join the brush entity that has a brush in the selection."); }
-			if (ImGui::MenuItem("Ungroup Entity", nullptr, false, any)) { move_to_worldspawn(); }
-			if (ImGui::MenuItem("Cycle Group Selection", "Tab", false, any)) { report(doc.select_next_in_group(1), "Cycle group"); }
+			if (editor::menu::item("Ungroup Entity", nullptr, false, any)) { move_to_worldspawn(); }
+			if (editor::menu::item("Cycle Group Selection", editor::menu::key("select.next_in_group"), false, any)) { report(doc.select_next_in_group(1), "Cycle group"); }
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Make Detail", "Ctrl+D", false, any)) { set_detail(true); }
-			if (ImGui::MenuItem("Make Structural", "Ctrl+Shift+D", false, any)) { set_detail(false); }
-			if (ImGui::MenuItem("Make Weapon Clip", "Ctrl+Shift+W", any && all_have("weaponClip", false), any)) { toggle_content("weaponClip", "Weapon clip"); }
+			if (editor::menu::item("Make Detail", editor::menu::key("brush.make_detail"), false, any)) { set_detail(true); }
+			if (editor::menu::item("Make Structural", editor::menu::key("brush.make_structural"), false, any)) { set_detail(false); }
+			if (editor::menu::item("Make Weapon Clip", editor::menu::key("brush.weapon_clip"), any && all_have("weaponClip", false), any)) { toggle_content("weaponClip", "Weapon clip"); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("\"contents weaponClip;\": the brush stops bullets and grenades, players walk through it. Again: off."); }
-			if (ImGui::MenuItem("Make Non-Colliding", "Ctrl+Shift+-", any && all_have("nonColliding", false), any)) { toggle_content("nonColliding", "Non-colliding"); }
+			if (editor::menu::item("Make Non-Colliding", editor::menu::key("brush.non_colliding"), any && all_have("nonColliding", false), any)) { toggle_content("nonColliding", "Non-colliding"); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("\"contents nonColliding;\": drawn, but nothing collides with it. Again: off."); }
 			ImGui::Separator();
-			if (ImGui::MenuItem("Make Split Coplanar Geo", nullptr, any && all_have("splitGeo", true), any)) { report(doc.set_tool_flag("splitGeo", true), "Split coplanar"); }
+			if (editor::menu::item("Make Split Coplanar Geo", nullptr, any && all_have("splitGeo", true), any)) { report(doc.set_tool_flag("splitGeo", true), "Split coplanar"); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("\"toolFlags splitGeo;\" - kept in the .map; codol_bsp does not merge coplanar faces of different brushes, so it changes nothing there."); }
-			if (ImGui::MenuItem("Make Don't Split Coplanar Geo", nullptr, false, any)) { report(doc.set_tool_flag("splitGeo", false), "Don't split coplanar"); }
+			if (editor::menu::item("Make Don't Split Coplanar Geo", nullptr, false, any)) { report(doc.set_tool_flag("splitGeo", false), "Don't split coplanar"); }
 			ImGui::Separator();
 
-			if (ImGui::BeginMenu("Don't Select"))
+			if (editor::menu::begin("Don't Select"))
 			{
 				// the same switches as in the Filter window
 				auto filter = doc.current_select_filter();
 				bool changed = false;
-				changed |= ImGui::MenuItem("Curves / Terrain", nullptr, &filter.curves);
-				changed |= ImGui::MenuItem("Entities", nullptr, &filter.entities);
-				changed |= ImGui::MenuItem("Sky", nullptr, &filter.sky);
-				changed |= ImGui::MenuItem("Models", nullptr, &filter.models);
-				changed |= ImGui::MenuItem("World Brushes", nullptr, &filter.brushes);
+				changed |= editor::menu::item("Curves / Terrain", nullptr, &filter.curves);
+				changed |= editor::menu::item("Entities", nullptr, &filter.entities);
+				changed |= editor::menu::item("Sky", nullptr, &filter.sky);
+				changed |= editor::menu::item("Models", nullptr, &filter.models);
+				changed |= editor::menu::item("World Brushes", nullptr, &filter.brushes);
 
 				if (changed)
 				{
@@ -1624,7 +1624,7 @@ namespace editor::ui::ext
 					command::execute(std::string("ed_noselect brushes ") + (filter.brushes ? "1" : "0"));
 				}
 
-				ImGui::EndMenu();
+				editor::menu::end();
 			}
 		}
 
@@ -1639,19 +1639,23 @@ namespace editor::ui::ext
 				char label[32];
 				std::snprintf(label, sizeof(label), "Grid %g", sizes[i]);
 
-				if (ImGui::MenuItem(label, keys[i], s.grid == sizes[i]))
+				char id[32];
+				std::snprintf(id, sizeof(id), "grid.set_%g", sizes[i]);
+
+				// the keys of the grid sizes are actions ( ext.cpp ); 0.25 has none
+				if (editor::menu::item(label, actions::find(id) ? editor::menu::key(id) : nullptr, s.grid == sizes[i]))
 				{
 					s.set_grid(sizes[i]);
 				}
 			}
 
 			ImGui::Separator();
-			if (ImGui::MenuItem("Smaller", "[")) { grid_smaller(); }
-			if (ImGui::MenuItem("Larger", "]")) { grid_larger(); }
+			if (editor::menu::item("Smaller", editor::menu::key("grid.smaller"))) { grid_smaller(); }
+			if (editor::menu::item("Larger", editor::menu::key("grid.larger"))) { grid_larger(); }
 			ImGui::Separator();
-			ImGui::MenuItem("Snap To Grid", nullptr, &s.snap);
-			if (ImGui::MenuItem("Snap Selection To Grid", "Ctrl+G", false, s.open && !s.doc.selection().empty())) { snap_to_grid(); }
-			ImGui::MenuItem("Show Grid Blocks ( 1024 )", nullptr, &get().show_grid_blocks);
+			editor::menu::item("Snap To Grid", editor::menu::key("grid.snap"), &s.snap);
+			if (editor::menu::item("Snap Selection To Grid", editor::menu::key("edit.snap_to_grid"), false, s.open && !s.doc.selection().empty())) { snap_to_grid(); }
+			editor::menu::item("Show Grid Blocks ( 1024 )", nullptr, &get().show_grid_blocks);
 		}
 
 		void draw_misc_menu()
@@ -1661,19 +1665,19 @@ namespace editor::ui::ext
 			const bool open = s.open;
 			const bool any = open && !s.doc.selection().empty();
 
-			if (ImGui::MenuItem("Find Brush ..", nullptr, false, open)) { st.open_find = true; }
-			if (ImGui::MenuItem("Go To Position ..", nullptr, false, open)) { st.open_goto = true; }
-			if (ImGui::MenuItem("-> Leak Spot / Error", "Ctrl+Alt+K", false, open)) { step_spot(1); }
-			if (ImGui::MenuItem("<- Leak Spot / Error", "Ctrl+Alt+L", false, open)) { step_spot(-1); }
+			if (editor::menu::item("Find Brush ..", nullptr, false, open)) { st.open_find = true; }
+			if (editor::menu::item("Go To Position ..", nullptr, false, open)) { st.open_goto = true; }
+			if (editor::menu::item("-> Leak Spot / Error", editor::menu::key("misc.next_leak"), false, open)) { step_spot(1); }
+			if (editor::menu::item("<- Leak Spot / Error", editor::menu::key("misc.previous_leak"), false, open)) { step_spot(-1); }
 			ImGui::Separator();
-			if (ImGui::MenuItem("Entity Color ..", "K", false, open)) { st.open_color = true; }
-			if (ImGui::MenuItem("Models Replace ..", nullptr, false, open)) { st.open_model_replace = true; }
-			if (ImGui::MenuItem("Cycle Preview Models", nullptr, false, open)) { cycle_model_filter(); }
+			if (editor::menu::item("Entity Color ..", editor::menu::key("entity.color"), false, open)) { st.open_color = true; }
+			if (editor::menu::item("Models Replace ..", nullptr, false, open)) { st.open_model_replace = true; }
+			if (editor::menu::item("Cycle Preview Models", nullptr, false, open)) { cycle_model_filter(); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Models shown / hidden ( the \"Models\" switch of the Filter window )."); }
 			ImGui::Separator();
-			if (ImGui::MenuItem("Drop Selected To Floor", nullptr, false, any)) { drop_to_floor(st.orient_to_floor); }
-			ImGui::MenuItem("Orient To Floor When Dropping", nullptr, &st.orient_to_floor);
-			ImGui::MenuItem("Plant New Models", nullptr, &st.plant_models);
+			if (editor::menu::item("Drop Selected To Floor", nullptr, false, any)) { drop_to_floor(st.orient_to_floor); }
+			editor::menu::item("Orient To Floor When Dropping", nullptr, &st.orient_to_floor);
+			editor::menu::item("Plant New Models", nullptr, &st.plant_models);
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("A model that is placed ( Models window, ed_place ) falls onto the brush or terrain below it."); }
 			ImGui::Separator();
 			not_applicable("Script Group Dialog", "Not applicable: no shipped CoDOL map has a script_group key. Use Selection > Select > By Key / Value for script_noteworthy, script_gameobjectname ..");
@@ -1688,20 +1692,20 @@ namespace editor::ui::ext
 			const bool open = s.open;
 			const bool any = open && !s.doc.selection().empty();
 
-			if (ImGui::MenuItem("Region Off", nullptr, false, open && s.doc.has_region())) { region_off(); }
-			if (ImGui::MenuItem("Set XY", nullptr, false, open)) { region_xy(); }
+			if (editor::menu::item("Region Off", nullptr, false, open && s.doc.has_region())) { region_off(); }
+			if (editor::menu::item("Set XY", nullptr, false, open)) { region_xy(); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("What the top view shows, at any height."); }
-			if (ImGui::MenuItem("Set Tall Brush", nullptr, false, any)) { region_from_selection(true, false); }
-			if (ImGui::MenuItem("Set Brush", nullptr, false, any)) { region_from_selection(false, false); }
-			if (ImGui::MenuItem("Set Selected Brush", nullptr, false, any)) { region_from_selection(false, true); }
+			if (editor::menu::item("Set Tall Brush", nullptr, false, any)) { region_from_selection(true, false); }
+			if (editor::menu::item("Set Brush", nullptr, false, any)) { region_from_selection(false, false); }
+			if (editor::menu::item("Set Selected Brush", nullptr, false, any)) { region_from_selection(false, true); }
 			ImGui::Separator();
-			if (ImGui::MenuItem("Save Region ..", nullptr, false, open))
+			if (editor::menu::item("Save Region ..", nullptr, false, open))
 			{
 				if (const auto file = file_dialog(true, map_source_dir() / (to_utf8(s.map_file.stem()) + "_region.map")); !file.empty()) { save_region(file); }
 			}
-			if (ImGui::MenuItem("Build Region", nullptr, false, open)) { get().region_build = true; build_map(false); }
+			if (editor::menu::item("Build Region", nullptr, false, open)) { get().region_build = true; build_map(false); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Build map with only what the region shows, inside a box of caulk ( compiled\\region\\<map>.map )."); }
-			if (ImGui::MenuItem("Build Region, Fast", nullptr, false, open)) { get().region_build = true; build_map(true); }
+			if (editor::menu::item("Build Region, Fast", nullptr, false, open)) { get().region_build = true; build_map(true); }
 		}
 	}
 
@@ -1741,40 +1745,40 @@ namespace editor::ui
 
 		ImGui::Separator();
 
-		if (ImGui::MenuItem("Import .map into the map ..", nullptr, false, open))
+		if (editor::menu::item("Import .map into the map ..", nullptr, false, open))
 		{
 			if (const auto file = file_dialog(false, map_source_dir() / ""); !file.empty()) { import_map(file); }
 		}
 
 		if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Brushes of the file's worldspawn join this worldspawn, its entities are added. One undo step."); }
 
-		if (ImGui::BeginMenu("Generate File", open))
+		if (editor::menu::begin("Generate File", open))
 		{
-			if (ImGui::MenuItem("Save Selected ..", nullptr, false, any))
+			if (editor::menu::item("Save Selected ..", nullptr, false, any))
 			{
 				if (const auto file = file_dialog(true, map_source_dir() / "selection.map"); !file.empty()) { save_selected(file); }
 			}
 
-			if (ImGui::MenuItem("Save Region ..", nullptr, false, open))
+			if (editor::menu::item("Save Region ..", nullptr, false, open))
 			{
 				if (const auto file = file_dialog(true, map_source_dir() / (to_utf8(s.map_file.stem()) + "_region.map")); !file.empty()) { save_region(file); }
 			}
 
-			if (ImGui::MenuItem("Createfx")) { createfx_info(); }
+			if (editor::menu::item("Createfx")) { createfx_info(); }
 			if (ImGui::IsItemHovered()) { ImGui::SetTooltip("The createfx script is written by File > Build map from the script_fx / script_sound entities."); }
-			if (ImGui::MenuItem("Pointfile ( leak line of the last build )")) { load_leak({}); }
-			if (ImGui::MenuItem("Errorfile ( brushes the compiler leaves out )")) { collect_errors(); }
-			if (ImGui::MenuItem("Clear leak line / errors", nullptr, false, !ext::get().leak.empty() || !ext::get().errors.empty()))
+			if (editor::menu::item("Pointfile ( leak line of the last build )")) { load_leak({}); }
+			if (editor::menu::item("Errorfile ( brushes the compiler leaves out )")) { collect_errors(); }
+			if (editor::menu::item("Clear leak line / errors", nullptr, false, !ext::get().leak.empty() || !ext::get().errors.empty()))
 			{
 				ext::get().leak.clear();
 				ext::get().errors.clear();
 				ext::get().spot = -1;
 			}
 
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::MenuItem("Build region ( what the region shows )", nullptr, false, open && s.doc.has_region()))
+		if (editor::menu::item("Build region ( what the region shows )", nullptr, false, open && s.doc.has_region()))
 		{
 			ext::get().region_build = true;
 			build_map(true);
@@ -1788,17 +1792,17 @@ namespace editor::ui
 		const bool any = open && !s.doc.selection().empty();
 
 		ImGui::Separator();
-		if (ImGui::MenuItem("Copy", "Ctrl+C", false, any)) { copy_selection(false); }
-		if (ImGui::MenuItem("Cut", "Ctrl+X", false, any)) { copy_selection(true); }
-		if (ImGui::MenuItem("Paste", "Ctrl+V", false, open)) { paste_clipboard(false); }
+		if (editor::menu::item("Copy", editor::menu::key("edit.copy"), false, any)) { copy_selection(false); }
+		if (editor::menu::item("Cut", editor::menu::key("edit.cut"), false, any)) { copy_selection(true); }
+		if (editor::menu::item("Paste", editor::menu::key("edit.paste"), false, open)) { paste_clipboard(false); }
 		if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Where the objects were copied from. The clipboard holds .map text: it also goes from one CoDOL Radiant to another."); }
-		if (ImGui::MenuItem("Paste At Cursor / Camera", "Ctrl+Shift+V", false, open)) { paste_clipboard(true); }
+		if (editor::menu::item("Paste At Cursor / Camera", editor::menu::key("edit.paste_here"), false, open)) { paste_clipboard(true); }
 		ImGui::Separator();
-		ImGui::MenuItem("Map Info", "Ctrl+M", &ext::get().show_map_info);
-		ImGui::MenuItem("Entity Info", nullptr, &ext::get().show_entity_info);
+		editor::menu::item("Map Info", editor::menu::key("window.map_info"), &ext::get().show_map_info);
+		editor::menu::item("Entity Info", nullptr, &ext::get().show_entity_info);
 		ImGui::Separator();
-		if (ImGui::MenuItem("Enter Prefab", nullptr, false, prefab_selected())) { enter_prefab(); }
-		if (ImGui::MenuItem("Leave Prefab", nullptr, false, prefab_depth() > 0)) { leave_prefab(); }
+		if (editor::menu::item("Enter Prefab", nullptr, false, prefab_selected())) { enter_prefab(); }
+		if (editor::menu::item("Leave Prefab", nullptr, false, prefab_depth() > 0)) { leave_prefab(); }
 	}
 
 	void draw_view_menu_extra()
@@ -1809,49 +1813,49 @@ namespace editor::ui
 		const bool any = open && !s.doc.selection().empty();
 
 		ImGui::Separator();
-		ImGui::MenuItem("Filter", "F", &st.show_filter);
-		ImGui::MenuItem("Map Info", "Ctrl+M", &st.show_map_info);
-		ImGui::MenuItem("Entity Info", nullptr, &st.show_entity_info);
-		ImGui::MenuItem("Prefab Browser", nullptr, &st.show_prefab_browser);
+		editor::menu::item("Filter", editor::menu::key("filter.window"), &st.show_filter);
+		editor::menu::item("Map Info", editor::menu::key("window.map_info"), &st.show_map_info);
+		editor::menu::item("Entity Info", nullptr, &st.show_entity_info);
+		editor::menu::item("Prefab Browser", nullptr, &st.show_prefab_browser);
 		ImGui::Separator();
-		if (ImGui::MenuItem("Center 2D On Camera", nullptr, false, open)) { center_2d_on_camera(); }
-		if (ImGui::MenuItem("Center Camera On Selection", nullptr, false, any)) { focus_selection(); }
-		if (ImGui::MenuItem("Up Floor", "Ctrl+PageUp", false, open)) { change_floor(true); }
-		if (ImGui::MenuItem("Down Floor", "Ctrl+PageDown", false, open)) { change_floor(false); }
+		if (editor::menu::item("Center 2D On Camera", nullptr, false, open)) { center_2d_on_camera(); }
+		if (editor::menu::item("Center Camera On Selection", nullptr, false, any)) { focus_selection(); }
+		if (editor::menu::item("Up Floor", editor::menu::key("view.floor_up"), false, open)) { change_floor(true); }
+		if (editor::menu::item("Down Floor", editor::menu::key("view.floor_down"), false, open)) { change_floor(false); }
 		ImGui::Separator();
-		if (ImGui::MenuItem("Hide Selected", "H", false, any)) { hide_selected(); }
-		if (ImGui::MenuItem("Hide Unselected", "Ctrl+H", false, any)) { s.doc.hide_unselected(); }
-		if (ImGui::MenuItem("Show Last Hidden", "Ctrl+Shift+H", false, open)) { s.doc.show_last_hidden(); }
-		if (ImGui::MenuItem("Show Hidden", "Shift+H", false, open)) { show_all(); }
+		if (editor::menu::item("Hide Selected", editor::menu::key("view.hide_selected"), false, any)) { hide_selected(); }
+		if (editor::menu::item("Hide Unselected", editor::menu::key("view.hide_unselected"), false, any)) { s.doc.hide_unselected(); }
+		if (editor::menu::item("Show Last Hidden", editor::menu::key("view.show_last_hidden"), false, open)) { s.doc.show_last_hidden(); }
+		if (editor::menu::item("Show Hidden", editor::menu::key("view.show_all"), false, open)) { show_all(); }
 		ImGui::Separator();
-		ImGui::MenuItem("Show Prefab Contents", nullptr, &st.show_prefab_contents);
-		ImGui::MenuItem("Show Grid Blocks ( 2D )", nullptr, &st.show_grid_blocks);
+		editor::menu::item("Show Prefab Contents", nullptr, &st.show_prefab_contents);
+		editor::menu::item("Show Grid Blocks ( 2D )", nullptr, &st.show_grid_blocks);
 	}
 
 	void draw_extra_menus()
 	{
-		if (ImGui::BeginMenu("Selection"))
+		if (editor::menu::begin("Selection"))
 		{
 			draw_selection_menu();
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Grid"))
+		if (editor::menu::begin("Grid"))
 		{
 			draw_grid_menu();
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Misc"))
+		if (editor::menu::begin("Misc"))
 		{
 			draw_misc_menu();
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
-		if (ImGui::BeginMenu("Region"))
+		if (editor::menu::begin("Region"))
 		{
 			draw_region_menu();
-			ImGui::EndMenu();
+			editor::menu::end();
 		}
 
 		// where one is: inside a prefab, inside a region

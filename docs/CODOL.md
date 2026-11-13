@@ -491,9 +491,14 @@ vertex mode in any view and "back to vertices" in the 3D view's edge mode ).
   keys are one set for the 3D view and the 2D views: **Shift + arrows** shift by the grid size, **Ctrl + arrows**
   scale by 5 %, **Shift + PageUp / PageDown** rotate by the angle snap; a key that is held is one undo step. Hide Unselected has Alt+H as its second key, the leak spots Ctrl+Shift+K / L.
 * **Help** ( `F1`, `ed_help` ): the mouse in the 3D view and the 2D views, and the list of keys made from the
-  registry. The shortcut texts of the File, Edit, Brush, Patch, Selection .. menus are still written out by hand:
-  they show the default key, not a changed one ( the Textures, Renderer, Effects and Tools menus, the toolbar and
-  Help show the key as it is ).
+  registry. Every key text the editor shows - the menus, the tooltips of the toolbar and the view buttons, the
+  hint lines of the 3D view, Help - is the action's key as it is now ( `menu::key( "<id>" )`,
+  `actions::shortcut( "<id>" )` ): a key changed in Edit Hotkeys shows everywhere at once.
+* **`actions_check`** walks every menu of the menu bar once ( run off the screen, every submenu "open" ) and prints
+  each entry whose key text is not the key of its action, a key text that comes from no action, and an entry
+  that shows no key while the action of the same name has one; `actions_menus [text]` lists what it saw ( entry,
+  key, action id ). `tests\ed3d\keys.cmds` runs it, changes five keys, runs it again, opens the Edit menu for a
+  picture and resets the keys.
 
 **Preferences** ( Edit > Preferences, File > Settings, `P`, `ed_prefs [group]` ) replace the raw list of settings:
 General ( text size `ed_ui_scale`, toolbar, undo levels `ed_undo_levels` ), Paths, Camera ( `ed_cam_fov`,
@@ -841,7 +846,7 @@ Be aware of these before planning work around this branch:
   wireframe / selected skinned" entities, a lock for lightmaps ( they are baked from the geometry ), a "face"
   texture projection ( the format has the axial one ), PhysX movement. The light preview and the fake lights are a
   post process from the depth pre-pass, not the game's light techniques; effects in the map view are the editor's
-  particle simulation without depth. The shortcut texts of the hand written menus do not follow a changed key.
+  particle simulation without depth.
 - **Maps of your own: lighting is simpler than the game's own maps.** Surfaces are cut by the reach of the
   primary lights along a grid of 32 units, not as finely as the game's compiler does, and a surface is lit at run
   time by one primary light. Bounced light has the mean colour of a material, not its pattern. An omni light

@@ -1474,7 +1474,7 @@ namespace ggui
 			ImGui::Checkbox("Selection outline", &m->show_outline);
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Show everything hidden", "Shift+H", false, s.open))
+			if (editor::menu::item("Show everything hidden", editor::menu::key("view.show_all"), false, s.open))
 			{
 				ui::show_all();
 			}
@@ -1498,9 +1498,9 @@ namespace ggui
 			ImGui::DragFloat("Angle snap", &s.snap_angle, 1.0f, 1.0f, 90.0f, "%.0f deg");
 			ImGui::Separator();
 
-			if (ImGui::MenuItem("Next spawn point", "N", false, loaded)) { m->next_spawn = true; }
-			if (ImGui::MenuItem("Whole map from above", "Home", false, loaded)) { m->overview = true; }
-			if (ImGui::MenuItem("Go to the selection", "F", false, loaded && (!doc.selection().empty() || s.inspecting))) { m->focus = true; }
+			if (editor::menu::item("Next spawn point", editor::menu::key("camera.next_spawn"), false, loaded)) { m->next_spawn = true; }
+			if (editor::menu::item("Whole map from above", editor::menu::key("camera.overview"), false, loaded)) { m->overview = true; }
+			if (editor::menu::item("Go to the selection", editor::menu::key("camera.focus"), false, loaded && (!doc.selection().empty() || s.inspecting))) { m->focus = true; }
 			ImGui::EndPopup();
 		}
 

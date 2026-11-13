@@ -58,6 +58,7 @@ add_executable(CoDOLRadiant WIN32
 	src/ext.cpp
 	src/ext.hpp
 	src/hotkeys.cpp
+	src/menu_keys.cpp
 	src/menu_renderer.cpp
 	src/menu_textures.cpp
 	src/preferences.cpp

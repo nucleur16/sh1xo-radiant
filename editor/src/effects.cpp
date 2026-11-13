@@ -549,7 +549,7 @@ namespace editor::fx
 
 	void draw_menu()
 	{
-		if (!ImGui::BeginMenu("Effects"))
+		if (!editor::menu::begin("Effects"))
 		{
 			return;
 		}
@@ -567,7 +567,7 @@ namespace editor::fx
 		actions::menu_item("fx.debug_tris", "Draw Debug Tris");
 		ImGui::Separator();
 		actions::menu_item("fx.write_createfx");
-		ImGui::EndMenu();
+		editor::menu::end();
 	}
 
 	// ---- windows ---------------------------------------------------------------------------------------------------

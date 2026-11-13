@@ -94,6 +94,37 @@ namespace editor::actions
 	void open_help_window();
 }
 
+// The hand written menus go through these instead of ImGui::BeginMenu / MenuItem: a key shown in a menu is
+// always the action's key of the moment ( menu::key( "edit.clone" ) ), and actions_check can walk every menu
+// ( audit: all menus are run once into a window off the screen ) and report entries whose key text is not the
+// registry's.
+namespace editor::menu
+{
+	bool begin(const char* label, bool enabled = true);
+	void end();
+	bool item(const char* label, const char* shortcut = nullptr, bool selected = false, bool enabled = true);
+	bool item(const char* label, const char* shortcut, bool* p_selected, bool enabled = true);
+	// the key of an action as the next item shows it; the item is then known to belong to the action
+	const char* key(std::string_view action_id);
+
+	[[nodiscard]] bool auditing();
+	// the menu bar asks for this once per frame: true when actions_check wants every menu walked now
+	[[nodiscard]] bool audit_requested();
+	void audit_begin();
+	void audit_end();		// prints the report of actions_check
+	void register_commands();
+}
+
+namespace editor
+{
+	// the key of an action for a text ( a tooltip, the hint lines ): "-" when it has none
+	inline const char* key_or_dash(const std::string_view id)
+	{
+		const char* k = actions::shortcut(id);
+		return k ? k : "-";
+	}
+}
+
 namespace editor::prefs
 {
 	// typed settings on top of the saved dvars

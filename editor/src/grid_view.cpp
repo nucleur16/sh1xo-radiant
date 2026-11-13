@@ -823,7 +823,7 @@ namespace editor::ui
 
 				if (ImGui::IsItemHovered())
 				{
-					ImGui::SetTooltip("%s ( Ctrl+Tab cycles )", axis_name(a));
+					ImGui::SetTooltip("%s ( %s cycles )", axis_name(a), actions::shortcut("view.cycle_axis") ? actions::shortcut("view.cycle_axis") : "view.cycle_axis");
 				}
 
 				ImGui::SameLine();
@@ -849,7 +849,7 @@ namespace editor::ui
 
 			if (ImGui::IsItemHovered())
 			{
-				ImGui::SetTooltip("C. Click two or three points; Enter clips ( the side of the arrow stays ),\nCtrl+Enter keeps the other side, Shift+Enter splits.");
+				ImGui::SetTooltip("%s. Click two or three points; %s clips ( the side of the arrow stays ),\n%s keeps the other side, %s splits.", key_or_dash("tool.clipper"), key_or_dash("clip.apply"), key_or_dash("clip.apply_back"), key_or_dash("clip.split"));
 			}
 
 			ImGui::SameLine();
@@ -862,7 +862,7 @@ namespace editor::ui
 
 			if (ImGui::IsItemHovered())
 			{
-				ImGui::SetTooltip("V. Drag the corners of the selected brushes ( an edge that points at you moves as a whole ).");
+				ImGui::SetTooltip("%s. Drag the corners of the selected brushes ( an edge that points at you moves as a whole ).", key_or_dash("tool.vertex"));
 			}
 
 			ImGui::SameLine();
@@ -1231,10 +1231,10 @@ namespace editor::ui
 		{
 			char label[64];
 			std::snprintf(label, sizeof(label), "2D View %d ( %s )", view.index + 1, axis_name(view.axis));
-			ImGui::MenuItem(label, nullptr, &view.open);
+			editor::menu::item(label, nullptr, &view.open);
 		}
 
-		if (ImGui::MenuItem("New 2D view"))
+		if (editor::menu::item("New 2D view"))
 		{
 			bool reopened = false;
 			for (auto& view : g_views)

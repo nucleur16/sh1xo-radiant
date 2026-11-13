@@ -515,7 +515,7 @@ namespace editor::map_tools
 
 	void draw_menu()
 	{
-		if (!ImGui::BeginMenu("Tools"))
+		if (!editor::menu::begin("Tools"))
 		{
 			return;
 		}
@@ -525,14 +525,14 @@ namespace editor::map_tools
 		actions::menu_item("tool.mesh_painter");
 		actions::menu_item("tool.mesh_painter_window");
 		ImGui::Separator();
-		ImGui::MenuItem("PhysX Movement", nullptr, false, false);
+		editor::menu::item("PhysX Movement", nullptr, false, false);
 
 		if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
 		{
 			ImGui::SetTooltip("Not in this editor: CoD4 Radiant's plugin walks the map with the PhysX runtime of the mod tools.\nThe camera of the 3D view flies ( right drag + W A S D ).");
 		}
 
-		ImGui::EndMenu();
+		editor::menu::end();
 	}
 
 	// ---- windows ---------------------------------------------------------------------------------------------------
