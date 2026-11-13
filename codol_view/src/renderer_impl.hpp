@@ -449,11 +449,13 @@ namespace codol::view
 		// The host may have put them into draw commands of the frame it is building - a gui draws at the end of
 		// its frame -, so they are kept until it says that nothing refers to them ( release_retired ).
 		std::vector<com_ptr<IDirect3DTexture9>> host_retired;
+		std::uint64_t host_generation = 1;					// counts retirements: hosts drop cached pointers when it changes
 		void retire_host_texture(com_ptr<IDirect3DTexture9>& texture)
 		{
 			if (texture.get())
 			{
 				host_retired.push_back(std::move(texture));
+				++host_generation;
 			}
 			texture.reset();
 		}
