@@ -2,6 +2,8 @@
 
 #include "world.hpp"
 
+#include <codol_edit/patch_ops.hpp>
+
 namespace codol::bsp
 {
 	std::string_view map_entity::value(const std::string_view key, const std::string_view fallback) const
@@ -368,7 +370,8 @@ namespace codol::bsp
 					// terrain ( clip_build.cpp )
 					edit::mesh mesh;
 					const edit::patch* source_patch = doc.find_patch(child);
-					if (!out.world || !source_patch || !doc.build_mesh(child, mesh, 4) || mesh.indices.size() < 3)
+					// a curve at the subdivision the editor shows it with ( the fourth number of its size line )
+				if (!out.world || !source_patch || !doc.build_mesh(child, mesh, edit::patch_subdivisions(*source_patch)) || mesh.indices.size() < 3)
 					{
 						if (!out.world)
 						{

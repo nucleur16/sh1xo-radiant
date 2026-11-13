@@ -292,6 +292,12 @@ namespace editor::ui
 
 		const float3 dir{ direction.x / len, direction.y / len, direction.z / len };
 
+		// Patch menu, terrain edge mode: the click turns the diagonal of the terrain quad it hits
+		if (!toggle && !face && patch_edge_click(origin, dir))
+		{
+			return;
+		}
+
 		// what the renderer draws
 		view::pick_result drawn;
 		const bool drawn_hit = s.renderer.loaded() && s.renderer.pick_ray(origin, dir, drawn, ggui::g_impl ? ggui::g_impl->pick_options() : view::pick_options{});

@@ -337,6 +337,8 @@ namespace editor::ui
 							}
 						}
 
+						patch_vertices_grabbed(id, target.vertices, 3 - ah - av);	// Patch menu: vertex selection, drill down
+
 						if (!target.corners.empty() || !target.vertices.empty())
 						{
 							targets.push_back(std::move(target));
@@ -467,7 +469,7 @@ namespace editor::ui
 					}
 					else
 					{
-						doc.move_patch_vertices(target.object, target.vertices, delta);
+						move_patch_vertices(target.object, target.vertices, delta);		// Patch menu: weld, locked vertices
 					}
 				}
 
@@ -1027,6 +1029,16 @@ namespace editor::ui
 						for (const auto& pv : patch->vertices) { handle(pv.xyz); }
 					}
 				}
+			}
+
+			// Patch menu: the selected ( yellow ) and locked ( red ) patch vertices
+			if (st.vertex_mode)
+			{
+				patch_vertex_marks([&](const edit::vec3& p, const ImU32 color)
+				{
+					const ImVec2 at = to_screen(p[h()], p[v()]);
+					dl->AddRect(ImVec2(at.x - 5.0f, at.y - 5.0f), ImVec2(at.x + 6.0f, at.y + 6.0f), color, 0.0f, 0, 2.0f);
+				});
 			}
 
 			if (st.clipper.on && st.clipper.axis == axis && !st.clipper.points.empty())

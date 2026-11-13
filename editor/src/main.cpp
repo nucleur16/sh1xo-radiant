@@ -344,6 +344,18 @@ namespace editor
 				ImGui::EndMenu();
 			}
 
+			if (ImGui::BeginMenu("Brush"))
+			{
+				ui::draw_brush_menu();
+				ImGui::EndMenu();
+			}
+
+			if (ImGui::BeginMenu("Patch"))
+			{
+				ui::draw_patch_menu();
+				ImGui::EndMenu();
+			}
+
 			if (ImGui::BeginMenu("View"))
 			{
 				const auto item = [](const char* label, ggui::ggui_module* module_)
@@ -596,6 +608,7 @@ namespace editor
 			ui::draw_create_entity_popup();
 			ui::draw_modals();
 			ui::draw_install_window();
+			ui::draw_brush_patch_windows();
 
 			// map name and the modified mark in the title bar
 			if (std::string title = get_scene().title(); title != g_title)

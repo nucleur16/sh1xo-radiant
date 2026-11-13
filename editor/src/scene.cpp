@@ -8,6 +8,8 @@
 #include "assets.hpp"
 #include "preview.hpp"
 #include "scene.hpp"
+#include "ui.hpp"
+#include <codol_edit/patch_ops.hpp>
 
 #include <charconv>
 
@@ -1371,8 +1373,15 @@ namespace editor
 		destroy_mesh(m);
 		m.revision = doc.revision(id);
 
+		// a curve at its own subdivision ( Patch > Inc / Dec Subdivision ); nothing solid while patches are shown as wires
+		const edit::patch* as_patch = doc.find_patch(id);
+		if (as_patch && ui::patches_as_wire())
+		{
+			return;
+		}
+
 		edit::mesh mesh;
-		if (!doc.build_mesh(id, mesh, 4) || mesh.indices.empty())
+		if (!doc.build_mesh(id, mesh, as_patch ? edit::patch_subdivisions(*as_patch) : 4) || mesh.indices.empty())
 		{
 			return;
 		}

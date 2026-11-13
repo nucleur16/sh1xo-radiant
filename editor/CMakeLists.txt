@@ -58,6 +58,7 @@ add_executable(CoDOLRadiant WIN32
 	src/install.cpp
 	src/lights.cpp
 	src/maps_dialog.cpp
+	src/menu_brush_patch.cpp
 	src/preview.cpp
 	src/preview.hpp
 	src/scene.cpp

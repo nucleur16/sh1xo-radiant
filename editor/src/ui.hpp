@@ -191,4 +191,20 @@ namespace editor::ui
 	void pick_ray(const float3& origin, const float3& direction, bool toggle, bool face);
 	void viewport_click(float px, float py, bool toggle, bool face);
 	void set_material_filter(const std::string& text, int group);
+
+	// ---- the Brush and Patch menus ( menu_brush_patch.cpp ) -----------------------------------------------------
+	void draw_brush_menu();
+	void draw_patch_menu();
+	void draw_brush_patch_windows();			// their dialogs, once per frame
+	void register_brush_patch_commands();		// brush_*, patch_*
+	bool process_brush_patch_shortcuts();		// true: it took the key
+	bool patches_as_wire();						// patches are drawn as lines only
+	// vertex mode of the 2D views: the vertices of a patch that were grabbed become the selected patch vertices
+	// ( without "drill down" only the one nearest to the viewer stays in the list ); a drag honours weld and lock
+	void patch_vertices_grabbed(object_id patch, std::vector<int>& vertices, int view_axis);
+	bool move_patch_vertices(object_id patch, const std::vector<int>& vertices, const edit::vec3& delta);
+	// calls mark( position, colour ) for the selected and the locked patch vertices
+	void patch_vertex_marks(const std::function<void(const edit::vec3&, ImU32)>& mark);
+	// 3D view, terrain edge mode: a click along the ray turns the diagonal of the quad it hits; true when it did
+	bool patch_edge_click(const float3& origin, const float3& direction);
 }

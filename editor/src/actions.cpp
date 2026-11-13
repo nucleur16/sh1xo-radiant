@@ -1302,6 +1302,12 @@ namespace editor::ui
 			return;
 		}
 
+		// the Brush / Patch menus have their own keys ( menu_brush_patch.cpp )
+		if (process_brush_patch_shortcuts())
+		{
+			return;
+		}
+
 		if (ctrl && !alt)
 		{
 			if (pressed(ImGuiKey_Z, true)) { shift ? redo() : undo(); }
@@ -2067,6 +2073,7 @@ namespace editor::ui
 		// ---- the project's assets: asset_new_material, asset_import_model, asset_gdt, asset_build, asset_list ..
 		assets::register_commands();
 		preview::register_commands();
+		register_brush_patch_commands();
 
 		command::register_command("help", [](args_t)
 		{

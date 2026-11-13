@@ -23,6 +23,13 @@ namespace codol::edit
 
 		constexpr double SAME_POINT = 1e-4;
 
+		// 64 for a 63.99999999999999 that came out of a sine: brush corners on the grid stay on it
+		double tidy(const double v)
+		{
+			const double r = std::round(v * 1e6) / 1e6;
+			return std::fabs(r - v) < 1e-9 ? r : v;
+		}
+
 		std::string new_object_layer(const impl& d)
 		{
 			for (std::size_t i = 0; i < d.layers.size(); i++)
@@ -873,8 +880,8 @@ namespace codol::edit
 			{
 				const double angle = (i + 0.5) * 2.0 * PI / sides;
 				vec3 p = center;
-				p[a] += std::cos(angle) * ra * out;
-				p[b] += std::sin(angle) * rb * out;
+				p[a] = tidy(p[a] + std::cos(angle) * ra * out);
+				p[b] = tidy(p[b] + std::sin(angle) * rb * out);
 				p[axis] = mins[axis];
 				points.push_back(p);
 
@@ -926,9 +933,9 @@ namespace codol::edit
 				{
 					const double lon = i * 2.0 * PI / sides;
 					vec3 p = center;
-					p[a] += std::cos(lat) * std::cos(lon) * ra;
-					p[b] += std::cos(lat) * std::sin(lon) * rb;
-					p[axis] += std::sin(lat) * rc;
+					p[a] = tidy(p[a] + std::cos(lat) * std::cos(lon) * ra);
+					p[b] = tidy(p[b] + std::cos(lat) * std::sin(lon) * rb);
+					p[axis] = tidy(p[axis] + std::sin(lat) * rc);
 					points.push_back(p);
 				}
 			}
