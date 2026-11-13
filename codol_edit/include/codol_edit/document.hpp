@@ -362,6 +362,7 @@ namespace codol::edit
 		struct impl;	// private state ( src/doc_impl.hpp )
 
 	private:
+		friend struct ops_access;	// patch_ops.hpp: brush primitives and patch operations ( src/patch_ops.cpp )
 		std::unique_ptr<impl> d;
 	};
 }

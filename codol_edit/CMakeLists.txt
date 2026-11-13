@@ -79,6 +79,8 @@ add_library(codol_edit STATIC
 	src/map_io.cpp
 	src/document.cpp
 	src/edit_ops.cpp
+	include/codol_edit/patch_ops.hpp
+	src/patch_ops.cpp
 	src/import.cpp
 	src/class_catalog.cpp
 	src/class_catalog_data.inc
@@ -114,4 +116,10 @@ if(CODOL_EDIT_BUILD_TESTS)
 		target_link_options(codol_edit_tests PRIVATE /LARGEADDRESSAWARE)
 	endif()
 	add_test(NAME codol_edit_tests COMMAND codol_edit_tests)
+
+	# brush primitives and patch operations ( patch_ops.hpp )
+	add_executable(codol_patch_ops_tests tests/patch_ops_tests.cpp)
+	target_link_libraries(codol_patch_ops_tests PRIVATE codol_edit)
+	codol_edit_options(codol_patch_ops_tests)
+	add_test(NAME codol_patch_ops_tests COMMAND codol_patch_ops_tests)
 endif()
