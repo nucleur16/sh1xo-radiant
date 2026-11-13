@@ -655,7 +655,24 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		const char* const FILTER_NAMES[] = { "As the materials say", "Point ( no mip maps )", "Bilinear ( no mip maps )", "Trilinear", "Anisotropic" };
 		const char* const RESOLUTION_NAMES[] = { "Maximum", "High ( half )", "Normal ( quarter )", "Low ( eighth )" };
 		const char* const PATCH_NAMES[] = { "Textured", "Wireframe", "Textured + wireframe" };
-		const char* const ENTITY_NAMES[] = { "Models", "Bounding boxes", "Models and boxes" };
+		// by entities:: value; the menu lists them in CoD4 radiant's order ( ENTITY_MENU_ORDER )
+		const char* const ENTITY_NAMES[] = { "Skinned", "Bounding Box", "Skinned And Boxed", "Wireframe", "Selected Wireframe", "Selected Skinned" };
+		const char* const ENTITY_WORDS[] = { "models", "boxes", "both", "wireframe", "selected_wireframe", "selected_models" };
+		const char* const ENTITY_TIPS[] = {
+			"Models drawn with their materials.",
+			"Every entity is its box; no model is drawn.",
+			"Models drawn, and the box of every entity around them.",
+			"Models drawn as the triangles of their mesh, front and back, in the colours of their materials.",
+			"The models of the selected entities as wireframes; every other entity is its box.",
+			"The models of the selected entities drawn; every other entity is its box." };
+		constexpr int ENTITY_MENU_ORDER[] = { 1, 3, 4, 5, 0, 2 };
+
+		void set_entities(const entities mode)
+		{
+			g_state.show_entities = mode;
+			get_scene().selected_serial++;
+			game::printf_to_console("[renderer] entities: %s\n", ENTITY_NAMES[static_cast<int>(mode)]);
+		}
 
 		void set_mode(const shading mode)
 		{
@@ -688,7 +705,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
 	bool entity_boxes_always()
 	{
-		return g_state.show_entities != entities::models;
+		// the box stands for the model where the model is not drawn, and in "skinned and boxed"
+		return g_state.show_entities != entities::models && g_state.show_entities != entities::wireframe;
 	}
 
 	bool hide_patch_meshes()
@@ -724,7 +742,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		bind("ed_r_specular", st.specular, "3D view: specular maps");
 		bind("ed_r_normalmaps", st.normal_maps, "3D view: normal maps");
 		bind_int("ed_r_patches", st.show_patches, 0, 2, "patches: 0 textured, 1 wireframe, 2 textured with wires");
-		bind_int("ed_r_entities", st.show_entities, 0, 2, "entities: 0 models, 1 boxes, 2 models and boxes");
+		bind_int("ed_r_entities", st.show_entities, 0, static_cast<int>(entities::count) - 1, "entities: 0 skinned, 1 bounding box, 2 skinned and boxed, 3 wireframe, 4 selected wireframe, 5 selected skinned");
 		bind("ed_r_cubic", st.cubic_clip, "3D view: cubic clipping");
 		bind("ed_r_cubic_distance", st.cubic_distance, "half the edge of the clipping cube, units");
 		bind("ed_r_sun_shadows", st.sun_shadows, "3D view: sun shadows");
@@ -775,10 +793,19 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			.toggle([] { return g_state.show_patches != patches::textured; });
 		add("render.entities_cycle", "Show entities as: next", "", []
 		{
-			g_state.show_entities = static_cast<entities>((static_cast<int>(g_state.show_entities) + 1) % 3);
-			refresh_view_lines();
-			game::printf_to_console("[renderer] entities: %s\n", ENTITY_NAMES[static_cast<int>(g_state.show_entities)]);
+			// in the order of the menu
+			int at = 0;
+			for (int i = 0; i < static_cast<int>(entities::count); i++) { if (ENTITY_MENU_ORDER[i] == static_cast<int>(g_state.show_entities)) { at = i; } }
+			set_entities(static_cast<entities>(ENTITY_MENU_ORDER[(at + 1) % static_cast<int>(entities::count)]));
 		}, anywhere, no_map).toggle([] { return g_state.show_entities != entities::models; });
+
+		// one action per mode: a key, a toolbar button, "act render.entities_wireframe"
+		for (int i = 0; i < static_cast<int>(entities::count); i++)
+		{
+			const std::string id = std::string("render.entities_") + ENTITY_WORDS[i];
+			add(id, std::string("Show entities as: ") + ENTITY_NAMES[i], "", [i] { set_entities(static_cast<entities>(i)); }, anywhere, no_map)
+				.toggle([i] { return static_cast<int>(g_state.show_entities) == i; }).help(ENTITY_TIPS[i]);
+		}
 
 		add("render.cubic_clip", "Cubic clipping", "Ctrl+Backslash", flip(st.cubic_clip, "cubic clipping"), anywhere, no_map).toggle([] { return g_state.cubic_clip; });
 		add("render.cubic_grow", "Cubic clipping: farther", "Ctrl+]", []
@@ -842,8 +869,16 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		{
 			if (args.size() > 1)
 			{
-				g_state.show_entities = args[1] == "boxes" ? entities::boxes : (args[1] == "both" ? entities::models_boxes : entities::models);
-				refresh_view_lines();
+				for (int i = 0; i < static_cast<int>(entities::count); i++)
+				{
+					if (args[1] == ENTITY_WORDS[i] || args[1] == std::to_string(i)) { set_entities(static_cast<entities>(i)); return; }
+				}
+				game::printf_to_console("usage: r_entities <models|boxes|both|wireframe|selected_wireframe|selected_models>\n");
+				return;
+			}
+
+			{
+				game::printf_to_console("[renderer] entities: %s\n", ENTITY_NAMES[static_cast<int>(g_state.show_entities)]);
 			}
 		});
 
@@ -1019,17 +1054,17 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
 		if (editor::menu::begin("Show Entities As"))
 		{
-			for (int i = 0; i < 3; i++)
+			for (const int i : ENTITY_MENU_ORDER)
 			{
-				if (editor::menu::item(ENTITY_NAMES[i], nullptr, static_cast<int>(g_state.show_entities) == i))
+				char id[48];
+				std::snprintf(id, sizeof(id), "render.entities_%s", ENTITY_WORDS[i]);
+				if (editor::menu::item(ENTITY_NAMES[i], editor::menu::key(id), static_cast<int>(g_state.show_entities) == i))
 				{
-					g_state.show_entities = static_cast<entities>(i);
-					refresh_view_lines();
+					set_entities(static_cast<entities>(i));
 				}
-			}
 
-			ImGui::Separator();
-			ImGui::TextDisabled("Wireframe is the render method of that name.");
+				if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", ENTITY_TIPS[i]); }
+			}
 			editor::menu::end();
 		}
 
@@ -1179,10 +1214,35 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		frame.far_clip = st.cubic_clip ? st.cubic_distance : 0.0f;
 		frame.clear_color = colors::d3d(colors::view_background) | 0xFF000000u;
 
-		if (st.show_entities == entities::boxes)
+		// Show Entities As: models of entities drawn, as wireframes or not at all ( their box is drawn by the view )
+		switch (st.show_entities)
 		{
-			frame.draw_entity_models = false;
-			frame.draw_placed_models = false;
+		case entities::boxes:
+			frame.model_style = [](const view::object_ref& ref)
+			{
+				return get_scene().object_of(ref) != edit::no_object ? view::model_style::hidden : view::model_style::solid;
+			};
+			break;
+		case entities::wireframe:
+			frame.model_style = [](const view::object_ref& ref)
+			{
+				return get_scene().object_of(ref) != edit::no_object ? view::model_style::wireframe : view::model_style::solid;
+			};
+			break;
+		case entities::selected_wireframe:
+		case entities::selected_models:
+		{
+			const int shown = st.show_entities == entities::selected_wireframe ? view::model_style::wireframe : view::model_style::solid;
+			frame.model_style = [shown](const view::object_ref& ref)
+			{
+				const auto& s = get_scene();
+				const object_id id = s.object_of(ref);
+				return id == edit::no_object ? view::model_style::solid : (s.doc.is_selected(id) ? shown : view::model_style::hidden);
+			};
+			break;
+		}
+		default:
+			break;
 		}
 
 		// the post process reads the depth pre-pass

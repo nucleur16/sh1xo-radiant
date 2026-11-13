@@ -440,6 +440,17 @@ namespace codol::view
 		{
 			return;
 		}
+		instance.style = model_style::solid;
+		if (frame->model_style)
+		{
+			const object_ref ref = instance.handle > 0 ? object_ref{ object_kind::placed_model, instance.handle }
+				: instance.is_entity ? object_ref{ object_kind::entity_model, instance.entity_index } : object_ref{ object_kind::static_model, instance.static_index };
+			instance.style = frame->model_style(ref);
+			if (instance.style == model_style::hidden)
+			{
+				return;
+			}
+		}
 		// a model the editor moved is no longer where the cells list it
 		if (cells && !instance.moved && instance.static_index >= 0 && instance.static_index < static_cast<int>(cells->size())
 			&& !(*cells)[static_cast<std::size_t>(instance.static_index)])
@@ -722,6 +733,8 @@ namespace codol::view
 		draw.vertex_count = vertex_span;
 		draw.start_index = surface.base_index;
 		draw.triangle_count = triangles;
+		// frame_options::model_style: the mesh as lines, front and back
+		draw.wireframe = draw.two_sided = instance.style == model_style::wireframe;
 		draw_passes(material, technique_type, render::vertex_format::PACKED, instance.reflection_probe, nullptr, draw);
 	}
 
@@ -756,7 +769,7 @@ namespace codol::view
 				continue;
 			}
 			apply_state_bits(material, technique_type, static_cast<int>(p));
-			if (frame && frame->wireframe)
+			if ((frame && frame->wireframe) || draw.wireframe)
 			{
 				device->SetRenderState(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
 				applied_state_bits = nullptr;

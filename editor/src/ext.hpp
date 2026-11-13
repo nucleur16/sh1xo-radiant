@@ -206,7 +206,8 @@ namespace editor::render_modes
 {
 	enum class shading : int { game, fullbright, fake_normal, fake_view, depth };
 	enum class patches : int { textured, wireframe, textured_wire };
-	enum class entities : int { models, boxes, models_boxes, selected_models };
+	// CoD4 radiant's Show Entities As: skinned, bounding box, skinned and boxed, wireframe, selected wireframe, selected skinned
+	enum class entities : int { models, boxes, models_boxes, wireframe, selected_wireframe, selected_models, count };
 
 	struct state
 	{

@@ -176,6 +176,7 @@ namespace codol::view
 		bool hidden = false;			// map_renderer::set_hidden
 		bool moved = false;				// has a transform override: no cell culling
 		int handle = 0;					// > 0: placed with map_renderer::add_model
+		int style = 0;					// frame_options::model_style of this frame
 	};
 
 	// a "*N" sub model placed by an entity ( not drawn by the C# renderer )
@@ -315,6 +316,7 @@ namespace codol::view
 		int layer_offset = 0;
 		int layer_stride = 0;
 		bool two_sided = false;			// a dynamic mesh that is drawn without culling
+		bool wireframe = false;			// frame_options::model_style said so for its model
 	};
 
 	// GameMapRenderer.cs:1168 ( ModelSurfaceInstance )

@@ -566,7 +566,7 @@ action does not exist keeps its place and shows up when it does.
 | Texture Resolution | maximum .. an eighth: the mip level every material texture is read at. One setting for colour, specular and normal maps. |
 | Specular / Normal maps | off: the game's own stand-ins ( black, flat ) are bound in their place |
 | Show Patches As | textured, wireframe, textured + wireframe ( `r_patches`, `Shift+W`; the Patch menu's entry is the same setting ) |
-| Show Entities As | models, boxes, models and boxes ( `r_entities` ) |
+| Show Entities As | CoD4 radiant's six: Bounding Box, Wireframe ( the triangles of each model's mesh as lines, front and back, in its materials ), Selected Wireframe and Selected Skinned ( the models of the selected entities wire / drawn, every other entity its box ), Skinned, Skinned And Boxed. `r_entities <models\|boxes\|both\|wireframe\|selected_wireframe\|selected_models>`, actions `render.entities_<word>` and `render.entities_cycle` ( the toolbar button, in the order of the menu ), setting `ed_r_entities` 0 - 5. The renderer asks the editor per model and frame how to draw it ( `frame_options::model_style` ); models that belong to no entity of the document stay as they are. `tests\ed3d\entities_as.cmds` takes a picture of each. |
 | Light / Sun Preview | **Light preview**: the light of the selected `light` entities, and of the ones kept in the preview list, falls on what the 3D view shows - radius, colour, intensity, the cone of a spot; up to 8, the nearest. Sun shadows on / off. For a map of your own "Sun Preview" builds the stage again with the worldspawn's light. |
 | Filmtweaks | the film values of a `.vision` file of the game's zones ( `r_vision <name>`, `r_vision list`, the window lists and filters them ), or typed ( `r_film contrast brightness desaturation [light rgb] [dark rgb]` ) |
 | Cubic Clipping | only what touches a cube around the camera is drawn ( `r_cubic <distance|off>`, `Ctrl+\`, `Ctrl+[`, `Ctrl+]` ) |
@@ -842,8 +842,7 @@ form of this work; what the standalone editor does is above.
 Be aware of these before planning work around this branch:
 
 - **Top bar of CoD4 Radiant: what is not there.** Case Textures ( a technique of Radiant's own technique sets ),
-  separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), "selected
-  wireframe / selected skinned" entities, a lock for lightmaps ( they are baked from the geometry ), a "face"
+  separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), a lock for lightmaps ( they are baked from the geometry ), a "face"
   texture projection ( the format has the axial one ), PhysX movement. The light preview and the fake lights are a
   post process from the depth pre-pass, not the game's light techniques; effects in the map view are the editor's
   particle simulation without depth.
