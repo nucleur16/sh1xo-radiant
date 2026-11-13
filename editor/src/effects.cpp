@@ -66,7 +66,7 @@ namespace editor::fx
 
 		std::map<std::string, loaded_effect> g_effects;
 		std::map<std::string, IDirect3DTexture9*> g_pictures;	// owned by the renderer
-		const void* g_pictures_for = nullptr;
+		std::uint64_t g_pictures_for = 0;			// the renderer's host_texture_generation() of the cached pointers
 
 		// the effects of the zones ( names ), read once per map in a thread
 		std::vector<std::pair<std::string, std::string>> g_zone_effects;		// name, zone
@@ -730,9 +730,9 @@ namespace editor::fx
 		}
 
 		// the pictures belong to the renderer: gone with the map
-		if (g_pictures_for != s.renderer.material_names().data())
+		if (g_pictures_for != s.renderer.host_texture_generation())
 		{
-			g_pictures_for = s.renderer.material_names().data();
+			g_pictures_for = s.renderer.host_texture_generation();
 			g_pictures.clear();
 		}
 

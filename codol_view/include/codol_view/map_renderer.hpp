@@ -415,6 +415,9 @@ namespace codol::view
 		// draw command of an earlier frame is left - before the first window of a frame. ( on_device_lost() and
 		// shutdown() release them as well. )
 		void release_retired();
+		// Changes whenever a texture the host was given is retired. A host that caches thumbnail pointers across
+		// frames drops its cache when this differs from the value it cached them under.
+		std::uint64_t host_texture_generation() const;
 		bool loaded() const;
 		const std::string& map_name() const;
 

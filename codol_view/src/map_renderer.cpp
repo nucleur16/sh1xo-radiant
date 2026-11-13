@@ -301,6 +301,7 @@ namespace codol::view
 	{
 		impl_->host_retired.clear();
 	}
+	std::uint64_t map_renderer::host_texture_generation() const { return impl_->host_generation; }
 	bool map_renderer::loaded() const { return impl_->map_loaded; }
 	const std::string& map_renderer::map_name() const { return impl_->map_name; }
 
