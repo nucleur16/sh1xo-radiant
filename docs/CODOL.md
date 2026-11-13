@@ -499,6 +499,11 @@ Be aware of these before planning work around this branch:
   client runs with the zone; its Create Room screen is locked below player level 5 and the test account is level 1,
   so the row was not looked at and a map was not started from it. `CODOL_FORCE_MAP=<map>` on the lobby plays a map
   without the list.
+- **3D editing**: the selection rectangle is a rectangle ( no lasso ); a drag next to a brush moves faces, it does
+  not shear them ( Radiant's Ctrl drag ); the handles of the vertex and edge tools are drawn through walls and have
+  a move gizmo only ( no rotating or scaling of a set of corners ); a brush is always the hull of its corners, so a
+  corner pushed inside the others disappears. The texture keys act on every face of a selected brush, as in
+  Radiant - deselect the brush ( Esc ) and Ctrl+Shift click faces to work on single ones.
 - **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
   worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
 - **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
