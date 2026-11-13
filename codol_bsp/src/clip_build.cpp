@@ -302,6 +302,16 @@ namespace codol::bsp
 				contents |= material_infos[static_cast<std::size_t>(face.clip_material)].contents;
 				first_material = first_material < 0 ? face.clip_material : first_material;
 			}
+			if (mb.weapon_clip && contents != 0)
+			{
+				// "contents weaponClip;" ( radiant: Make Weapon Clip ): the brush is drawn with its materials, but its
+				// collision is that of the tool material clip_weap - bullets and grenades stop, players and AI walk
+				// through. The contents are taken from the shipped maps' clip_weap ( 0x20C0 ), the surface types of
+				// the brush's own materials stay ( the impact effects ).
+				bool known = false;
+				const clip_material_info weapon = material_info(ctx.cat, "clip_weap", known);
+				contents = known && weapon.contents != 0 ? weapon.contents : 0x20C0;
+			}
 			mb.contents = contents;
 			mb.opaque = mb.model == 0 && !mb.detail && (contents & 1) != 0;
 			// a brush that can be seen through ( an alpha tested or blended material on a face ) hides nothing and

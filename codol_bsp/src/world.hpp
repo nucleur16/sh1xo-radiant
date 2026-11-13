@@ -114,6 +114,7 @@ namespace codol::bsp
 		std::int32_t contents = 0;
 		bool detail = false;
 		bool collides = true;			// has a cbrush_t
+		bool weapon_clip = false;		// "contents weaponClip;": stops bullets and grenades, nobody walks into it
 		bool opaque = false;			// structural and solid: blocks sight ( bsp, csg, flood fill )
 		bool see_through = false;		// has an alpha tested or decal face: casts no baked shadow
 		int clip_index = -1;			// cbrush_t index

@@ -22,8 +22,10 @@ namespace codol::edit
 			return key;
 		}
 
+		// `top`: the document is the map itself, not a prefab that is being expanded for it ( what comes out of a
+		// prefab is counted once, when it arrives in the map )
 		bool expand(document& doc, const prefab_loader& load, prefab_result& result, const bool selected_only, const int depth,
-			std::vector<std::string>& chain)
+			std::vector<std::string>& chain, const bool top = true)
 		{
 			std::vector<object_id> prefabs;
 
@@ -104,7 +106,7 @@ namespace codol::edit
 					else
 					{
 						chain.push_back(key);
-						if (expand(inner, load, result, false, depth - 1, chain))
+						if (expand(inner, load, result, false, depth - 1, chain, false))
 						{
 							text = inner.save_map_text();
 						}
@@ -126,11 +128,12 @@ namespace codol::edit
 
 				for (const object_id made : doc.selection())
 				{
-					switch (doc.kind(made))
+					switch (top ? doc.kind(made) : object_kind::none)
 					{
 					case object_kind::brush: result.brushes++; break;
 					case object_kind::patch: result.patches++; break;
-					default: result.entities++; break;
+					case object_kind::entity: result.entities++; break;
+					default: break;
 					}
 
 					created.push_back(made);

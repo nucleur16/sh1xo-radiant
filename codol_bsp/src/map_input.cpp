@@ -451,6 +451,7 @@ namespace codol::bsp
 				{
 					b.collides = false;
 				}
+				b.weapon_clip = source->has_content("weaponClip");
 				out.brushes.push_back(static_cast<int>(w.brushes.size()));
 				w.brushes.push_back(std::move(b));
 			}
