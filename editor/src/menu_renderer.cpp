@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "ext.hpp"
+#include "menu_ext.hpp"
 
 #include <codol_zone/zone.hpp>
 #include <codol_zone/assets.hpp>
@@ -534,7 +535,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			g_tint.clear();
 
 			// patches as wires: every edge of the control mesh
-			if (g_state.show_patches != patches::textured)
+			if (g_state.show_patches == patches::textured_wire)
 			{
 				const DWORD color = colors::d3d(colors::patch);
 
@@ -712,7 +713,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		bind("ed_r_angles", st.show_angles, "3D view: an arrow where an entity looks");
 		bind("ed_r_origins", st.model_origins, "3D view: a cross at the origin of every model");
 		bind("ed_r_grid_names", st.grid_names, "2D views: names of entities");
-		bind("ed_r_grid_blocks", st.grid_blocks, "2D views: the blocks of 1024 units");
+		bind("ed_r_grid_blocks", ui::ext::get().show_grid_blocks, "2D views: the blocks of 1024 units");
 		bind("ed_r_grid_coordinates", st.grid_coordinates, "2D views: coordinates at the edges and of the blocks");
 		bind("ed_r_grid_crosshair", st.grid_crosshair, "2D views: a cross under the mouse");
 		bind_int("ed_r_mode", st.mode, 0, 4, "3D view: 0 as the game, 1 fullbright, 2 fake light by normal, 3 fake light by view, 4 depth");
@@ -751,7 +752,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		add("render.model_origins", "Draw model origins", "", flip(st.model_origins, "model origins", true), anywhere, no_map).toggle([] { return g_state.model_origins; });
 
 		add("render.grid_names", "2D views: show names", "", flip(st.grid_names, "2D names"), anywhere, no_map).toggle([] { return g_state.grid_names; });
-		add("render.grid_blocks", "2D views: show grid blocks", "", flip(st.grid_blocks, "2D grid blocks"), anywhere, no_map).toggle([] { return g_state.grid_blocks; });
+		add("render.grid_blocks", "2D views: show grid blocks", "", flip(ui::ext::get().show_grid_blocks, "2D grid blocks"), anywhere, no_map).toggle([] { return ui::ext::get().show_grid_blocks; });
 		add("render.grid_coordinates", "2D views: edge and block coordinates", "", flip(st.grid_coordinates, "2D coordinates"), anywhere, no_map).toggle([] { return g_state.grid_coordinates; });
 		add("render.grid_crosshair", "2D views: crosshair", "Shift+X", flip(st.grid_crosshair, "2D crosshair"), views, no_map).toggle([] { return g_state.grid_crosshair; });
 
@@ -1415,27 +1416,13 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		const double w0 = ctx.center[0] - half_w, w1 = ctx.center[0] + half_w, v0 = ctx.center[1] - half_h, v1 = ctx.center[1] + half_h;
 		auto* font = ImGui::GetIO().Fonts->Fonts.Size > 2 ? ImGui::GetIO().Fonts->Fonts[2] : ImGui::GetFont();
 
-		if (st.grid_blocks)
+		if (ui::ext::get().show_grid_blocks)
 		{
-			// the blocks radiant divides the world into: 1024 units; coarser while they would be a few pixels
-			double block = 1024.0;
-			while (block * ctx.scale < 48.0) { block *= 2.0; }
-
+			// the lines of the blocks are drawn with the lines of the Grid menu ( menu_selection.cpp ): here their coordinates
+			const double block = 1024.0;
 			const ImU32 color = colors::get(colors::grid_block);
 
-			for (double x = std::floor(w0 / block) * block; x <= w1; x += block)
-			{
-				const float px = to_screen(x, 0.0).x;
-				dl->AddLine(ImVec2(px, ctx.pos.y), ImVec2(px, ctx.pos.y + ctx.size.y), color, 2.0f);
-			}
-
-			for (double y = std::floor(v0 / block) * block; y <= v1; y += block)
-			{
-				const float py = to_screen(0.0, y).y;
-				dl->AddLine(ImVec2(ctx.pos.x, py), ImVec2(ctx.pos.x + ctx.size.x, py), color, 2.0f);
-			}
-
-			if (st.grid_coordinates)
+			if (st.grid_coordinates && block * ctx.scale >= 96.0)
 			{
 				char text[48];
 

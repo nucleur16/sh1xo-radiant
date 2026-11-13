@@ -138,6 +138,9 @@ namespace ggui
 
 	bool codol_viewport_dialog::gui()
 	{
+		// nothing of this window is in a draw list yet: the textures the renderer dropped since the last frame can go
+		m->renderer.release_retired();
+
 		ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 320.0f), ImVec2(FLT_MAX, FLT_MAX));
 		ImGui::SetNextWindowSize(ImVec2(1100.0f, 700.0f), ImGuiCond_FirstUseEver);
 		ImGui::SetNextWindowPos(ggui::get_initial_window_pos(), ImGuiCond_FirstUseEver);

@@ -1,0 +1,31 @@
+# The crash of 2026-11-12 ( "I went from mp_abandon_sh_mk to mp_hunger and the editor crashed" ), as it happens:
+# the open map has changes, so the double click in the Maps window asks first; "Discard" then opened the other map
+# from inside the question's popup - at the end of the frame, after the 3D view had put its picture into the frame's
+# draw list. Closing the map released that picture; drawing the frame used it.
+# The pixels belong to the layout the editor is started with ( Maps docked on the left, "Maps only" on ).
+map_open mp_abandon_sh_mk
+wait 3
+ed_box 0 0 0 64 64 64
+wait 1
+ui_mouse 51 622
+wait 0.5
+ui_mouse down
+ui_mouse up
+ui_mouse down
+ui_mouse up
+wait 1.5
+ed_shot $OUT\switch_discard_1_question.png
+wait 1
+# "Discard"
+ui_mouse 1278 713
+wait 0.5
+ui_mouse down
+wait 0.1
+ui_mouse up
+wait 3
+sel_info
+expect mp_hunger: 20015 entities
+ed_shot $OUT\switch_discard_2_opened.png
+wait 1
+ui_mouse off
+quit

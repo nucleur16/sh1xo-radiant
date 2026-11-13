@@ -537,7 +537,7 @@ namespace editor::actions
 
 		// ---- view
 		add("view.hide_selected", "Hide selected", "H", [] { hide_selected(); }, views).when(any_selected);
-		add("view.show_all", "Show all", "Shift+H|Alt+H", [] { show_all(); }, views);
+		add("view.show_all", "Show all", "Shift+H", [] { show_all(); }, views);
 		add("view.cycle_axis", "Next 2D view axis ( XY, YZ, XZ )", "Ctrl+Tab", [] { cycle_grid_axis(); });
 		add("view.surface", "Surface inspector", "S", [] { get().show_surface = !get().show_surface; }, views, no_map).toggle([] { return get().show_surface; });
 
@@ -563,7 +563,8 @@ namespace editor::actions
 
 		// ---- gizmo and camera of the 3D view
 		add("gizmo.move", "Gizmo: move", "W", [] { get().gizmo = gizmo_tool::move; }, view_3d).toggle([] { return get().gizmo == gizmo_tool::move; });
-		add("gizmo.rotate", "Gizmo: rotate", "E", [] { get().gizmo = gizmo_tool::rotate; }, view_3d).toggle([] { return get().gizmo == gizmo_tool::rotate; });
+		// while the handles of the 3D view are shown E is its edge mode ( edit3d.cpp ): nothing is rotated there
+		add("gizmo.rotate", "Gizmo: rotate", "E", [] { get().gizmo = gizmo_tool::rotate; }, view_3d).when([] { return !get().vertex_mode; }).toggle([] { return get().gizmo == gizmo_tool::rotate; });
 		add("gizmo.scale", "Gizmo: scale", "R", [] { get().gizmo = gizmo_tool::scale; }, view_3d).toggle([] { return get().gizmo == gizmo_tool::scale; });
 		add("gizmo.world", "Gizmo: world / local axes", "", [] { get().gizmo_world = !get().gizmo_world; }).toggle([] { return get().gizmo_world; });
 		add("camera.next_spawn", "Camera: next spawn point", "N", [] { viewport_request("next_spawn"); }, view_3d);

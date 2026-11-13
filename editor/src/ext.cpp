@@ -7,11 +7,14 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "ext.hpp"
+#include "edit3d.hpp"
 
 // Where the parts of ext.hpp meet the host: one call to set them up, one per frame, and the menu entries.
 
 namespace editor::ext
 {
+	void register_command_actions();		// action_table.cpp
+
 	namespace
 	{
 		void register_window_actions()
@@ -44,7 +47,7 @@ namespace editor::ext
 			add("help.window", "Help", "F1", [] { open_help_window(); }, anywhere, no_map);
 
 			// the grid by number, as radiant has it on the digits
-			static const std::pair<const char*, double> grids[] = { { "1", 1.0 }, { "2", 2.0 }, { "3", 4.0 }, { "4", 8.0 }, { "5", 16.0 }, { "6", 32.0 }, { "7", 64.0 }, { "8", 256.0 }, { "9", 512.0 } };
+			static const std::pair<const char*, double> grids[] = { { "~", 0.5 }, { "1", 1.0 }, { "2", 2.0 }, { "3", 4.0 }, { "4", 8.0 }, { "5", 16.0 }, { "6", 32.0 }, { "7", 64.0 }, { "8", 256.0 }, { "9", 512.0 } };
 
 			for (const auto& [key, size] : grids)
 			{
@@ -77,6 +80,8 @@ namespace editor::ext
 		render_modes::register_actions();
 		fx::register_actions();
 		map_tools::register_actions();
+		register_command_actions();		// Brush / Patch, Selection / Grid / Misc / Region, clipboard, filters, prefabs
+		edit3d::register_actions();		// the tool keys of the 3D view
 
 		// the keys of the user, over the defaults of everything that is registered now ( and kept for what comes later )
 		actions::load_keys();

@@ -102,6 +102,20 @@ namespace codol::edit
 		};
 		mutable std::vector<geo_entry> geo_cache;
 
+		// ---- view filter / region / last hidden ( select_ops.cpp )
+		view_filter filter;
+		select_filter no_select;
+		bool region_on = false;
+		bounds region_box;
+		std::uint64_t filter_serial = 1;
+		mutable std::uint64_t filter_built_serial = 0, filter_built_change = 0;
+		mutable std::unordered_set<object_id> filtered, unselectable;
+		std::vector<object_id> last_hidden;
+		[[nodiscard]] bool filter_active() const { return region_on || filter.any() || no_select.any(); }
+		void build_filter() const;
+		[[nodiscard]] bool is_filtered(object_id id) const;
+		[[nodiscard]] bool is_unselectable(object_id id) const;
+
 		// ---- access
 		[[nodiscard]] object_kind kind(const object_id id) const { return id < slots.size() ? slots[id].kind : object_kind::none; }
 		[[nodiscard]] const entity* get_entity(const object_id id) const

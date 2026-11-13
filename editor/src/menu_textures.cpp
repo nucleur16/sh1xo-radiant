@@ -332,14 +332,26 @@ namespace editor::textures
 		add("texture.fit", "Fit texture", "Ctrl+F", [step] { step("Fit texture", doc().fit_texture(1.0, 1.0)); }).when(targets);
 		add("texture.natural", "Natural texture ( reset the alignment )", "", [step] { step("Natural texture", doc().natural_texture()); }).when(targets);
 
-		add("texture.shift_left", "Shift texture left", "Shift+Left", [step] { step("Shift texture", doc().shift_texture(-g_shift_h, 0.0)); }, views, repeat).when(targets);
-		add("texture.shift_right", "Shift texture right", "Shift+Right", [step] { step("Shift texture", doc().shift_texture(g_shift_h, 0.0)); }, views, repeat).when(targets);
-		add("texture.shift_up", "Shift texture up", "Shift+Up", [step] { step("Shift texture", doc().shift_texture(0.0, g_shift_v)); }, views, repeat).when(targets);
-		add("texture.shift_down", "Shift texture down", "Shift+Down", [step] { step("Shift texture", doc().shift_texture(0.0, -g_shift_v)); }, views, repeat).when(targets);
-		add("texture.rotate_cw", "Rotate texture clockwise", "Ctrl+Left", [step] { step("Rotate texture", doc().rotate_texture(-g_rotate)); }, views, repeat).when(targets);
-		add("texture.rotate_ccw", "Rotate texture counter clockwise", "Ctrl+Right", [step] { step("Rotate texture", doc().rotate_texture(g_rotate)); }, views, repeat).when(targets);
-		add("texture.scale_up", "Texture larger", "Shift+Plus|Shift+KeypadAdd", [step] { step("Scale texture", doc().scale_texture(g_scale_h, g_scale_v)); }, views, repeat).when(targets);
-		add("texture.scale_down", "Texture smaller", "Shift+Minus|Shift+KeypadSubtract", [step] { step("Scale texture", doc().scale_texture(1.0 / g_scale_h, 1.0 / g_scale_v)); }, views, repeat).when(targets);
+		// Radiant's keys, in the 3D view and the 2D views. A key that is held is one undo step.
+		const auto held = [](const char* name, const std::uint64_t key, const auto& fn)
+		{
+			auto& d = doc();
+			d.begin_transaction(name, key);
+			const bool ok = fn(d);
+			d.end_transaction();
+			ui::report(ok, name);
+		};
+
+		add("texture.shift_left", "Shift texture left", "Shift+Left", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(-g_shift_h, 0.0); }); }, views, repeat).when(targets);
+		add("texture.shift_right", "Shift texture right", "Shift+Right", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(g_shift_h, 0.0); }); }, views, repeat).when(targets);
+		add("texture.shift_up", "Shift texture up", "Shift+Up", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(0.0, g_shift_v); }); }, views, repeat).when(targets);
+		add("texture.shift_down", "Shift texture down", "Shift+Down", [held] { held("Shift texture", 0x3D7E0001, [](auto& d) { return d.shift_texture(0.0, -g_shift_v); }); }, views, repeat).when(targets);
+		add("texture.rotate_ccw", "Rotate texture", "Shift+PageUp", [held] { held("Rotate texture", 0x3D7E0002, [](auto& d) { return d.rotate_texture(g_rotate); }); }, views, repeat).when(targets);
+		add("texture.rotate_cw", "Rotate texture back", "Shift+PageDown", [held] { held("Rotate texture", 0x3D7E0002, [](auto& d) { return d.rotate_texture(-g_rotate); }); }, views, repeat).when(targets);
+		add("texture.scale_h_down", "Texture narrower", "Ctrl+Left", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.0 / 1.05, 1.0); }); }, views, repeat).when(targets);
+		add("texture.scale_h_up", "Texture wider", "Ctrl+Right", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.05, 1.0); }); }, views, repeat).when(targets);
+		add("texture.scale_v_up", "Texture taller", "Ctrl+Up", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.0, 1.05); }); }, views, repeat).when(targets);
+		add("texture.scale_v_down", "Texture lower", "Ctrl+Down", [held] { held("Scale texture", 0x3D7E0003, [](auto& d) { return d.scale_texture(1.0, 1.0 / 1.05); }); }, views, repeat).when(targets);
 
 		add("texture.lock_toggle", "Texture lock", "Shift+T", [] { ui::toggle_texture_lock(); }, views).toggle([] { return doc().texture_lock(); });
 		add("texture.lock_moves", "Texture lock: moves", "", []
@@ -1150,6 +1162,15 @@ namespace editor::textures
 							ImGui::Dummy(ImVec2(image, image));
 							dl->AddRect(pos, ImVec2(pos.x + image, pos.y + image), chosen ? IM_COL32(255, 184, 64, 255) : IM_COL32(70, 72, 76, 255));
 							if (!known) { dl->AddText(ImVec2(pos.x + 6.0f, pos.y + image * 0.5f - 8.0f), IM_COL32(245, 150, 110, 255), "not in a zone"); }
+						}
+
+						// drag it onto a face in the 3D view
+						if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+						{
+							ImGui::SetDragDropPayload("CODOL_MATERIAL", name.c_str(), name.size() + 1);
+							ImGui::TextUnformatted(name.c_str());
+							ImGui::TextDisabled("Drop on a face in the 3D view ( Shift: the whole brush )");
+							ImGui::EndDragDropSource();
 						}
 
 						if (ImGui::IsItemClicked())

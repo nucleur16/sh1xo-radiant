@@ -9,8 +9,10 @@
 #include "preview.hpp"
 #include "ui.hpp"
 #include "ext.hpp"
+#include "edit3d.hpp"
 
 #include <ImGuizmo.h>
+#include <psapi.h>
 
 // The 3D view of the standalone editor: the map drawn by codol_view, as a view of the document. Selection, the
 // transform gizmo and every edit go to the document ( scene.hpp ); this file draws, picks and navigates. Also here:
@@ -224,6 +226,24 @@ namespace ggui
 	{
 		g_impl = m.get();
 		ui::register_commands();
+		editor::edit3d::register_commands();
+
+		// ed_mem [label]: memory of the process and of the device, one line ( a run that opens map after map prints it
+		// after each: what grows without bound is a leak )
+		command::register_command("ed_mem", [](const std::vector<std::string>& args)
+		{
+			PROCESS_MEMORY_COUNTERS_EX counters = {};
+			counters.cb = sizeof(counters);
+			GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters));
+
+			const auto& s = editor::get_scene();
+			const auto stats = s.renderer.stats();
+			const UINT texture_mb = game::glob::d3d9_device ? game::glob::d3d9_device->GetAvailableTextureMem() / (1024u * 1024u) : 0u;
+
+			game::printf_to_console("ed_mem %s: working set %d MB, private %d MB, device texture memory available %u MB, map %s, %d surfaces, %d meshes\n",
+				args.size() > 1 ? args[1].c_str() : "-", static_cast<int>(counters.WorkingSetSize / (1024 * 1024)), static_cast<int>(counters.PrivateUsage / (1024 * 1024)),
+				texture_mb, s.open ? s.map_name.c_str() : "( none )", stats.world_surface_count, stats.mesh_count);
+		});
 	}
 
 	codol_viewport_dialog::~codol_viewport_dialog()
@@ -293,6 +313,12 @@ namespace editor::ui
 
 		const float3 dir{ direction.x / len, direction.y / len, direction.z / len };
 
+		// Patch menu, terrain edge mode: the click turns the diagonal of the terrain quad it hits
+		if (!toggle && !face && patch_edge_click(origin, dir))
+		{
+			return;
+		}
+
 		// what the renderer draws
 		view::pick_result drawn;
 		const bool drawn_hit = s.renderer.loaded() && s.renderer.pick_ray(origin, dir, drawn, ggui::g_impl ? ggui::g_impl->pick_options() : view::pick_options{});
@@ -335,6 +361,11 @@ namespace editor::ui
 		else if (drawn_hit)
 		{
 			target = s.object_of(drawn.object);
+
+			if (target != edit::no_object && !doc.is_selectable(target))
+			{
+				return; // shown, but not to be picked ( Filter window: "don't select .." )
+			}
 
 			if (target == edit::no_object)
 			{
@@ -442,7 +473,9 @@ namespace ggui
 			// where the drag began. )
 			const bool edited_model = object.compiled && !object.imported;
 
-			if (!(object.imported || object.compiled) || !(all || edited_model))
+			const bool wire_patch = object.patch && editor::ui::patches_as_wire();		// Patch menu: patches as wireframes
+
+			if (!wire_patch && (!(object.imported || object.compiled) || !(all || edited_model)))
 			{
 				continue;
 			}
@@ -691,6 +724,7 @@ namespace ggui
 		draw(entity_boxes);
 		draw(link_lines);
 		editor::render_modes::draw_overlay(ctx);
+		draw(ui::extra_view_lines(false));		// contents of prefabs, the region, the leak line
 
 		if (show_outline)
 		{
@@ -770,6 +804,18 @@ namespace ggui
 		auto& doc = s.doc;
 		auto& st = ui::get();
 		const auto& io = ImGui::GetIO();
+
+		// vertex / edge tool: the gizmo is on the selected handles; clipper: none
+		if (editor::edit3d::replaces_gizmo())
+		{
+			if (gizmo_active)
+			{
+				gizmo_active = false;
+				s.end_drag();
+			}
+
+			return editor::edit3d::handle_gizmo(dl, origin, width, height);
+		}
 
 		if (doc.selection().empty())
 		{
@@ -1458,6 +1504,9 @@ namespace ggui
 			ImGui::EndPopup();
 		}
 
+		// ---- second row: the editing tools of this view ( edit3d.cpp )
+		editor::edit3d::toolbar();
+
 		const ImVec2 avail = ImGui::GetContentRegionAvail();
 		const float status_h = ImGui::GetTextLineHeightWithSpacing();
 		const int width = static_cast<int>(avail.x);
@@ -1656,9 +1705,54 @@ namespace ggui
 			st.next_hovered_3d = true;
 		}
 
+		// a material dragged out of the Materials window: on the face it is dropped on ( Shift: the whole brush )
+		if (ImGui::BeginDragDropTarget())
+		{
+			if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("CODOL_MATERIAL"); payload && payload->Data)
+			{
+				editor::edit3d::drop_material(static_cast<const char*>(payload->Data), io.MousePos.x - image_pos.x, io.MousePos.y - image_pos.y, io.KeyShift);
+			}
+
+			ImGui::EndDragDropTarget();
+		}
+
 		// ---- gizmo on the selection of the document: it wins over driving the camera
 		const bool gizmo_busy = m->draw_gizmo(dl, image_pos, width, height);
 		m->gizmo_hover = gizmo_busy;
+
+		// ---- the editing tools ( edit3d.cpp ): they get the left button first. A tool that takes the press owns it
+		// until the release; one that does not leaves the click and the drag to the view, as before.
+		bool tool_press = false;
+
+		{
+			const float mx = io.MousePos.x - image_pos.x, my = io.MousePos.y - image_pos.y;
+
+			if (editor::edit3d::scripted())
+			{
+				// a press from the console ( ed3d press ): it ends with `ed3d release`
+			}
+			else if (editor::edit3d::busy())
+			{
+				if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+				{
+					editor::edit3d::drag(mx, my, false);
+				}
+				else
+				{
+					editor::edit3d::release();
+				}
+			}
+			else if (hovered && !gizmo_busy && s.open && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGui::IsMouseDown(ImGuiMouseButton_Right))
+			{
+				tool_press = editor::edit3d::press(mx, my, io.KeyShift, io.KeyCtrl, io.KeyAlt);
+			}
+
+			dl->PushClipRect(image_pos, ImVec2(image_pos.x + static_cast<float>(width), image_pos.y + static_cast<float>(height)), true);
+			editor::edit3d::draw(dl, image_pos, width, height, hovered && !gizmo_busy);
+			dl->PopClipRect();
+		}
+
+		const bool tool_busy = tool_press || editor::edit3d::busy();
 
 		// ---- navigation and picking
 		{
@@ -1681,7 +1775,7 @@ namespace ggui
 			if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
 			{
 				m->press_pos = io.MousePos;
-				m->press_valid = !gizmo_busy;
+				m->press_valid = !gizmo_busy && !tool_busy;
 			}
 
 			if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -1698,7 +1792,11 @@ namespace ggui
 				m->right_press_valid = false; // looking around, not a click
 			}
 
-			if (mmb || (lmb && rmb))
+			if (tool_busy)
+			{
+				// a tool has the left button: the camera stays where it is
+			}
+			else if (mmb || (lmb && rmb))
 			{
 				move(axes.left, dx * drag);
 				move(axes.up, dy * drag);
@@ -1771,15 +1869,16 @@ namespace ggui
 		}
 
 		// ---- hint
-		if (hovered && !active && !gizmo_busy)
+		if (hovered && !active && !gizmo_busy && !tool_busy)
 		{
-			const char* hint = "Click: select ( Ctrl / Shift adds, both: face )    Right click: create entity    W E R: move / rotate / scale    Arrows: nudge    Space: clone\n"
-				"Right drag: look + W A S D    Left drag: drive    Middle drag: pan    Wheel: forward / back    F: go to the selection";
-			const ImVec2 size = ImGui::CalcTextSize(hint);
+			// what the mouse and the keys do in the tool that is on
+			const char* hint = editor::edit3d::hint();
+			const float wrap = std::max(120.0f, static_cast<float>(width) - 24.0f);	// a narrow view: the lines wrap
+			const ImVec2 size = ImGui::CalcTextSize(hint, nullptr, false, wrap);
 			const ImVec2 at(image_pos.x + 8.0f, image_pos.y + static_cast<float>(height) - size.y - 10.0f);
 
 			dl->AddRectFilled(ImVec2(at.x - 4.0f, at.y - 3.0f), ImVec2(at.x + size.x + 4.0f, at.y + size.y + 3.0f), IM_COL32(0, 0, 0, 150), 3.0f);
-			dl->AddText(at, IM_COL32(230, 230, 230, 255), hint);
+			dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), at, IM_COL32(230, 230, 230, 255), hint, nullptr, wrap);
 		}
 
 		// ---- status

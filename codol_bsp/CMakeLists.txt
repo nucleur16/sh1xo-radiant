@@ -70,4 +70,17 @@ if(CODOL_BSP_BUILD_TESTS)
 	target_compile_definitions(codol_bsp_tests PRIVATE CODOL_BSP_GAME_DIR="${CODOL_BSP_GAME_DIR}")
 	codol_bsp_options(codol_bsp_tests)
 	add_test(NAME codol_bsp_tests COMMAND codol_bsp_tests)
+
+	# the patches and brush primitives of the editor's Brush / Patch menus, compiled
+	add_executable(codol_bsp_patch_tests tests/patch_tests.cpp)
+	target_link_libraries(codol_bsp_patch_tests PRIVATE codol_bsp)
+	target_compile_definitions(codol_bsp_patch_tests PRIVATE CODOL_BSP_GAME_DIR="${CODOL_BSP_GAME_DIR}")
+	codol_bsp_options(codol_bsp_patch_tests)
+	add_test(NAME codol_bsp_patch_tests COMMAND codol_bsp_patch_tests)
+	# prefabs expanded at compile time, "contents weaponClip / nonColliding" in the clip map
+	add_executable(codol_bsp_prefab_tests tests/codol_bsp_prefab_tests.cpp)
+	target_link_libraries(codol_bsp_prefab_tests PRIVATE codol_bsp)
+	target_compile_definitions(codol_bsp_prefab_tests PRIVATE CODOL_BSP_GAME_DIR="${CODOL_BSP_GAME_DIR}")
+	codol_bsp_options(codol_bsp_prefab_tests)
+	add_test(NAME codol_bsp_prefab_tests COMMAND codol_bsp_prefab_tests)
 endif()

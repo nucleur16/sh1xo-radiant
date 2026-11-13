@@ -99,4 +99,11 @@ if(CODOL_MAPC_BUILD_TESTS)
 	target_compile_definitions(codol_mapc_tests PRIVATE CODOL_MAPC_GAME_DIR="${CODOL_MAPC_GAME_DIR}")
 	codol_mapc_options(codol_mapc_tests)
 	add_test(NAME codol_mapc_tests COMMAND codol_mapc_tests)
+
+	# a misc_prefab of the edited map compiles as the contents of its file
+	add_executable(codol_mapc_prefab_tests tests/codol_mapc_prefab_tests.cpp)
+	target_link_libraries(codol_mapc_prefab_tests PRIVATE codol_mapc)
+	target_compile_definitions(codol_mapc_prefab_tests PRIVATE CODOL_MAPC_GAME_DIR="${CODOL_MAPC_GAME_DIR}")
+	codol_mapc_options(codol_mapc_prefab_tests)
+	add_test(NAME codol_mapc_prefab_tests COMMAND codol_mapc_prefab_tests)
 endif()

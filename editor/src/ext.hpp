@@ -184,7 +184,6 @@ namespace editor::render_modes
 		bool show_angles = false;
 		bool model_origins = false;
 		bool grid_names = true;
-		bool grid_blocks = false;
 		bool grid_coordinates = true;
 		bool grid_crosshair = false;
 		shading mode = shading::game;

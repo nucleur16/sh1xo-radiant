@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "ext.hpp"
+#include "menu_ext.hpp"
 
 // Preferences ( grouped settings instead of the raw list ), the colours of the views with presets, autosave with
 // rotating backups and the list of recent maps. Every value is a saved dvar of codol_editor.cfg, so the console sets
@@ -557,7 +558,7 @@ namespace editor::prefs
 			slider_row("ed_snap_angle", "Angle snap of the gizmo", 1, 90, "%d deg");
 			ImGui::Spacing();
 			ImGui::Checkbox("2D views: names of entities", &rs.grid_names);
-			ImGui::Checkbox("2D views: grid blocks ( 1024 units )", &rs.grid_blocks);
+			ImGui::Checkbox("2D views: grid blocks ( 1024 units )", &ui::ext::get().show_grid_blocks);
 			ImGui::Checkbox("2D views: coordinates at the edges and of the blocks", &rs.grid_coordinates);
 			ImGui::Checkbox("2D views: crosshair under the mouse", &rs.grid_crosshair);
 			break;

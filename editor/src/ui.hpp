@@ -193,4 +193,33 @@ namespace editor::ui
 	void set_material_filter(const std::string& text, int group);
 	// "next_spawn", "overview", "focus": the camera actions of the 3D view
 	void viewport_request(std::string_view what);
+
+	// ---- the Brush and Patch menus ( menu_brush_patch.cpp ) -----------------------------------------------------
+	void draw_brush_menu();
+	void draw_patch_menu();
+	void draw_brush_patch_windows();			// their dialogs, once per frame
+	void register_brush_patch_commands();		// brush_*, patch_*
+	bool patches_as_wire();						// patches are drawn as lines only
+	// vertex mode of the 2D views: the vertices of a patch that were grabbed become the selected patch vertices
+	// ( without "drill down" only the one nearest to the viewer stays in the list ); a drag honours weld and lock
+	void patch_vertices_grabbed(object_id patch, std::vector<int>& vertices, int view_axis);
+	bool move_patch_vertices(object_id patch, const std::vector<int>& vertices, const edit::vec3& delta);
+	// calls mark( position, colour ) for the selected and the locked patch vertices
+	void patch_vertex_marks(const std::function<void(const edit::vec3&, ImU32)>& mark);
+	// 3D view, terrain edge mode: a click along the ray turns the diagonal of the quad it hits; true when it did
+	bool patch_edge_click(const float3& origin, const float3& direction);
+	// ---- File / Edit / View additions, the Selection, Grid, Misc and Region menus, filters, prefabs
+	// ( menu_selection.cpp, filters.cpp, prefabs.cpp; what they share: menu_ext.hpp ) ---------------------------
+	void draw_file_menu_extra();		// after the entries of draw_file_menu_items
+	void draw_edit_menu_extra();
+	void draw_view_menu_extra();
+	void draw_extra_menus();			// Selection, Grid, Misc, Region
+	void draw_extra_windows();			// once per frame: Filter, Map Info, Entity Info, Prefabs, the dialogs
+	void register_extra_commands();
+	// lines in world space every view draws: the contents of prefabs, the region, the leak line ( 2D: the grid blocks )
+	const std::vector<line_vertex>& extra_view_lines(bool view2d);
+	// the box of a misc_prefab entity relative to its origin; false for any other entity
+	bool prefab_box(const edit::entity& e, edit::bounds& local_box);
+	// the file File > Build map compiles: the map, or what the region shows ( after "Build region" )
+	std::filesystem::path build_source_file(const std::filesystem::path& map_file);
 }

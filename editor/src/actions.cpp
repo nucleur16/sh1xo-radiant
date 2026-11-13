@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "edit3d.hpp"
 #include "assets.hpp"
 #include "preview.hpp"
 #include "ext.hpp"
@@ -951,7 +952,7 @@ namespace editor::ui
 			}
 		}
 
-		const auto map_file = s.map_file;
+		const auto map_file = build_source_file(s.map_file);
 		const std::string name = to_utf8(map_file.stem());
 		const auto out_dir = base_dir / "compiled";
 		std::filesystem::create_directories(out_dir / "cache", ec);
@@ -1245,22 +1246,6 @@ namespace editor::ui
 
 		bool vertex = st.vertex_mode;
 		if (ImGui::MenuItem("Vertex / edge mode ( 2D views )", "V", &vertex, open)) { set_vertex_mode(vertex); }
-
-		if (ImGui::BeginMenu("Grid"))
-		{
-			for (int g = 1; g <= 512; g *= 2)
-			{
-				const std::string label = std::to_string(g);
-				if (ImGui::MenuItem(label.c_str(), g == 1 ? "[ smaller" : (g == 512 ? "] larger" : nullptr), s.grid == g))
-				{
-					s.set_grid(g);
-				}
-			}
-
-			ImGui::Separator();
-			ImGui::MenuItem("Snap to the grid", nullptr, &s.snap);
-			ImGui::EndMenu();
-		}
 	}
 
 	// ---- shortcuts -------------------------------------------------------------------------------------------
@@ -1980,6 +1965,8 @@ namespace editor::ui
 		// ---- the project's assets: asset_new_material, asset_import_model, asset_gdt, asset_build, asset_list ..
 		assets::register_commands();
 		preview::register_commands();
+		register_brush_patch_commands();
+		register_extra_commands();
 
 		command::register_command("help", [](args_t)
 		{
