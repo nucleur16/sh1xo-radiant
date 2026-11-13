@@ -147,7 +147,7 @@ namespace codol::edit
 
 	bool document::impl::is_visible(const object_id id) const
 	{
-		if (kind(id) == object_kind::none || is_hidden(id))
+		if (kind(id) == object_kind::none || is_hidden(id) || is_filtered(id))
 		{
 			return false;
 		}
@@ -825,9 +825,11 @@ namespace codol::edit
 
 	void document::hide_selected()
 	{
+		d->last_hidden.clear();
+
 		for (const object_id id : d->sel.objects)
 		{
-			d->hidden.insert(id);
+			if (d->hidden.insert(id).second) { d->last_hidden.push_back(id); }
 		}
 
 		d->visibility_counter++;
@@ -836,6 +838,8 @@ namespace codol::edit
 
 	void document::hide_unselected()
 	{
+		d->last_hidden.clear();
+
 		for (const object_id ent : d->order)
 		{
 			const entity* e = d->get_entity(ent);
@@ -844,7 +848,7 @@ namespace codol::edit
 			{
 				if (ent != d->world() && !d->is_selected(ent))
 				{
-					d->hidden.insert(ent);
+					if (d->hidden.insert(ent).second) { d->last_hidden.push_back(ent); }
 				}
 
 				continue;
@@ -854,7 +858,7 @@ namespace codol::edit
 			{
 				if (!d->is_selected(child))
 				{
-					d->hidden.insert(child);
+					if (d->hidden.insert(child).second) { d->last_hidden.push_back(child); }
 				}
 			}
 		}
@@ -1144,7 +1148,7 @@ namespace codol::edit
 
 				if (e->children.empty())
 				{
-					if (options.entities && ent != d.world() && (options.include_hidden || d.is_visible(ent)))
+					if (options.entities && ent != d.world() && (options.include_hidden || d.is_visible(ent)) && !d.is_unselectable(ent))
 					{
 						fn(ent, object_kind::entity, ent);
 					}
@@ -1165,7 +1169,7 @@ namespace codol::edit
 						continue;
 					}
 
-					if (options.include_hidden || d.is_visible(child))
+					if ((options.include_hidden || d.is_visible(child)) && !d.is_unselectable(child))
 					{
 						fn(child, k, ent);
 					}

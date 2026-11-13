@@ -23,6 +23,7 @@
 
 #include "codol_edit/model.hpp"
 #include "codol_edit/geometry.hpp"
+#include "codol_edit/select_types.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -228,6 +229,9 @@ namespace codol::edit
 		// world axes in ascending order ( axis 2: x y, axis 1: x z, axis 0: y z ).
 		[[nodiscard]] std::vector<object_id> query_rect(int axis, vec2 lo, vec2 hi, bool fully_inside,
 			const pick_options& options = {}) const;
+
+		// ---- selection menu / clipboard / filters / regions / prefabs ( src/select_ops.cpp, src/prefab.cpp ) ----
+#include "codol_edit/document_select.inc"
 
 		// ---- undo -------------------------------------------------------------------------------
 
