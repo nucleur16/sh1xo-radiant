@@ -5,7 +5,7 @@ This branch (`codol-1.1.1.13`) turns iw3xo-radiant into a workbench for Call of 
 and adds a **CoDOL** menu.
 
 - [CoDOL Radiant: the standalone editor](#codol-radiant-the-standalone-editor) - [the tool chain](#the-tool-chain),
-  [a map of your own](#a-map-of-your-own) step by step, [your own assets](#your-own-assets)
+  [3D editing](#3d-editing), [a map of your own](#a-map-of-your-own) step by step, [your own assets](#your-own-assets)
 - [What works](#what-works) ( the radiant plugin )
 - [What does not exist yet](#what-does-not-exist-yet)
 - [Setup](#setup)
@@ -57,6 +57,48 @@ server reads both. Maps built from scratch and edited shipped maps have both bee
 in the client - on one machine, over loopback, with a test account, the lobby emulator of the install and a
 dedicated server ( `codol_dedrun` ); nobody has played them over a network. `codol_bsp/README.md` and
 `codol_mapc/README.md` list what was checked where, with the pictures, and what is still open.
+
+### 3D editing
+
+Brushes and patches are made and shaped in the 3D view as well as in the 2D views. The left mouse button belongs to
+the tool that is on ( second row of the view's toolbar ); right drag looks around and flies ( W A S D ), middle drag
+pans, the wheel moves forward and back - as before. Every drag is one undo step with a name ( Move, Resize, Move
+face, Move vertices, Move edges, Clip, Create box .. ), snaps to the grid ( `[` `]`, the Snap box ), keeps the
+texture lock ( Shift+T ) and shows in the 2D views while it happens. Esc during a drag takes it back. The two or
+three lines at the bottom of the view say what the mouse and the keys do in the tool that is on.
+
+| Tool | Key | Left button |
+|---|---|---|
+| **Select** | Esc | Click selects ( Ctrl or Shift adds / removes ). **Drag on the selection**: it moves, on the world plane that faces the camera most ( look down: on the floor; look along: up and sideways ). **Drag next to a selected brush**: the faces on that side follow the mouse - Radiant's resize; a drag that starts past a corner takes both faces. **Squares on the selection's box**: that side of every selected brush. **Ctrl+Shift click** selects a face ( again: deselects it ); **drag a selected face**: it moves along its normal, with every other selected face. **Shift drag**: everything in the rectangle is added to the selection. **Alt click**: the object behind the selected one under the mouse ( Alt+Shift click adds it ) - through walls and into stacks. With nothing selected a left drag drives the camera, as before. |
+| **Vertices** | V | Handles on the corners of the selected brushes ( green ) and the control points of the selected patches ( pink ). Click a handle: select it; Ctrl or Shift click adds / removes; Shift drag: the handles in the rectangle. Drag a handle: the selected handles move on the grid, on the plane that faces the camera most; with **Alt** along the third axis instead. The arrows of the gizmo on the selected handles move them along one axis. A corner that brushes share moves in all of them; sides that are no longer flat are split into triangles ( the brush is rebuilt as the hull of its corners ). |
+| **Edges** | E, while the handles are shown | Handles on the middle of the edges ( blue ); an edge moves as a whole, the same way. E again or V: back to the vertices. |
+| **Clipper** | C | Click on a surface: a clip point; two or three, drag to move them. Two points cut straight through the surface the first was put on, three define the plane. The cut is drawn on every selected brush, the arrow shows the side that stays. Enter clips, Ctrl+Enter keeps the other side, Shift+Enter splits; Esc removes the points, then leaves. Points placed in a 2D view and in the 3D view are the same points. |
+| **Create** | B | Drag a rectangle on the surface under the mouse - the ground, a wall, the top of a brush, the floor of an empty map: a brush stands on it, as high as the last selection was ( 64 when there was none ). It is selected: drag the squares on its box to size it. The list next to the button picks the shape: box, cylinder and cone ( with a number of sides ), wedge, terrain patch. |
+
+The keys that were there stay: W / E / R pick the gizmo ( move / rotate / scale ) - E is the edge mode only while the
+vertex handles are shown, where nothing is rotated -, arrows and PageUp / PageDown nudge the selection, Space clones,
+Delete deletes, F goes to the selection. New, for the faces that are selected ( or every face of the selected brushes,
+as in Radiant ): **Shift + arrows** shift the texture by the grid size, **Ctrl + arrows** scale it by 5 %,
+**Shift + PageUp / PageDown** rotate it by the angle snap.
+
+**Materials**: drag a material out of the Materials window and drop it on a face in the 3D view; with Shift held at
+the drop it goes on every face of that brush; on a patch it replaces the patch's material. The selection does not
+change.
+
+What a drag works on is the document: in a shipped map the world is the zone's render geometry, which no tool
+changes - the tools see its surfaces ( to put a clip point or a new brush on ) and the collision brushes
+( `Brushes: all` shows them ).
+
+For unattended runs the tools have a console command that calls what the mouse calls, at pixels of the view or at
+the pixel a world point projects to: `ed3d tool <object|vertex|edge|clip|create>`, `ed3d primitive <box|cylinder|cone|wedge|terrain> [sides]`,
+`ed3d press <px> <py> [shift] [ctrl] [alt]` / `drag <px> <py>` / `release` / `click ..`, the same with a world point
+( `wpress x y z`, `wdrag`, `wclick` ), `ed3d drop <material> <px> <py> [brush]` / `wdrop`, `ed3d handles` ( the handles
+with their pixels ), `ed3d faces` ( the faces of the selection ), `ed3d mouse <px> <py>` / `wmouse x y z` ( the injected
+mouse of `ui_mouse`, on a pixel of the view ). `tests\ed3d\run.ps1 -Exe <CoDOLRadiant.exe> -Script tests\ed3d\<name>.cmds`
+runs a command list and checks its `expect` lines against the console log: `object` ( Select tool ), `handles`
+( vertices, edges, clipper, create, material ), `shipped` ( in a map of the install ) go through `ed3d press`;
+`mouse` and `matdrop` feed the mouse and the keyboard themselves ( `ui_mouse`, `ui_key` ) and so go through the
+gui, the gizmo and the shortcuts.
 
 ### A map of your own
 
