@@ -1,4 +1,5 @@
-// Stage 4: render geometry for the new and the edited brushes of the world.
+// Stage 4: render geometry for the new and the edited brushes of the world, and for the patches of the world ( their
+// tessellation, one surface per patch; every vertex takes the nearest texel of the bake that faces its way ).
 //
 // What the GfxWorld holds for world geometry ( shape of the data: codol_mapc_probe gfx / fields ):
 //
@@ -24,6 +25,7 @@
 // world's triangles ), so the surfaces of a brush that was deleted or moved away cannot be found and stay.
 
 #include "mapc_impl.hpp"
+#include "codol_edit/patch_ops.hpp"
 
 #include <functional>
 #include <set>
@@ -77,7 +79,7 @@ namespace codol::mapc
 		{
 			ctx.warn(format("surfaces: %d brushes of brush models changed; the render surfaces of brush models are not compiled ( their collision is )", model_brushes));
 		}
-		if (!world_brushes)
+		if (!world_brushes && diff.patches.empty())
 		{
 			return;
 		}
@@ -232,17 +234,32 @@ namespace codol::mapc
 		{
 			names[s] = ctx.gfx.surfaces[s].materialName;
 		}
+		// what is drawn: the new / edited world brushes, then the patches of the world ( terrain as it is, curves at their
+		// subdivision ) - a patch is one part of one material
+		std::vector<std::pair<edit::object_id, bool>> drawn;		// id, is a patch
 		for (const brush_edit& e : diff.brushes)
 		{
-			if (e.sub_model != 0)
+			if (e.sub_model == 0)
+			{
+				drawn.emplace_back(e.brush, false);
+			}
+		}
+		for (const edit::object_id id : diff.patches)
+		{
+			drawn.emplace_back(id, true);
+		}
+		for (const auto& [object, is_patch] : drawn)
+		{
+			const edit::brush* source = is_patch ? nullptr : ctx.edited.find_brush(object);
+			const edit::patch* source_patch = is_patch ? ctx.edited.find_patch(object) : nullptr;
+			edit::mesh mesh;
+			if ((!source && !source_patch) || !ctx.edited.build_mesh(object, mesh, source_patch ? edit::patch_subdivisions(*source_patch) : 4) || mesh.parts.empty())
 			{
 				continue;
 			}
-			const edit::brush* source = ctx.edited.find_brush(e.brush);
-			edit::mesh mesh;
-			if (!source || !ctx.edited.build_mesh(e.brush, mesh) || mesh.parts.empty())
+			if (source_patch)
 			{
-				continue;
+				ctx.rep.patches_drawn++;
 			}
 			// faces by material
 			std::map<std::string, std::vector<const edit::mesh_part*>> by_material;
@@ -300,33 +317,39 @@ namespace codol::mapc
 					const edit::mesh_vertex& any = mesh.vertices[mesh.indices[part->first_index]];
 					const float normal[3] = { any.normal[0], any.normal[1], any.normal[2] };
 					// lightmap coordinate, colour: one vertex of the template, the nearest that faces the way this face does
-					const c1::GfxWorldVertex* donor = nullptr;
-					float donor_score = 0;
-					for (std::uint32_t v = model.firstVertex; v < model.firstVertex + model.vertexCount && v < old_vertices; v++)
+					// ( for a patch: per vertex, below, as a curve faces many ways )
+					const auto find_donor = [&](const float* position, const float* facing_normal) -> const c1::GfxWorldVertex*
 					{
-						float theirs[3];
-						zone::unpack_unit_vector(vertices[v].normal, theirs);
-						const float facing = theirs[0] * normal[0] + theirs[1] * normal[1] + theirs[2] * normal[2];
-						float distance = 0;
-						for (int k = 0; k < 3; k++)
+						const c1::GfxWorldVertex* found = nullptr;
+						float found_score = 0;
+						for (std::uint32_t v = model.firstVertex; v < model.firstVertex + model.vertexCount && v < old_vertices; v++)
 						{
-							const float d = vertices[v].xyz[k] - any.position[k];
-							distance += d * d;
+							float theirs[3];
+							zone::unpack_unit_vector(vertices[v].normal, theirs);
+							const float facing = theirs[0] * facing_normal[0] + theirs[1] * facing_normal[1] + theirs[2] * facing_normal[2];
+							float distance = 0;
+							for (int k = 0; k < 3; k++)
+							{
+								const float d = vertices[v].xyz[k] - position[k];
+								distance += d * d;
+							}
+							const float score = std::sqrt(distance) + (facing > 0.7f ? 0.0f : 100000.0f);
+							if (!found || score < found_score)
+							{
+								found = &vertices[v];
+								found_score = score;
+							}
 						}
-						const float score = std::sqrt(distance) + (facing > 0.7f ? 0.0f : 100000.0f);
-						if (!donor || score < donor_score)
-						{
-							donor = &vertices[v];
-							donor_score = score;
-						}
-					}
+						return found;
+					};
+					const c1::GfxWorldVertex* donor = find_donor(any.position, normal);
 					// copied: the vertex array grows below
 					const std::uint32_t donor_color = donor ? donor->color : 0xFFFFFFFFu;
 					const float donor_lmap[2] = { donor ? donor->lmapCoord[0] : 0.0f, donor ? donor->lmapCoord[1] : 0.0f };
 					// tangent: the texture's u direction on the face
 					edit::vec3 u_axis, v_axis;
 					const edit::vec3 n(normal[0], normal[1], normal[2]);
-					const double rotation = part->face >= 0 && static_cast<std::size_t>(part->face) < source->faces.size() ? source->faces[static_cast<std::size_t>(part->face)].texture.rotation : 0.0;
+					const double rotation = source && part->face >= 0 && static_cast<std::size_t>(part->face) < source->faces.size() ? source->faces[static_cast<std::size_t>(part->face)].texture.rotation : 0.0;
 					edit::face_texture_axes(n, rotation, u_axis, v_axis);
 					const float tangent[3] = { static_cast<float>(u_axis.x), static_cast<float>(u_axis.y), static_cast<float>(u_axis.z) };
 					const float sign = edit::dot(edit::cross(n, u_axis), v_axis) >= 0 ? 1.0f : -1.0f;
@@ -349,6 +372,25 @@ namespace codol::mapc
 							v.lmapCoord[1] = donor_lmap[1];
 							v.normal = pack_unit_vector(from.normal);
 							v.tangent = pack_unit_vector(tangent);
+							if (source_patch)
+							{
+								// a patch: its own vertex colour ( the blend of a terrain ), the texel of the template nearest to this
+								// vertex that faces its way, a tangent from its own normal
+								const c1::GfxWorldVertex* near_donor = find_donor(from.position, from.normal);
+								v.color = static_cast<std::uint32_t>(from.color[2]) | (static_cast<std::uint32_t>(from.color[1]) << 8) | (static_cast<std::uint32_t>(from.color[0]) << 16)
+									| (static_cast<std::uint32_t>(from.color[3]) << 24);
+								if (near_donor)
+								{
+									v.lmapCoord[0] = near_donor->lmapCoord[0];
+									v.lmapCoord[1] = near_donor->lmapCoord[1];
+								}
+								edit::vec3 pu, pv;
+								const edit::vec3 pn(from.normal[0], from.normal[1], from.normal[2]);
+								edit::face_texture_axes(pn, 0.0, pu, pv);
+								const float patch_tangent[3] = { static_cast<float>(pu.x), static_cast<float>(pu.y), static_cast<float>(pu.z) };
+								v.tangent = pack_unit_vector(patch_tangent);
+								v.binormalSign = edit::dot(edit::cross(pn, pu), pv) >= 0 ? 1.0f : -1.0f;
+							}
 							it = local.emplace(index, static_cast<std::uint16_t>(vertex_count++)).first;
 							vertices.push_back(v);
 							made_box.add(v.xyz);

@@ -1,6 +1,6 @@
 // codol_mapc_tests: acceptance tests of the map compiler against the 1.1.1.13 install.
 //
-//   codol_mapc_tests [--game <install>] [--out <folder>] [--maps a,b] [--only identity|entities|models|brushes|trees|donor|assets|all]
+//   codol_mapc_tests [--game <install>] [--out <folder>] [--maps a,b] [--only identity|entities|models|brushes|patches|trees|donor|assets|all]
 //                    [--assets <project zone.ff>]   ( a codol_assetc zone with animations, sounds, effects: the carry test )
 //
 // For every map ( mp_rust, mp_killhouse_sh ) and stage an edited map is made with codol_edit from the import of the
@@ -15,6 +15,7 @@
 // The edited maps, the compiled fast files and a views.txt with camera arguments for codol_viewtool are left in
 // <out>/<map>/<stage>/ ; tests/run_e2e.ps1 renders them.
 
+#include "codol_edit/patch_ops.hpp"
 #include "codol_mapc/mapc.hpp"
 #include "codol_mapc/server_check.hpp"
 #include "codol_mapc/trace.hpp"
@@ -1923,6 +1924,120 @@ namespace
 	}
 }
 
+namespace
+{
+	// patches of the worldspawn: drawn ( stage_surfaces ), their collision is not compiled
+	void test_patches(const fixture& f)
+	{
+		std::printf("  patches\n");
+		edit::document edited;
+		std::string error;
+		CHECK_MSG(edited.load_map_text(f.baseline_text, error), error);
+		const edit::vec3 spawn = spawn_origin(edited);
+
+		zone::ZoneEditor base;
+		{
+			std::vector<std::uint8_t> copy = f.base_zone;
+			CHECK(base.load(std::move(copy), f.map));
+		}
+		zone::GfxWorldView base_gfx;
+		zone::ClipMapView base_clip;
+		CHECK(zone::read_gfx_world(base.zone(), zone::first_asset(base.zone(), c1::ASSET_TYPE_GFXWORLD), base_gfx));
+		CHECK(zone::read_clip_map(base.zone(), zone::first_asset(base.zone(), c1::ASSET_TYPE_CLIPMAP_MP), base_clip));
+
+		// a material the world draws ( "wc/<name>" ) that is no tool material
+		std::string material;
+		for (const auto& s : base_gfx.surfaces)
+		{
+			const std::string name(s.materialName);
+			if (name.rfind("wc/", 0) == 0 && name.find("clip") == std::string::npos && name.find("caulk") == std::string::npos && name.find("sky") == std::string::npos
+				&& s.raw.lightmapIndex != 31)
+			{
+				material = name.substr(3);
+				break;
+			}
+		}
+		CHECK(!material.empty());
+		if (material.empty())
+		{
+			return;
+		}
+
+		// above the spawn: a bumpy terrain mesh and an arch ( a curve ), both of the worldspawn
+		const edit::vec3 at = spawn + edit::vec3(0, 0, 200);
+		const edit::object_id hill = edited.create_terrain_patch(at + edit::vec3(-128, -128, 0), at + edit::vec3(0, 0, 0), 5, 5, 2, material);
+		edit::patch_add_noise(edited, hill, {}, { 0, 0, 12 }, 7);
+		const edit::object_id arch = edit::create_curve_patch(edited, at + edit::vec3(32, -64, 0), at + edit::vec3(160, 64, 0), 5, 3, 2, material);
+		const int middle[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11 };
+		CHECK(edited.move_patch_vertices(arch, middle, { 0, 0, 48 }));
+		CHECK(hill != edit::no_object && arch != edit::no_object);
+
+		std::size_t triangles = 0;
+		edit::bounds patch_box;
+		for (const edit::object_id id : { hill, arch })
+		{
+			edit::mesh mesh;
+			CHECK(edited.build_mesh(id, mesh, edit::patch_subdivisions(*edited.find_patch(id))));
+			triangles += mesh.indices.size() / 3;
+			patch_box.add(mesh.box.mins);
+			patch_box.add(mesh.box.maxs);
+		}
+
+		compiled c;
+		compile_case(f, "patches", edited, c, true);
+		if (!c.ok)
+		{
+			return;
+		}
+		const mapc::report& r = c.report;
+		CHECK(r.diff.patches.size() == 2 && r.patches_drawn == 2);
+		CHECK(r.surfaces_added >= 2 && r.triangles_added == static_cast<int>(triangles));
+		bool warned = false;
+		for (const std::string& w : r.warnings)
+		{
+			warned |= w.find("patches: 2 of the worldspawn, 2 drawn") != std::string::npos && w.find("collision is not compiled") != std::string::npos;
+			CHECK(w.find("are not compiled") == std::string::npos);		// the old "terrain and curve patches are not compiled"
+		}
+		CHECK(warned);
+
+		// the zone reads back through codol_zone; the new surfaces hold the patches' triangles where the patches are
+		const zone::Zone& z = c.editor.zone();
+		zone::GfxWorldView gfx;
+		zone::ClipMapView clip;
+		CHECK(zone::read_gfx_world(z, zone::first_asset(z, c1::ASSET_TYPE_GFXWORLD), gfx));
+		CHECK(zone::read_clip_map(z, zone::first_asset(z, c1::ASSET_TYPE_CLIPMAP_MP), clip));
+		CHECK(gfx.raw.surfaceCount == base_gfx.raw.surfaceCount + static_cast<std::uint32_t>(r.surfaces_added));
+		CHECK(gfx.raw.draw.indexCount == base_gfx.raw.draw.indexCount + 3u * static_cast<std::uint32_t>(r.triangles_added));
+		{
+			int inside = 0, lit = 0;
+			const auto vertices = z.get_array<c1::GfxWorldVertex>(gfx.raw.draw.vertices, gfx.raw.draw.vertexCount);
+			for (std::uint32_t v = base_gfx.raw.draw.vertexCount; v < vertices.size(); v++)
+			{
+				bool in = true;
+				for (int k = 0; k < 3; k++)
+				{
+					in = in && vertices[v].xyz[k] >= patch_box.mins[k] - 0.01 && vertices[v].xyz[k] <= patch_box.maxs[k] + 0.01;
+				}
+				inside += in;
+				lit += vertices[v].lmapCoord[0] != 0.0f || vertices[v].lmapCoord[1] != 0.0f;
+			}
+			std::printf("    %d new vertices, %d inside the patches' box, %d with a texel of the bake\n", static_cast<int>(vertices.size() - base_gfx.raw.draw.vertexCount), inside, lit);
+			CHECK(inside == static_cast<int>(vertices.size() - base_gfx.raw.draw.vertexCount) && inside == r.vertices_added);
+			CHECK(lit > 0);
+		}
+
+		// no collision for them: the clip map is the base zone's ( same terrain, same brushes ), and a trace down through the
+		// middle of the hill does not stop at it
+		CHECK(clip.raw.triCount == base_clip.raw.triCount && clip.raw.vertCount == base_clip.raw.vertCount && clip.raw.numBrushes == base_clip.raw.numBrushes);
+		{
+			std::vector<std::uint8_t> bytes = c.zone_bytes;
+			std::string why;
+			CHECK_MSG(mapc::check_server_collision(bytes, why), why);
+		}
+		CHECK(c.imported_ok);
+	}
+}
+
 int main(const int argc, char** argv)
 {
 	std::filesystem::path game = CODOL_MAPC_GAME_DIR, out = "mapc_test";
@@ -1966,6 +2081,7 @@ int main(const int argc, char** argv)
 		if (only == "all" || only == "entities") { test_entities(f); }
 		if (only == "all" || only == "models") { test_models(f); }
 		if (only == "all" || only == "brushes") { test_brushes(f); }
+		if (only == "all" || only == "patches") { test_patches(f); }
 		if (only == "all" || only == "trees")
 		{
 			test_brush_trees(f, 3, "brush_trees");

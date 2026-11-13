@@ -45,7 +45,7 @@ needed. What it is made of:
 |---|---|---|
 | Radiant | `CoDOLRadiant.exe` | open a map of the install or one of your own, edit entities / models / brushes in 3D and 2D views with undo, light entities with a panel of their own, save as `.map` |
 | `cod4map`, `cod4rad`, the map's linker step | `codol_bsp.exe` ( File > Build map ) | builds the whole zone of a map of your own from its `.map` alone: collision ( brushes, terrain patches, static models ), BSP, cells and portals, render geometry, light bake ( sun, lights, bounce in the materials' colours, light grid, reflection probes ), primary lights ( spot, omni, scriptable ), minimap picture, load zone, level scripts. See [A map of your own](#a-map-of-your-own). |
-| editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes, and the project's assets ( animations, sounds, effects, models ). It patches the shipped zone; no light bake. |
+| editing a shipped map | `codol_mapc.exe` ( File > Compile map ) | applies the edits of a `.map` to the fastfile of the map it was imported from: entities, static models moved / deleted / added, collision brushes, render faces of new world brushes and of patches ( no patch collision ), and the project's assets ( animations, sounds, effects, models ). It patches the shipped zone; no light bake. |
 | Asset Manager, `converter` | the Assets window, `codol_assetc.exe` | your own textures, materials, models, animations, sounds and effects: PNG / TGA / DDS, `.mtl` or the material entries of a CoD4 `.gdt`, `xmodel_export`, `xanim_export`, soundalias `.csv` + `.wav`, `.efx` -> native assets in `mod\<map>\<map>_assets.ff`. Materials and models are shown by the editor at once; animations, sounds and effects are for the level script of the built map. See [Your own assets](#your-own-assets). |
 | the zone source `.csv` of a map, `linker_pc` on it | `tools\package_map.ps1` ( part of File > Build map ) | puts the project's assets, animtrees, animlist and scripts into the map zone ( `codol_assetc --carry`, `--rawfile` ), adds the minimap material, builds the load zone and writes the package |
 | `linker_pc` | `codol_linker.exe` | reads and writes fastfiles ( all 153 of the install round trip byte for byte ), replaces entities / rawfiles / string tables, takes assets from other zones, builds a zone of rawfiles |
@@ -344,8 +344,14 @@ fan of a cap around its centre ) are dropped. Patches of a brush entity are not 
 **Not there:** Weld to Model / Prefab Vertices ( greyed: models are not read for snapping, prefabs are not
 expanded ); `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brush > Box / Cylinder make for
 physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode; selecting patch vertices
-in the 3D view; patches in **File > Compile map** ( an edited shipped map: `codol_mapc` reports patches and leaves
-them out - build the map from scratch ).
+in the 3D view.
+
+**In File > Compile map** ( an edited shipped map, `codol_mapc` ) the patches of the worldspawn are drawn: their
+tessellation ( the triangles `codol_bsp` makes ) becomes a render surface of the patch's material that takes, per
+vertex, the nearest texel of the shipped light bake that faces its way - the way new brush faces are lit there.
+**Their collision is not compiled** ( the report says so ): put clip brushes where players and bullets have to stop
+on them. Why, and what it would take: `codol_mapc/README.md`, "Patches". `codol_mapc_tests --only patches`; not seen in
+the game. Patches of brush entities are left out in both compilers.
 ### Selecting, regions, filters, prefabs
 
 What CoD4 radiant has in its File, Edit, View, Selection, Grid, Misc and Region menus, written again for this
@@ -928,8 +934,10 @@ Be aware of these before planning work around this branch:
   are selected in the 2D views and the Advanced Edit dialog only. The subdivision number of a curve is radiant's
   ( smaller is finer, verified in its binary ), but how many triangles a number gives is this editor's reading ( an
   error bound in units ) - radiant's and cod4map's tessellation were not traced
-  ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map
-  ( an edited shipped map ) leaves patches out.
+  ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map ( an edited
+  shipped map ) draws the patches of the worldspawn but compiles **no collision** for them ( clip brushes instead;
+  `codol_mapc/README.md`, "Patches" ); neither compiler takes patches of brush entities. Patches compiled into a
+  shipped map were not seen in the game.
 - **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
   the shipped animtrees are not extended ( the list under [In the built map](#in-the-built-map) ).
 - **Menus of CoD4 radiant that are not here** ( of File, Edit, View, Selection, Grid, Misc, Region ): the Script
