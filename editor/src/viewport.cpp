@@ -1868,6 +1868,9 @@ namespace ggui
 			}
 		}
 
+		// ---- the legend of a render mode ( case textures )
+		editor::render_modes::draw_view_legend(dl, image_pos, width, height);
+
 		// ---- hint
 		if (hovered && !active && !gizmo_busy && !tool_busy)
 		{

@@ -375,6 +375,9 @@ namespace codol::view
 		// textures ( GameTextureCache )
 		name_map<std::unique_ptr<gpu_texture>> textures;		// by name, or name#dataSize for inline pixels
 		name_map<bool> texture_failed;
+		// frame_options::case_textures ( renderer_case.cpp ): a grid image per colour map size; the sizes drawn
+		std::map<std::uint32_t, std::unique_ptr<gpu_texture>> case_textures;
+		std::set<std::uint32_t> case_sizes_frame, case_sizes_last;
 		gpu_texture white, black, flat_normal;
 
 		// shaders, declarations, plans
@@ -523,6 +526,7 @@ namespace codol::view
 		gpu_texture* get_embedded_texture(const std::string& name, const render::embedded_image& image, const zone::Zone& zone);
 		gpu_texture* get_image(const zone::Zone& zone, zaddr image);
 		gpu_texture* material_texture(material_draw& material, std::size_t index);
+		gpu_texture* case_texture(int width, int height);
 		material_draw* get_material(const zone::Zone& zone, zaddr address);
 		material_draw* get_material_by_name(const std::string& name, const zone::Zone* defining_zone);
 		com_ptr<IDirect3DVertexBuffer9> create_vertex_buffer(std::span<const std::uint8_t> data);

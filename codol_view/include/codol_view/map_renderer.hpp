@@ -435,6 +435,10 @@ namespace codol::view
 		statistics stats() const;
 		std::vector<std::string> warnings() const;
 		std::vector<std::string> texture_failures() const;
+		// frame_options::case_textures: the sizes ( width, height of a colour map ) the last frame drew, and the colour of
+		// the grid of a size ( D3DCOLOR ), for a legend
+		std::vector<std::pair<int, int>> case_texture_sizes() const;
+		static std::uint32_t case_texture_color(int width, int height);
 		const std::string& last_error() const;
 
 		// ---- for the editor ------------------------------------------------------------------------------

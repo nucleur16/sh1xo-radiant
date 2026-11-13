@@ -204,7 +204,7 @@ namespace editor::textures
 
 namespace editor::render_modes
 {
-	enum class shading : int { game, fullbright, fake_normal, fake_view, depth };
+	enum class shading : int { game, fullbright, fake_normal, fake_view, depth, case_textures };
 	enum class patches : int { textured, wireframe, textured_wire };
 	// CoD4 radiant's Show Entities As: skinned, bounding box, skinned and boxed, wireframe, selected wireframe, selected skinned
 	enum class entities : int { models, boxes, models_boxes, wireframe, selected_wireframe, selected_models, count };
@@ -245,6 +245,8 @@ namespace editor::render_modes
 	// the frame as the view shows it: the post process ( fake light, light preview, film ) over the renderer's picture
 	IDirect3DTexture9* post_process(IDirect3DTexture9* frame, int width, int height);
 	void draw_overlay(const view::overlay_context& ctx);			// lines: clip cube, patch wires, angles, origins
+	// over the picture of the 3D view: the legend of the case textures ( the sizes the frame drew, their colours )
+	void draw_view_legend(ImDrawList* dl, const ImVec2& at, int width, int height);
 	void device_lost();
 	[[nodiscard]] bool entity_boxes_always();
 	[[nodiscard]] bool hide_patch_meshes();

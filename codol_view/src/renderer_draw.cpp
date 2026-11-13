@@ -112,6 +112,9 @@ namespace codol::view
 			return nullptr;
 		}
 		const auto started = std::chrono::steady_clock::now();
+		// case textures: the sizes of the frame before ( case_texture_sizes ), and a new list for this one
+		case_sizes_last.swap(case_sizes_frame);
+		case_sizes_frame.clear();
 		release_idle_zone();
 		if (!ensure_targets(width, height, options.target == nullptr, options.depth_stencil == nullptr, options.float_z))
 		{
@@ -1011,6 +1014,16 @@ namespace codol::view
 					else if (!frame->normal_maps && std::find(std::begin(normal), std::end(normal), def->name_hash) != std::end(normal))
 					{
 						texture = &flat_normal;
+					}
+				}
+				// editor: case textures, a grid of the colour map's size in its place ( renderer_case.cpp )
+				if (frame && frame->case_textures && def && texture && texture->width > 0 && !texture->cube)
+				{
+					static const std::uint32_t color[] = { render::hash_sampler_name("colorMap"), render::hash_sampler_name("colorMap0"), render::hash_sampler_name("colorMap1"),
+						render::hash_sampler_name("colorMap2") };
+					if (std::find(std::begin(color), std::end(color), def->name_hash) != std::end(color))
+					{
+						if (gpu_texture* stand_in = case_texture(texture->width, texture->height)) { texture = stand_in; }
 					}
 				}
 				bind_sampler(arg.dest, texture ? *texture : white, def ? def->sampler_state : render::DEFAULT_MATERIAL_SAMPLER_STATE, true);

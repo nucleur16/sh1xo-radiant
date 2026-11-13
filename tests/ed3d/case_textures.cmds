@@ -1,0 +1,18 @@
+# Renderer > Render Method > Case Textures in a shipped map: the same view as the game draws it and with the colour
+# maps replaced by the grids of their sizes, with the legend.
+map_open mp_rust
+wait 25
+act camera.next_spawn
+wait 2
+r_mode game
+wait 1
+ed_shot $OUT\case_0_game.png
+wait 1
+r_mode case
+wait 2
+ed_shot $OUT\case_1_case.png
+wait 1
+r_status
+expect [renderer] case
+r_mode game
+quit

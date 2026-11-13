@@ -560,7 +560,7 @@ action does not exist keeps its place and shows up when it does.
 |---|---|
 | General | Outline Selected ( `J` ), Tint Selected ( `Shift+J` ), Show Connections, Show Angles ( an arrow where an entity looks ), Draw Model Origins |
 | Grid Window | names of entities, grid blocks ( the flag of the Grid menu ), coordinates at the edges and of the blocks, a cross under the mouse with its position |
-| Render Method | `r_mode game|fullbright|fake_normal|fake_view|depth`, Wireframe. **Fullbright** is the game's own `unlit` technique of each technique set: the colour maps without lightmap, sun or specular. The **fake lights** shade the fullbright picture by the way a surface faces / by its angle to the camera. Case Textures: not there ( a technique of Radiant's own technique sets ). |
+| Render Method | `r_mode game|fullbright|fake_normal|fake_view|depth`, Wireframe. **Fullbright** is the game's own `unlit` technique of each technique set: the colour maps without lightmap, sun or specular. The **fake lights** shade the fullbright picture by the way a surface faces / by its angle to the camera. **Case Textures** ( `r_mode case` ): what CoD4 radiant's mode of that name is - its technique "case texture" ( `techniques/case_texture.tech` of the mod tools ) samples a code texture that `CoD4Radiant.exe` picks per material ( the function at 0x53B630 compares the width and height of the material's colour map with those of the images listed in `bin/case_textures.txt`: `case256`, `case1024x128`, `case512x64red` .. ). So every surface shows a generic grid of the size of its texture: how many texels it has and how it is stretched. Here the grids are generated ( `codol_view/src/renderer_case.cpp`, nothing of the mod tools is read ): one per colour map size, a checker of 64 texel cells with a line every 256 texels and the size written in each block, coloured by the larger side ( blue 64 and less, cyan 128, green 256, grey 512, orange 1024, red 2048 ); unlit, as fullbright. A legend in the top right corner of the 3D view lists the sizes the frame drew. It is not a surface type view - CoD4 radiant's "case" is the texture size. Alpha tested materials ( fences, foliage ) are drawn solid, as the grid has no holes. |
 | Draw Water | off: nothing whose technique set is one of water |
 | Texture Filter | as the materials say, point, bilinear, trilinear, anisotropic ( material textures; lightmaps keep theirs ) |
 | Texture Resolution | maximum .. an eighth: the mip level every material texture is read at. One setting for colour, specular and normal maps. |
@@ -841,8 +841,7 @@ form of this work; what the standalone editor does is above.
 
 Be aware of these before planning work around this branch:
 
-- **Top bar of CoD4 Radiant: what is not there.** Case Textures ( a technique of Radiant's own technique sets ),
-  separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), a lock for lightmaps ( they are baked from the geometry ), a "face"
+- **Top bar of CoD4 Radiant: what is not there.** Separate texture resolutions for specular and normal maps ( one mip bias for all material textures ), a lock for lightmaps ( they are baked from the geometry ), a "face"
   texture projection ( the format has the axial one ), PhysX movement. The light preview and the fake lights are a
   post process from the depth pre-pass, not the game's light techniques; effects in the map view are the editor's
   particle simulation without depth.

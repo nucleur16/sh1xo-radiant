@@ -651,7 +651,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			}
 		}
 
-		const char* const MODE_NAMES[] = { "game", "fullbright", "fake_normal", "fake_view", "depth" };
+		const char* const MODE_NAMES[] = { "game", "fullbright", "fake_normal", "fake_view", "depth", "case" };
 		const char* const FILTER_NAMES[] = { "As the materials say", "Point ( no mip maps )", "Bilinear ( no mip maps )", "Trilinear", "Anisotropic" };
 		const char* const RESOLUTION_NAMES[] = { "Maximum", "High ( half )", "Normal ( quarter )", "Low ( eighth )" };
 		const char* const PATCH_NAMES[] = { "Textured", "Wireframe", "Textured + wireframe" };
@@ -734,7 +734,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		bind("ed_r_grid_blocks", ui::ext::get().show_grid_blocks, "2D views: the blocks of 1024 units");
 		bind("ed_r_grid_coordinates", st.grid_coordinates, "2D views: coordinates at the edges and of the blocks");
 		bind("ed_r_grid_crosshair", st.grid_crosshair, "2D views: a cross under the mouse");
-		bind_int("ed_r_mode", st.mode, 0, 4, "3D view: 0 as the game, 1 fullbright, 2 fake light by normal, 3 fake light by view, 4 depth");
+		bind_int("ed_r_mode", st.mode, 0, 5, "3D view: 0 as the game, 1 fullbright, 2 fake light by normal, 3 fake light by view, 4 depth, 5 case textures");
 		bind("ed_r_wireframe", st.wireframe, "3D view: wireframe");
 		bind("ed_r_water", st.draw_water, "3D view: draw water");
 		bind_int("ed_r_filter", st.texture_filter, 0, 4, "texture filter: 0 as the materials say, 1 point, 2 bilinear, 3 trilinear, 4 anisotropic");
@@ -782,6 +782,11 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		add("render.fake_view", "View-based fake lighting", "", [] { set_mode(g_state.mode == shading::fake_view ? shading::game : shading::fake_view); }, anywhere, no_map)
 			.toggle([] { return g_state.mode == shading::fake_view; }).help("Fullbright, shaded by the angle to the camera: a light on the camera.");
 		add("render.depth", "Depth", "", [] { set_mode(g_state.mode == shading::depth ? shading::game : shading::depth); }, anywhere, no_map).toggle([] { return g_state.mode == shading::depth; });
+		add("render.case_textures", "Case textures", "", [] { set_mode(g_state.mode == shading::case_textures ? shading::game : shading::case_textures); }, anywhere, no_map)
+			.toggle([] { return g_state.mode == shading::case_textures; })
+			.help("CoD4 radiant's case textures: every colour map is replaced by a grid of the same size in texels, coloured by that size\n"
+				"( blue 64 and less, cyan 128, green 256, grey 512, orange 1024, red 2048 ): the resolution of the textures and how they are\n"
+				"stretched over the surfaces. Unlit, as fullbright.");
 		add("render.game_lighting", "Lighting of the game", "", [] { set_mode(shading::game); }, anywhere, no_map).toggle([] { return g_state.mode == shading::game; });
 
 		add("render.water", "Draw water", "", flip(st.draw_water, "draw water"), anywhere, no_map).toggle([] { return g_state.draw_water; });
@@ -850,12 +855,12 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		// r_mode <game|fullbright|fake_normal|fake_view|depth>
 		command::register_command("r_mode", [](args_t args)
 		{
-			for (int i = 0; i < 5 && args.size() > 1; i++)
+			for (int i = 0; i < 6 && args.size() > 1; i++)
 			{
 				if (args[1] == MODE_NAMES[i]) { set_mode(static_cast<shading>(i)); return; }
 			}
 
-			game::printf_to_console("usage: r_mode <game|fullbright|fake_normal|fake_view|depth>   now: %s%s%s\n", MODE_NAMES[static_cast<int>(g_state.mode)],
+			game::printf_to_console("usage: r_mode <game|fullbright|fake_normal|fake_view|depth|case>   now: %s%s%s\n", MODE_NAMES[static_cast<int>(g_state.mode)],
 				g_post.problem.empty() ? "" : "   ", g_post.problem.c_str());
 		});
 
@@ -997,8 +1002,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 			actions::menu_item("render.depth", "Depth ( of the pre-pass )");
 			ImGui::Separator();
 			actions::menu_item("render.wireframe");
-			editor::menu::item("Case Textures", nullptr, false, false);
-			if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) { ImGui::SetTooltip("Radiant's own tool textures ( the case of a prefab ): the zones of the game have no such technique."); }
+			actions::menu_item("render.case_textures", "Case Textures");
 			ImGui::Separator();
 			actions::menu_item("render.water");
 			actions::menu_item("render.specular");
@@ -1205,7 +1209,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		frame.wireframe = st.wireframe;
 		frame.sun_shadows = st.sun_shadows;
 		// the fake lights shade the colour maps
-		frame.fullbright = st.mode == shading::fullbright || st.mode == shading::fake_normal || st.mode == shading::fake_view;
+		frame.fullbright = st.mode == shading::fullbright || st.mode == shading::fake_normal || st.mode == shading::fake_view || st.mode == shading::case_textures;
+		frame.case_textures = st.mode == shading::case_textures;
 		frame.draw_water = st.draw_water;
 		frame.texture_filter = st.texture_filter;
 		frame.mip_bias = static_cast<float>(st.texture_resolution);
@@ -1252,6 +1257,36 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 		}
 	}
 
+	void draw_view_legend(ImDrawList* dl, const ImVec2& at, const int width, const int height)
+	{
+		if (g_state.mode != shading::case_textures || !dl)
+		{
+			return;
+		}
+
+		auto sizes = get_scene().renderer.case_texture_sizes();
+		std::sort(sizes.begin(), sizes.end(), [](const auto& a, const auto& b) { return a.first * a.second != b.first * b.second ? a.first * a.second > b.first * b.second : a.first > b.first; });
+
+		const float line = ImGui::GetTextLineHeight() + 2.0f;
+		const int rows = std::max(1, std::min(static_cast<int>(sizes.size()), static_cast<int>((height - 60) / line) - 2));
+		const float w = 150.0f;
+		const ImVec2 top(at.x + static_cast<float>(width) - w - 10.0f, at.y + 10.0f);
+		dl->AddRectFilled(top, ImVec2(top.x + w, top.y + line * (static_cast<float>(std::min<int>(rows, static_cast<int>(sizes.size()))) + 1.5f)), IM_COL32(0, 0, 0, 170), 3.0f);
+		dl->AddText(ImVec2(top.x + 6.0f, top.y + 3.0f), IM_COL32(230, 230, 230, 255), sizes.empty() ? "case textures: -" : "case textures");
+
+		for (int i = 0; i < rows && i < static_cast<int>(sizes.size()); i++)
+		{
+			const auto [sw, sh] = sizes[static_cast<std::size_t>(i)];
+			const std::uint32_t c = view::map_renderer::case_texture_color(sw, sh);	// D3DCOLOR: ARGB
+			const ImU32 color = IM_COL32((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, 255);
+			const float y = top.y + 3.0f + line * static_cast<float>(i + 1);
+			dl->AddRectFilled(ImVec2(top.x + 6.0f, y + 2.0f), ImVec2(top.x + 20.0f, y + line - 4.0f), color);
+			char text[48];
+			if (i == rows - 1 && rows < static_cast<int>(sizes.size())) { std::snprintf(text, sizeof(text), ".. %d more", static_cast<int>(sizes.size()) - i); }
+			else { std::snprintf(text, sizeof(text), "%d x %d", sw, sh); }
+			dl->AddText(ImVec2(top.x + 26.0f, y), IM_COL32(230, 230, 230, 255), text);
+		}
+	}
 	IDirect3DTexture9* post_process(IDirect3DTexture9* frame_texture, const int width, const int height)
 	{
 		auto& s = get_scene();
