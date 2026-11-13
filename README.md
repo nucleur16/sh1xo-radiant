@@ -1,3 +1,9 @@
+> **This is the `codol-1.1.1.13` branch: iw3xo-radiant for Call of Duty Online 1.1.1.13.**
+> It adds a CoDOL menu with a script workbench (GSC, animtrees, `playeranim.script`, scripted-animation tables,
+> animation validation), map entity import / export for shipped maps, hot reload through rcon and a docked game window.
+> Read **[docs/CODOL.md](docs/CODOL.md)** for what works, what does not exist yet (there is no CoDOL bsp compiler and
+> CoDOL assets are not loaded), setup and usage. Everything below is the upstream readme.
+
 
 
 

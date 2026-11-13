@@ -10,6 +10,7 @@ namespace components
 		loader::mem_allocator_.clear();
 
 		loader::_register(new command());
+		loader::_register(new codol_game());
 		loader::_register(new config());
 		loader::_register(new d3d9ex());
 		loader::_register(new d3dbsp());

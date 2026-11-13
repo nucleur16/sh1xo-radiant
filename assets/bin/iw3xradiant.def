@@ -561,3 +561,10 @@ vehicletype - name of vehicle type to use in AssetManager
 */
 
 
+
+/*QUAKED codol_bmodel (0.95 0.55 0.1) (-12 -12 -12) (12 12 12)
+CoDOL: an entity that uses a brush model or trigger hull which is compiled into the map zone.
+Created by CoDOL > Map Entities when the entities of a shipped map are imported.
+"codol_classname"	the real classname ( trigger_multiple, script_brushmodel .. ), restored on export
+"model"	the compiled model, *N = brush model, ?N = trigger hull. Bounds are relative to the origin.
+*/

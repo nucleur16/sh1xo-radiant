@@ -34,6 +34,24 @@ namespace components
 
 		// font awesome
 		ImGui::MergeIconsWithLatestFont(18.0f, false);
+
+		// codol: monospace font for the script workbench ( font index 5 ), optional
+		if (!GetEnvironmentVariableA("CODOL_NO_MONO_FONT", nullptr, 0))
+		{
+			char windir[MAX_PATH] = {};
+			if (GetWindowsDirectoryA(windir, sizeof(windir)))
+			{
+				for (const char* name : { "\\Fonts\\consola.ttf", "\\Fonts\\cour.ttf", "\\Fonts\\lucon.ttf" })
+				{
+					const std::string path = std::string(windir) + name;
+					if (GetFileAttributesA(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+					{
+						io.Fonts->AddFontFromFileTTF(path.c_str(), 15.0f, nullptr, io.Fonts->GetGlyphRangesChineseFull());
+						break;
+					}
+				}
+			}
+		}
 	}
 
 
@@ -413,6 +431,9 @@ namespace components
 			// handle file dialogs
 			ggui::file_dialog_frame();
 
+			// codol: deliver results of worker threads ( rcon, reload )
+			components::codol_game::frame();
+
 			// hide external console
 			utils::show_external_console(false);
 			game::glob::is_loading_map = false;
@@ -584,6 +605,9 @@ namespace components
 	{
 		ImGui::Render();
 		ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+
+		// codol: optional frame dump for automated testing ( CODOL_AUTOSHOT )
+		components::codol_game::dev_capture_frame();
 	}
 
 	void on_map_load()

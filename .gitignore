@@ -77,3 +77,13 @@ user*.bat
 *.id2
 *.nam
 *.til
+# CoD4 mod tools copy (proprietary, local only)
+/modtools/
+# generated CoDOL asset cache
+/codol_root/
+/build-cmake/
+
+# agent worktrees
+/.claude/
+
+build-editor/

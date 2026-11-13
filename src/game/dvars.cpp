@@ -139,6 +139,23 @@ namespace dvars
 	game::dvar_s* radiant_liveDebug = nullptr;
 	game::dvar_s* radiant_liveWorldspawn = nullptr;
 
+	// codol
+	game::dvar_s* codol_install_path = nullptr;
+	game::dvar_s* codol_script_root = nullptr;
+	game::dvar_s* codol_script_ref_root = nullptr;
+	game::dvar_s* codol_rcon_port = nullptr;
+	game::dvar_s* codol_rcon_password = nullptr;
+	game::dvar_s* codol_rcon_password_file = nullptr;
+	game::dvar_s* codol_rcon_log = nullptr;
+	game::dvar_s* codol_reload_on_save = nullptr;
+	game::dvar_s* codol_reload_mode = nullptr;
+	game::dvar_s* codol_reload_precheck_cmd = nullptr;
+	game::dvar_s* codol_reload_precheck_cwd = nullptr;
+	game::dvar_s* codol_client_exe = nullptr;
+	game::dvar_s* codol_launch_cmd = nullptr;
+	game::dvar_s* codol_asset_tool = nullptr;
+	game::dvar_s* codol_xanim_list = nullptr;
+
 	// stock dvars (not registered but ptr assigned)
 	game::dvar_s* fs_homepath = nullptr;
 	game::dvar_s* r_filmtweakenable = nullptr;
@@ -283,6 +300,7 @@ namespace dvars
 		components::gui::register_dvars();
 		components::reflectionprobes::register_dvars();
 		components::remote_net::register_dvars();
+		components::codol_game::register_dvars();
 		components::renderer::register_dvars();
 		components::physx_impl::register_dvars();
 

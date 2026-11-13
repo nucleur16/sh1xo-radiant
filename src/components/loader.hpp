@@ -25,6 +25,7 @@ namespace components
 	};
 }
 
+#include "modules/codol_game.hpp"
 #include "modules/command.hpp"
 #include "modules/config.hpp"
 #include "modules/d3d9ex.hpp"

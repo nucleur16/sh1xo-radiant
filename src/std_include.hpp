@@ -64,6 +64,10 @@
 #include <chrono>
 #include <future>
 #include <unordered_map>
+#include <unordered_set>
+#include <string_view>
+#include <cstddef>
+#include <cstdint>
 #include <iostream>
 #include <filesystem>
 #pragma warning(pop)
@@ -128,6 +132,13 @@
 #include "utils/utils.hpp"
 #include "game/dvars.hpp"
 
+// codol ( engine independent )
+#include "codol/c1_layouts.hpp"
+#include "codol/script_lex.hpp"
+#include "codol/anim_index.hpp"
+#include "codol/map_geometry.hpp"
+#include "codol/map_ents.hpp"
+
 #include "fx_system/fx_dvars.hpp"
 #include "fx_system/fx_structs.hpp"
 #include "fx_system/fx_util.hpp"
@@ -151,6 +162,8 @@
 #include "ggui/camera.hpp"
 #include "ggui/camera_guizmo.hpp"
 #include "ggui/camera_settings.hpp"
+#include "ggui/codol_map_ents.hpp"
+#include "ggui/codol_viewport.hpp"
 #include "ggui/colors.hpp"
 #include "ggui/console.hpp"
 #include "ggui/effects_browser.hpp"
@@ -170,6 +183,7 @@
 #include "ggui/prefab_preview.hpp"
 #include "ggui/preferences.hpp"
 #include "ggui/rope_generator.hpp"
+#include "ggui/script_workbench.hpp"
 #include "ggui/surface_inspector.hpp"
 #include "ggui/textures.hpp"
 #include "ggui/toolbar.hpp"

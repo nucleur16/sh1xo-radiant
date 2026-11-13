@@ -1043,6 +1043,38 @@ namespace ggui
 				ImGui::EndMenu(); // BSP
 			}
 
+			if (ImGui::BeginMenu("CoDOL"))
+			{
+				if (ImGui::MenuItem("Script Workbench", nullptr, GET_GUI(ggui::script_workbench_dialog)->is_active()))
+				{
+					GET_GUI(ggui::script_workbench_dialog)->toggle();
+				}
+
+				if (ImGui::MenuItem("Viewport ( native )", nullptr, GET_GUI(ggui::codol_viewport_dialog)->is_active()))
+				{
+					GET_GUI(ggui::codol_viewport_dialog)->toggle();
+				}
+
+				if (ImGui::MenuItem("Map Entities", nullptr, GET_GUI(ggui::codol_map_ents_dialog)->is_active()))
+				{
+					GET_GUI(ggui::codol_map_ents_dialog)->toggle();
+				}
+
+				if (ImGui::MenuItem("Game Window", nullptr, GET_GUI(ggui::game_view_dialog)->is_active()))
+				{
+					GET_GUI(ggui::game_view_dialog)->toggle();
+				}
+
+				SEPERATORV(0.0f);
+
+				if (ImGui::MenuItem("Reload Scripts In Game"))
+				{
+					components::codol_game::reload_scripts("menu");
+				}
+
+				ImGui::EndMenu(); // CoDOL
+			}
+
 			if (ImGui::BeginMenu("Selection"))
 			{
 				if (ImGui::MenuItem("Drag Edges", ggui::hotkey_dialog::get_hotkey_for_command("DragEdges").c_str())) {
