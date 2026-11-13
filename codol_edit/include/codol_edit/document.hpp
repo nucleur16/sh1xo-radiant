@@ -262,6 +262,11 @@ namespace codol::edit
 		// keep textures in place on the surface when brushes move / rotate / scale ( default on )
 		void set_texture_lock(bool on);
 		[[nodiscard]] bool texture_lock() const;
+		// the lock of moves and the lock of everything else ( rotations, scales, flips ) apart; set_texture_lock( on )
+		// sets both, texture_lock() is true while either is on
+		void set_texture_lock(bool moves, bool rotations);
+		[[nodiscard]] bool texture_lock_moves() const;
+		[[nodiscard]] bool texture_lock_rotations() const;
 		// material of new brushes when none is given ( default "caulk" )
 		void set_default_material(std::string_view material);
 		[[nodiscard]] std::string_view default_material() const;
@@ -350,6 +355,60 @@ namespace codol::edit
 		bool set_texture(const tex_def& t);
 		// stretch the texture so that it repeats `repeat_x` x `repeat_y` times over each face
 		bool fit_texture(double repeat_x = 1.0, double repeat_y = 1.0);
+
+		// ---- texture tools ( src/texture_ops.cpp ) ------------------------------------------------
+		// A face line of a .map has two layers: the material with its alignment and the lightmap with its own
+		// ( "lightmap_gray 16384 16384 0 0 0 0" ); a patch has a material, a lightmap material and two sets of
+		// texture coordinates per vertex. shift / scale / rotate / set / fit / flip / natural change the layer that
+		// is being edited ( default: the material ). Patches are targets as well: their texture coordinates move.
+		enum class texture_layer : int { material = 0, lightmap = 1 };
+		void set_edit_layer(texture_layer layer);
+		[[nodiscard]] texture_layer edit_layer() const;
+		// mirror the texture on the surface: axis 0 along its s direction ( left / right ), 1 along t
+		bool flip_texture(int axis);
+		// the alignment a new face gets: one repeat per 256 texels at scale 0.25, no shift, no rotation - projected
+		// along the world axis closest to the face normal ( the only projection the format has ). Patches get
+		// coordinates from their vertex positions the same way.
+		bool natural_texture();
+		// the lightmap layer of the targets: its material ( empty: keep ) and, for faces, its alignment
+		bool set_lightmap(const tex_def& t);
+		// the smoothing of the selected patches ( the "smoothing <word>" line; empty: none )
+		bool set_smoothing(std::string_view word);
+		// Material `from` becomes `to` on brush faces and patches. selection_only: of the selected objects and faces;
+		// faces_only: of the selected faces alone ( not the brushes ). Returns the number of faces and patches that
+		// changed through `changed`; false ( last_error ) when none did.
+		bool replace_material(std::string_view from, std::string_view to, bool selection_only, bool faces_only = false, int* changed = nullptr);
+		// every face / patch that uses the material becomes the selection ( faces as selected faces )
+		int select_by_material(std::string_view material);
+		// materials in use with the number of faces and patches, sorted by name
+		[[nodiscard]] std::vector<std::pair<std::string, int>> materials_in_use() const;
+
+		// ---- tools ( src/tool_ops.cpp ) -----------------------------------------------------------
+		struct rope_params
+		{
+			vec3 from, to;
+			double slack = 32.0;		// how far the middle hangs below the straight line
+			double radius = 2.0;
+			int segments = 12;			// along the rope, 1 .. 256 ( 15 per mesh: a long rope is several meshes )
+			int sides = 6;				// around it, 3 .. 15
+			std::string material;		// empty: the default material
+		};
+		// A cable between two points as terrain meshes ( tubes ). The new meshes become the selection; their ids go
+		// to `out` when given. One undo step.
+		bool create_rope(const rope_params& p, std::vector<object_id>* out = nullptr);
+
+		struct noise_params
+		{
+			double amplitude = 16.0;	// units, peak
+			double frequency = 0.01;	// cycles per unit
+			std::uint32_t seed = 1;
+			int octaves = 3;			// 1 .. 8, each half as strong and twice as fine
+			vec3 direction{ 0, 0, 1 };	// the way vertices move
+			bool keep_edges = true;		// the border vertices stay ( the mesh keeps fitting to what is next to it )
+		};
+		// moves the vertices of the selected terrain meshes by a noise of their position ( the same noise for all,
+		// so that meshes that touch keep touching )
+		bool patch_noise(const noise_params& p);
 
 		// ---- entities ---------------------------------------------------------------------------
 

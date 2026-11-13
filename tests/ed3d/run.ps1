@@ -49,6 +49,8 @@ foreach ($line in Get-Content $Script) {
 
 $env:CODOL_STARTUP_CMDS = ($cmds -join ";")
 $env:CODOL_LOG = $log
+# the scripts click and drag at pixels of the layout without the global toolbar ( which takes a row or two )
+$env:CODOL_NO_TOOLBAR = "1"
 if ($Windowed) { $env:CODOL_WINDOWED = "1" } else { Remove-Item Env:CODOL_WINDOWED -ErrorAction SilentlyContinue }
 
 $p = Start-Process -FilePath $exePath -WorkingDirectory $exeDir -PassThru

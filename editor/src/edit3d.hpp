@@ -67,7 +67,8 @@ namespace editor::edit3d
 	[[nodiscard]] const char* hint();
 
 	// keys of the tools while the mouse is over the 3D view ( from ui::process_shortcuts ); true: the key was used
-	bool shortcuts();
+	// the keys of the tools as actions of the registry ( hotkeys.cpp )
+	void register_actions();
 
 	// a material dropped on the view: on the face under the pixel ( `whole_brush`: every face of that brush ), or on
 	// the patch there

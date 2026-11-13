@@ -145,6 +145,23 @@ namespace codol::view
 		// Geometry drawn exactly on a surface z-fights with it ( the scene is drawn camera relative by shaders, the
 		// overlay through the fixed function pipeline ): set a small negative D3DRS_DEPTHBIAS or offset the lines.
 		std::function<void(const overlay_context&)> overlay;
+
+		// ---- render modes of an editor ( none of them changes a frame while it has its default ) -------------
+		// Lit materials are drawn with the "unlit" technique of their technique set where it has one: the colour
+		// map without lightmap, sun, primary light or specular. What the game does for r_fullbright.
+		bool fullbright = false;
+		// false: nothing whose technique set is one of water is drawn
+		bool draw_water = true;
+		// Filter of the material textures: 0 as the material says, 1 point ( no mip maps ), 2 bilinear ( no mip
+		// maps ), 3 trilinear, 4 anisotropic. Lightmaps, shadow maps and the other code textures keep theirs.
+		int texture_filter = 0;
+		// added to the mip level of the material textures ( 1 = half the resolution, 2 = a quarter .. )
+		float mip_bias = 0;
+		// the specular map / normal map of every material reads as black / as flat
+		bool specular_maps = true;
+		bool normal_maps = true;
+		// > 0: only what touches the cube of this half size around the camera is drawn ( cubic clipping )
+		float far_clip = 0;
 	};
 
 	struct statistics
@@ -394,6 +411,11 @@ namespace codol::view
 		// recreated ( text in last_error() ).
 		void on_device_lost();
 		bool on_device_reset();
+
+		// The depth of the last frame drawn with frame_options::float_z as an R32F texture of the frame's size, as
+		// the depth pre-pass of the game's shaders writes it ( the opaque world, models and meshes that have a
+		// technique for it ). nullptr when there is none. Owned by the renderer; gone with on_device_lost().
+		IDirect3DTexture9* depth_texture() const;
 
 		statistics stats() const;
 		std::vector<std::string> warnings() const;

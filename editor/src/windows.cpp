@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "ext.hpp"
 
 // The Entity window ( keys of the selected entities, with what the class catalog knows about the class ), the
 // "Create entity" popup, the Layers window and the Surface inspector.
@@ -1109,11 +1110,8 @@ namespace editor::ui
 			report(doc.set_texture(set), "Set texture");
 		}
 
-		bool lock = doc.texture_lock();
-		if (ImGui::Checkbox("Texture lock ( Shift+T )", &lock))
-		{
-			doc.set_texture_lock(lock);
-		}
+		// the edit layer, flips, steps per axis, lightmap, smoothing, the two locks ( menu_textures.cpp )
+		textures::draw_surface_extras();
 
 		ImGui::End();
 	}

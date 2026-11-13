@@ -52,7 +52,17 @@ add_executable(CoDOLRadiant WIN32
 	src/assets.cpp
 	src/assets.hpp
 	src/asset_windows.cpp
+	src/action_table.cpp
 	src/compat.cpp
+	src/effects.cpp
+	src/ext.cpp
+	src/ext.hpp
+	src/hotkeys.cpp
+	src/menu_renderer.cpp
+	src/menu_textures.cpp
+	src/preferences.cpp
+	src/toolbar.cpp
+	src/tools.cpp
 	src/edit3d.cpp
 	src/edit3d.hpp
 	src/grid_view.cpp

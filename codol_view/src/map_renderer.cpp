@@ -361,6 +361,7 @@ namespace codol::view
 		return true;		// targets and the state block are made again by the next render()
 	}
 
+	IDirect3DTexture9* map_renderer::depth_texture() const { return impl_->float_z_texture.get(); }
 	statistics map_renderer::stats() const { return impl_->stat; }
 	std::vector<std::string> map_renderer::warnings() const { return { impl_->warnings.begin(), impl_->warnings.end() }; }
 	std::vector<std::string> map_renderer::texture_failures() const { return impl_->texture_failures; }

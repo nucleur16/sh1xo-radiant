@@ -8,6 +8,7 @@
 #include "assets.hpp"
 #include "preview.hpp"
 #include "scene.hpp"
+#include "ext.hpp"
 #include "ui.hpp"
 #include <codol_edit/patch_ops.hpp>
 
@@ -256,7 +257,7 @@ namespace editor
 			}
 		}
 
-		return IM_COL32(205, 205, 205, 255);
+		return colors::get(colors::entity);
 	}
 
 	// ---- files ------------------------------------------------------------------------------------------
@@ -1394,6 +1395,7 @@ namespace editor
 		}
 
 		const bool is_patch = doc.kind(id) == edit::object_kind::patch;
+
 		const auto& names = renderer.material_names();
 		std::vector<char> done(mesh.parts.size(), 0);
 		std::vector<view::mesh_vertex> vertices;
@@ -1911,23 +1913,23 @@ namespace editor
 		}
 		else if (doc.layer_of(child) == codol::mapgeo::TOOL_LAYER)
 		{
-			item.color = IM_COL32(150, 105, 175, 255);
+			item.color = colors::get(colors::brush_entity);
 		}
 		else if (item.patch)
 		{
-			item.color = IM_COL32(200, 170, 110, 255);
+			item.color = colors::get(colors::patch);
 		}
 		else if (detail)
 		{
-			item.color = IM_COL32(95, 165, 215, 255);
+			item.color = colors::get(colors::brush_detail);
 		}
 		else if (!item.imported)
 		{
-			item.color = IM_COL32(235, 235, 235, 255);
+			item.color = colors::get(colors::brush);
 		}
 		else
 		{
-			item.color = IM_COL32(150, 152, 158, 255);
+			item.color = colors::get(colors::brush_zone);
 		}
 
 		cache.objects.push_back(item);
@@ -2156,6 +2158,14 @@ namespace editor
 		}
 
 		// only the selection changes while something is dragged
+		static std::uint64_t seen_colors = colors::serial();
+		if (seen_colors != colors::serial())
+		{
+			seen_colors = colors::serial();
+			statics.clear();
+			caches_dirty_ = true;
+		}
+
 		const bool statics_stale = caches_dirty_ || visibility != seen_visibility_ || (change != statics_change_ && !in_drag);
 
 		if (statics_stale)

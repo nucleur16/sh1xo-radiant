@@ -191,13 +191,14 @@ namespace editor::ui
 	void pick_ray(const float3& origin, const float3& direction, bool toggle, bool face);
 	void viewport_click(float px, float py, bool toggle, bool face);
 	void set_material_filter(const std::string& text, int group);
+	// "next_spawn", "overview", "focus": the camera actions of the 3D view
+	void viewport_request(std::string_view what);
 
 	// ---- the Brush and Patch menus ( menu_brush_patch.cpp ) -----------------------------------------------------
 	void draw_brush_menu();
 	void draw_patch_menu();
 	void draw_brush_patch_windows();			// their dialogs, once per frame
 	void register_brush_patch_commands();		// brush_*, patch_*
-	bool process_brush_patch_shortcuts();		// true: it took the key
 	bool patches_as_wire();						// patches are drawn as lines only
 	// vertex mode of the 2D views: the vertices of a patch that were grabbed become the selected patch vertices
 	// ( without "drill down" only the one nearest to the viewer stays in the list ); a drag honours weld and lock
@@ -214,7 +215,6 @@ namespace editor::ui
 	void draw_view_menu_extra();
 	void draw_extra_menus();			// Selection, Grid, Misc, Region
 	void draw_extra_windows();			// once per frame: Filter, Map Info, Entity Info, Prefabs, the dialogs
-	void process_extra_shortcuts();
 	void register_extra_commands();
 	// lines in world space every view draws: the contents of prefabs, the region, the leak line ( 2D: the grid blocks )
 	const std::vector<line_vertex>& extra_view_lines(bool view2d);

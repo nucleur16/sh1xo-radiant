@@ -9,6 +9,7 @@
 #include "edit3d.hpp"
 #include "assets.hpp"
 #include "preview.hpp"
+#include "ext.hpp"
 
 #include <commdlg.h>
 #include <atomic>
@@ -1245,22 +1246,6 @@ namespace editor::ui
 
 		bool vertex = st.vertex_mode;
 		if (ImGui::MenuItem("Vertex / edge mode ( 2D views )", "V", &vertex, open)) { set_vertex_mode(vertex); }
-
-		if (ImGui::BeginMenu("Grid"))
-		{
-			for (int g = 1; g <= 512; g *= 2)
-			{
-				const std::string label = std::to_string(g);
-				if (ImGui::MenuItem(label.c_str(), g == 1 ? "[ smaller" : (g == 512 ? "] larger" : nullptr), s.grid == g))
-				{
-					s.set_grid(g);
-				}
-			}
-
-			ImGui::Separator();
-			ImGui::MenuItem("Snap to the grid", nullptr, &s.snap);
-			ImGui::EndMenu();
-		}
 	}
 
 	// ---- shortcuts -------------------------------------------------------------------------------------------
@@ -1268,116 +1253,16 @@ namespace editor::ui
 	void process_shortcuts()
 	{
 		auto& st = get();
-		auto& s = get_scene();
-		const auto& io = ImGui::GetIO();
 
 		st.hovered_2d = st.next_hovered_2d;
 		st.hovered_3d = st.next_hovered_3d;
 		st.next_hovered_2d = -1;
 		st.next_hovered_3d = false;
 
-		// never while a text field has the keyboard, a menu or a dialog is open
-		if (io.WantTextInput || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
-		{
-			return;
-		}
-
-		// the script workbench and the game window have their own keys
-		if (const auto* focused = ImGui::GetCurrentContext()->NavWindow; focused && std::strstr(focused->Name, "##codol_window"))
-		{
-			return;
-		}
-
-		const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
-		const auto pressed = [](const ImGuiKey key, const bool repeat = false) { return ImGui::IsKeyPressed(key, repeat); };
-
-		if (ctrl && pressed(ImGuiKey_O))
-		{
-			GET_GUI(ggui::codol_map_ents_dialog)->open();
-			ImGui::SetWindowFocus("Maps##window");
-		}
-
-		// while the right button flies the camera the keys move it; a drag owns the document until it ends
-		if (!s.open || ImGui::IsMouseDown(ImGuiMouseButton_Right) || s.dragging())
-		{
-			return;
-		}
-
-		// the tools of the 3D view ( edit3d.cpp ): edge mode, create, texture keys
-		if (st.hovered_3d && edit3d::shortcuts())
-		{
-			return;
-		}
-
-		// the Brush / Patch menus have their own keys ( menu_brush_patch.cpp )
-		if (process_brush_patch_shortcuts())
-		{
-			return;
-		}
-
-		if (ctrl && !alt)
-		{
-			if (pressed(ImGuiKey_Z, true)) { shift ? redo() : undo(); }
-			if (pressed(ImGuiKey_Y, true)) { redo(); }
-			if (pressed(ImGuiKey_S)) { save(); }
-			if (pressed(ImGuiKey_E)) { export_entities(GET_GUI(ggui::codol_map_ents_dialog)->m_reload_after_export); }
-			if (pressed(ImGuiKey_A)) { select_all(); }
-			if (pressed(ImGuiKey_G)) { snap_to_grid(); }
-			if (pressed(ImGuiKey_K)) { connect_selected(); }
-			if (pressed(ImGuiKey_D)) { set_detail(!shift); }
-			if (pressed(ImGuiKey_Tab)) { cycle_grid_axis(); }
-
-			if (st.clipper.on && (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter))) { apply_clip(1); }
-			return;
-		}
-
-		if (ctrl && alt)
-		{
-			if (pressed(ImGuiKey_E)) { select_whole_entities(); }
-			return;
-		}
-
-		// Keys without Ctrl belong to the view the mouse is over: Space or Delete typed anywhere else ( a list, a
-		// button that has the focus ) must not change the map.
-		if (!st.hovered_3d && st.hovered_2d < 0)
-		{
-			return;
-		}
-
-		if (pressed(ImGuiKey_Delete) || pressed(ImGuiKey_Backspace)) { delete_selection(); }
-		if (pressed(ImGuiKey_Space)) { clone_selection(); }
-		if (pressed(ImGuiKey_H)) { (shift || alt) ? show_all() : hide_selected(); }
-		if (pressed(ImGuiKey_I)) { invert_selection(); }
-		if (pressed(ImGuiKey_LeftBracket)) { grid_smaller(); }
-		if (pressed(ImGuiKey_RightBracket)) { grid_larger(); }
-		if (shift && pressed(ImGuiKey_T)) { toggle_texture_lock(); }
-		if (!shift && pressed(ImGuiKey_S)) { st.show_surface = !st.show_surface; }
-		if (pressed(ImGuiKey_C)) { set_clipper(!st.clipper.on); }
-		if (pressed(ImGuiKey_V)) { set_vertex_mode(!st.vertex_mode); }
-
-		if (pressed(ImGuiKey_Escape))
-		{
-			// one thing at a time: clip points, then the tool, then the selection
-			if (st.clipper.on && !st.clipper.points.empty()) { st.clipper.points.clear(); }
-			else if (st.clipper.on) { set_clipper(false); }
-			else if (st.vertex_mode) { set_vertex_mode(false); }
-			else { deselect(); }
-		}
-
-		if (st.clipper.on && (pressed(ImGuiKey_Enter) || pressed(ImGuiKey_KeypadEnter)))
-		{
-			apply_clip(shift ? 2 : 0);
-		}
-
-		if (pressed(ImGuiKey_LeftArrow, true)) { nudge_view(-1, 0); }
-		if (pressed(ImGuiKey_RightArrow, true)) { nudge_view(1, 0); }
-		if (pressed(ImGuiKey_UpArrow, true)) { nudge_view(0, 1); }
-		if (pressed(ImGuiKey_DownArrow, true)) { nudge_view(0, -1); }
-
-		// along the axis the view looks ( up / down in 3D and in the top view )
-		const int depth = st.hovered_2d >= 0 ? grid_view_axis(st.hovered_2d) : 2;
-		if (pressed(ImGuiKey_PageUp, true)) { nudge(depth, 1); }
-		if (pressed(ImGuiKey_PageDown, true)) { nudge(depth, -1); }
+		// Every key is an action of the registry ( hotkeys.cpp: actions::register_defaults ), so that it can be given
+		// another key in Edit > Edit Hotkeys. A new shortcut is one line there:
+		//   actions::add( "edit.clone", "Clone", "Space", [] { clone_selection(); }, actions::views );
+		actions::process_keys();
 	}
 
 	// ---- console commands ------------------------------------------------------------------------------------

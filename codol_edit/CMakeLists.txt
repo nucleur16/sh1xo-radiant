@@ -79,6 +79,8 @@ add_library(codol_edit STATIC
 	src/map_io.cpp
 	src/document.cpp
 	src/edit_ops.cpp
+	src/texture_ops.cpp
+	src/tool_ops.cpp
 	include/codol_edit/patch_ops.hpp
 	src/patch_ops.cpp
 	src/select_ops.cpp
@@ -113,7 +115,7 @@ endif()
 
 if(CODOL_EDIT_BUILD_TESTS)
 	enable_testing()
-	add_executable(codol_edit_tests tests/codol_edit_tests.cpp)
+	add_executable(codol_edit_tests tests/codol_edit_tests.cpp tests/texture_tools_tests.cpp)
 	target_link_libraries(codol_edit_tests PRIVATE codol_edit)
 	target_compile_definitions(codol_edit_tests PRIVATE
 		CODOL_EDIT_GAME_DIR="${CODOL_EDIT_GAME_DIR}"

@@ -7,6 +7,7 @@
 #include "host.hpp"
 #include "ui.hpp"
 #include "edit3d.hpp"
+#include "ext.hpp"
 
 #include <codol_edit/handles.hpp>
 
@@ -1546,95 +1547,37 @@ namespace editor::edit3d
 
 	// ---- keys ------------------------------------------------------------------------------------------------
 
-	bool shortcuts()
+	// The keys of the tools are actions of the registry ( hotkeys.cpp ): they count while the mouse is over the 3D
+	// view, and win there over the actions of the same key that count in any view ( V, Esc ). The texture keys
+	// ( Shift / Ctrl + arrows, Shift + PageUp / PageDown ) are the texture actions of menu_textures.cpp.
+	void register_actions()
 	{
-		auto& s = get_scene();
-		auto& doc = s.doc;
-		auto& st = ui::get();
-		const auto& io = ImGui::GetIO();
-		const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
-		const auto pressed = [](const ImGuiKey key, const bool repeat = false) { return ImGui::IsKeyPressed(key, repeat); };
+		using namespace actions;
+		const auto handles = [] { return ui::get().vertex_mode; };
 
-		if (!ctrl && !alt && !shift)
+		// E is the rotate gizmo; while the handles are shown - where nothing is rotated - it is Radiant's edge mode
+		add("tool.edge_mode", "3D view: edge mode on / off", "E", []
 		{
-			// E is the rotate gizmo; while the handles are shown - where nothing is rotated - it is Radiant's edge mode
-			if (st.vertex_mode && pressed(ImGuiKey_E))
-			{
-				g.edge_mode = !g.edge_mode;
-				clear_handle_selection();
-				return true;
-			}
+			g.edge_mode = !g.edge_mode;
+			clear_handle_selection();
+		}, view_3d).when(handles).toggle([] { return ui::get().vertex_mode && g.edge_mode; });
 
-			// V in edge mode goes back to the vertices ( and, from there, out )
-			if (st.vertex_mode && g.edge_mode && pressed(ImGuiKey_V))
-			{
-				g.edge_mode = false;
-				clear_handle_selection();
-				return true;
-			}
-
-			if (pressed(ImGuiKey_B))
-			{
-				set_tool(current() == tool::create ? tool::object : tool::create);
-				return true;
-			}
-
-			if (pressed(ImGuiKey_Escape))
-			{
-				// one thing at a time ( the clipper's points and tools come after, in ui::process_shortcuts )
-				if (st.vertex_mode && selected_handle_count() > 0)
-				{
-					clear_handle_selection();
-					return true;
-				}
-
-				if (g.create_mode)
-				{
-					g.create_mode = false;
-					return true;
-				}
-			}
-		}
-
-		// ---- textures of the selected faces / of the faces of the selection, as Radiant has them
-		if (doc.selection().empty() && doc.selected_faces().empty())
+		// V in edge mode goes back to the vertices ( and, from there, out )
+		add("tool.edge_to_vertex", "3D view: from edges back to vertices", "V", []
 		{
-			return false;
-		}
+			g.edge_mode = false;
+			clear_handle_selection();
+		}, view_3d).when([] { return ui::get().vertex_mode && g.edge_mode; });
 
-		const auto step = [&](const char* name, const std::uint64_t key, const auto& fn)
+		add("tool.create_toggle", "3D view: create brushes on / off", "B", [] { set_tool(current() == tool::create ? tool::object : tool::create); }, view_3d)
+			.toggle([] { return current() == tool::create; });
+
+		// one thing at a time ( the clipper's points, the tools and the selection come after: edit.escape )
+		add("edit.escape_3d", "3D view: drop the picked handles / leave create", "Escape", []
 		{
-			// a key that is held is one undo step
-			doc.begin_transaction(name, key);
-			const bool ok = fn();
-			doc.end_transaction();
-			ui::report(ok, name);
-			return true;
-		};
-
-		if (shift && !ctrl && !alt)
-		{
-			const double amount = std::max(1.0, s.grid);
-
-			if (pressed(ImGuiKey_LeftArrow, true)) { return step("Shift texture", 0x3D7E0001, [&] { return doc.shift_texture(-amount, 0.0); }); }
-			if (pressed(ImGuiKey_RightArrow, true)) { return step("Shift texture", 0x3D7E0001, [&] { return doc.shift_texture(amount, 0.0); }); }
-			if (pressed(ImGuiKey_UpArrow, true)) { return step("Shift texture", 0x3D7E0001, [&] { return doc.shift_texture(0.0, amount); }); }
-			if (pressed(ImGuiKey_DownArrow, true)) { return step("Shift texture", 0x3D7E0001, [&] { return doc.shift_texture(0.0, -amount); }); }
-			if (pressed(ImGuiKey_PageUp, true)) { return step("Rotate texture", 0x3D7E0002, [&] { return doc.rotate_texture(s.snap_angle); }); }
-			if (pressed(ImGuiKey_PageDown, true)) { return step("Rotate texture", 0x3D7E0002, [&] { return doc.rotate_texture(-s.snap_angle); }); }
-		}
-
-		if (ctrl && !shift && !alt)
-		{
-			constexpr double factor = 1.05;
-
-			if (pressed(ImGuiKey_LeftArrow, true)) { return step("Scale texture", 0x3D7E0003, [&] { return doc.scale_texture(1.0 / factor, 1.0); }); }
-			if (pressed(ImGuiKey_RightArrow, true)) { return step("Scale texture", 0x3D7E0003, [&] { return doc.scale_texture(factor, 1.0); }); }
-			if (pressed(ImGuiKey_UpArrow, true)) { return step("Scale texture", 0x3D7E0003, [&] { return doc.scale_texture(1.0, factor); }); }
-			if (pressed(ImGuiKey_DownArrow, true)) { return step("Scale texture", 0x3D7E0003, [&] { return doc.scale_texture(1.0, 1.0 / factor); }); }
-		}
-
-		return false;
+			if (ui::get().vertex_mode && selected_handle_count() > 0) { clear_handle_selection(); }
+			else { g.create_mode = false; }
+		}, view_3d).when([] { return (ui::get().vertex_mode && selected_handle_count() > 0) || g.create_mode; });
 	}
 
 	// ---- gizmo on the selected handles -------------------------------------------------------------------------

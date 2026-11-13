@@ -328,7 +328,8 @@ namespace codol::edit
 			case object_kind::brush:
 				if (editable_brush(d, id))
 				{
-					transform_faces(d, d.edit_brush(id).faces, t, d.texture_lock);
+					// moves and everything else ( rotations, scales, flips ) have a lock each
+					transform_faces(d, d.edit_brush(id).faces, t, t.is_translation() ? d.texture_lock : d.texture_lock_rotations);
 				}
 				break;
 
@@ -1760,130 +1761,7 @@ namespace codol::edit
 		return true;
 	}
 
-	bool document::shift_texture(const double dx, const double dy)
-	{
-		return for_target_faces(*d, "Shift texture", [&](face& f, const face_ref&)
-		{
-			f.texture.shift_x += dx;
-			f.texture.shift_y += dy;
-		});
-	}
-
-	bool document::scale_texture(const double fx, const double fy)
-	{
-		if (fx == 0.0 || fy == 0.0)
-		{
-			return d->fail("Scale texture: factor 0");
-		}
-
-		return for_target_faces(*d, "Scale texture", [&](face& f, const face_ref&)
-		{
-			f.texture.size_x *= fx;
-			f.texture.size_y *= fy;
-		});
-	}
-
-	bool document::rotate_texture(const double degrees)
-	{
-		return for_target_faces(*d, "Rotate texture", [&](face& f, const face_ref&)
-		{
-			double r = std::fmod(f.texture.rotation + degrees, 360.0);
-			if (r < 0.0)
-			{
-				r += 360.0;
-			}
-
-			f.texture.rotation = r;
-		});
-	}
-
-	bool document::set_texture(const tex_def& t)
-	{
-		if (t.size_x == 0.0 || t.size_y == 0.0)
-		{
-			return d->fail("Set texture: size 0");
-		}
-
-		return for_target_faces(*d, "Set texture", [&](face& f, const face_ref&)
-		{
-			const std::string material = t.material.empty() ? f.texture.material : t.material;
-			f.texture = t;
-			f.texture.material = material;
-		});
-	}
-
-	bool document::fit_texture(const double repeat_x, const double repeat_y)
-	{
-		if (!(repeat_x > 0.0) || !(repeat_y > 0.0))
-		{
-			return d->fail("Fit texture: bad repeat count");
-		}
-
-		const auto targets = target_faces(*d);
-		if (targets.empty())
-		{
-			return d->fail("Fit texture: no faces selected");
-		}
-
-		// the windings as they are now ( the geometry cache is replaced while the brushes are edited )
-		struct fit
-		{
-			face_ref ref;
-			double min_u, max_u, min_v, max_v;
-		};
-
-		std::vector<fit> fits;
-
-		for (const face_ref& ref : targets)
-		{
-			const brush_geometry* geo = d->geometry(ref.brush);
-			const auto& indices = geo->face_vertices[ref.face];
-			if (indices.empty())
-			{
-				continue;
-			}
-
-			vec3 u, v;
-			face_texture_axes(geo->planes[ref.face].normal, d->get_brush(ref.brush)->faces[ref.face].texture.rotation, u, v);
-
-			fit f{ ref, 1e300, -1e300, 1e300, -1e300 };
-			for (const int index : indices)
-			{
-				const vec3& p = geo->vertices[index];
-				f.min_u = std::min(f.min_u, dot(p, u));
-				f.max_u = std::max(f.max_u, dot(p, u));
-				f.min_v = std::min(f.min_v, dot(p, v));
-				f.max_v = std::max(f.max_v, dot(p, v));
-			}
-
-			if (f.max_u - f.min_u > 1e-6 && f.max_v - f.min_v > 1e-6)
-			{
-				fits.push_back(f);
-			}
-		}
-
-		if (fits.empty())
-		{
-			return d->fail("Fit texture: the faces have no area");
-		}
-
-		transaction_scope tx(*d, "Fit texture");
-
-		for (const fit& f : fits)
-		{
-			tex_def& tex = d->edit_brush(f.ref.brush).faces[f.ref.face].texture;
-
-			int w, h;
-			d->texture_dims(tex.material, w, h);
-
-			tex.size_x = (f.max_u - f.min_u) / repeat_x;
-			tex.size_y = (f.max_v - f.min_v) / repeat_y;
-			tex.shift_x = tidy(std::fmod(-f.min_u / tex.size_x * w, static_cast<double>(w)));
-			tex.shift_y = tidy(std::fmod(-f.min_v / tex.size_y * h, static_cast<double>(h)));
-		}
-
-		return true;
-	}
+	// shift_texture, scale_texture, rotate_texture, set_texture, fit_texture and the other texture tools: texture_ops.cpp
 
 	// ---- entities -----------------------------------------------------------------------------------
 

@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "ext.hpp"
 
 #include <codol_edit/patch_ops.hpp>
 
@@ -58,7 +59,6 @@ namespace editor::ui
 			std::string points_text;
 
 			// ---- how patches are shown / edited ( the toolbar toggles of radiant )
-			int patches_as = 0;				// 0 textured, 1 wireframe
 			bool weld_moves = false;		// vertices that share a place move together
 			bool tolerant_weld = false;		// weld over one grid step instead of 0.1 units
 			bool drill_down = true;			// a vertex grabbed in a 2D view takes the ones behind it along
@@ -657,15 +657,10 @@ namespace editor::ui
 
 		void set_patches_as(const int mode)
 		{
-			const int clamped = std::clamp(mode, 0, 1);
-			if (clamped != g.patches_as)
-			{
-				g.patches_as = clamped;
-				get_scene().refresh_assets();		// the meshes of the patches are made again ( or dropped )
-				get_scene().statics_serial++;		// and the 3D view builds its lines again
-			}
-
-			game::printf_to_console("patches are shown %s\n", g.patches_as ? "as wireframes" : "textured");
+			// one setting for the Patch menu and Renderer > Show Patches As ( menu_renderer.cpp ): the meshes of
+			// the patches are made again ( or dropped ) there, and the 3D view builds its lines again
+			command::execute(mode != 0 ? "r_patches wireframe" : "r_patches textured");
+			get_scene().statics_serial++;
 		}
 
 		// ---- menu helpers ----------------------------------------------------------------------------------
@@ -722,7 +717,7 @@ namespace editor::ui
 
 	bool patches_as_wire()
 	{
-		return g.patches_as != 0;
+		return render_modes::hide_patch_meshes();
 	}
 
 	// ---- the 2D vertex mode ------------------------------------------------------------------------------------
@@ -815,40 +810,7 @@ namespace editor::ui
 
 	// ---- shortcuts ---------------------------------------------------------------------------------------------
 
-	bool process_brush_patch_shortcuts()
-	{
-		const auto& io = ImGui::GetIO();
-		const auto& st = get();
-		const bool ctrl = io.KeyCtrl, shift = io.KeyShift, alt = io.KeyAlt;
-		const auto pressed = [](const ImGuiKey key) { return ImGui::IsKeyPressed(key, false); };
-
-		if (alt)
-		{
-			return false;
-		}
-
-		if (ctrl)
-		{
-			if (!shift && pressed(ImGuiKey_I)) { done(edit::patch_invert(get_scene().doc), "Invert patch"); return true; }
-			if (!shift && pressed(ImGuiKey_T)) { g.show_thicken = true; return true; }
-			if (shift && pressed(ImGuiKey_M)) { done(edit::patch_transpose(get_scene().doc), "Transpose patch"); return true; }
-			if (shift && pressed(ImGuiKey_P)) { done(edit::patch_cycle_cap_texture(get_scene().doc), "Cycle cap texture"); return true; }
-			if (pressed(ImGuiKey_KeypadAdd)) { op_insert(shift ? patch_line::column : patch_line::row, true); return true; }
-			if (pressed(ImGuiKey_KeypadSubtract)) { done(edit::patch_delete(get_scene().doc, shift ? patch_line::column : patch_line::row, false), "Delete lines"); return true; }
-			return false;
-		}
-
-		// keys without Ctrl belong to the view the mouse is over
-		if (!shift || (!st.hovered_3d && st.hovered_2d < 0))
-		{
-			return false;
-		}
-
-		if (pressed(ImGuiKey_P)) { g.show_simple = true; g.simple_terrain = false; return true; }
-		if (pressed(ImGuiKey_C)) { g.show_cap = true; return true; }
-		if (pressed(ImGuiKey_S)) { g.show_advanced = true; return true; }
-		return false;
-	}
+	// the keys of these menus are actions: action_table.cpp ( patch.* )
 
 	// ---- menus -------------------------------------------------------------------------------------------------
 
@@ -1000,7 +962,7 @@ namespace editor::ui
 		ImGui::Separator();
 
 		// the toolbar toggles of radiant
-		bool wire = g.patches_as != 0;
+		bool wire = patches_as_wire();
 		if (toggle("Show Patches As Wireframe", wire, "Patches are drawn as lines only.")) { set_patches_as(wire ? 1 : 0); }
 		toggle("Drill Down Vertices", g.drill_down, "A vertex grabbed in a 2D view takes the ones that lie behind it along ( a whole row / column seen end on ).");
 		toggle("Cycle Terrain Edge Mode", g.edge_mode, "A click on a quad of a terrain patch in the 3D view turns its diagonal.");
@@ -1797,7 +1759,7 @@ namespace editor::ui
 		flag("patch_edge_mode", &bp_state::edge_mode, "cycle terrain edge mode");
 
 		// patch_show <0|1>: textured / wireframe
-		command::register_command("patch_show", [](args_t args) { set_patches_as(args.size() > 1 ? std::atoi(args[1].c_str()) : (g.patches_as ? 0 : 1)); });
+		command::register_command("patch_show", [](args_t args) { set_patches_as(args.size() > 1 ? std::atoi(args[1].c_str()) : (patches_as_wire() ? 0 : 1)); });
 
 		// patch_dialog <simple|terrain|thicken|cap|vertex|advanced|points> [close]
 		command::register_command("patch_dialog", [](args_t args)

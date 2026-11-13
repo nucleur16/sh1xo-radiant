@@ -334,6 +334,11 @@ namespace codol::view
 
 	int map_renderer::impl::choose_technique(const material_draw& material, const int primary_light_index, const bool emissive) const
 	{
+		// editor: the colour map alone where the technique set can draw it
+		if (frame && frame->fullbright && !emissive && ((material.slot_mask >> render::renderer_technique::UNLIT) & 1) != 0)
+		{
+			return render::renderer_technique::UNLIT;
+		}
 		// GameMapRenderer.cs:1391-1427
 		render::technique_choice choice;
 		choice.emissive = emissive;
