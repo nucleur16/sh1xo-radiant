@@ -101,6 +101,7 @@ invalid; in that case nothing changed.
 | create | `create_box`, `create_cylinder`, `create_cone`, `create_wedge`, `create_brush_from_points`, `create_terrain_patch`, `create_point_entity`, `create_brush_entity` |
 | selection | `delete_selection`, `clone_selection`, `translate`, `rotate`, `scale`, `flip`, `transform_selection`, `snap_to_grid` |
 | shape | `move_face`, `resize_selection`, `move_brush_corners` ( vertices and edges ), `move_patch_vertices` |
+| brush primitives, patches ( `codol_edit/patch_ops.hpp`, free functions ) | `create_brush_shape` ( box, wedge, sided prism, cone, sphere ), `brush_shape_from_selection`, `create_curve_patch`, `create_patch_shape` ( bevel .. cone ), `curve_to_terrain`, `faces_to_terrain`, `patch_insert` / `_delete` / `_insert_terrain` / `_extrude_terrain` / `_delete_terrain`, `patch_transpose`, `patch_invert`, `patch_redisperse`, `patch_split`, `patch_change_subdivision`, `patch_weld`, `patch_weld_to_brushes`, `move_patch_vertices_welded`, `patch_thicken`, `patch_cap`, `patch_turn_edges`, `patch_cap_texture`, `patch_natural_texture`, `patch_fit_texture`, `patch_set_color`, `patch_add_noise`, `edit_patch`. Tests: `codol_patch_ops_tests` |
 | csg | `clip` ( front / back / both ), `csg_subtract`, `csg_hollow` |
 | textures | `set_material`, `shift_texture`, `scale_texture`, `rotate_texture`, `set_texture`, `fit_texture`; `set_texture_lock` |
 | entities | `set_key`, `remove_key`, `rename_key`, `connect_entities`, `targets_of`, `targeting`, `move_selection_to_worldspawn` |

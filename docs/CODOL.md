@@ -70,7 +70,9 @@ install's zones ( about 16 s ) and the first asset build its materials ( 20 s );
 **1. File > New map**, a name like `mp_mymap` ( `a-z 0-9 _` ). It is saved as `map_source\mp_mymap.map`; its
 asset project is `mod\mp_mymap\` ( [Your own assets](#your-own-assets) ).
 
-**2. Draw the map.** Brushes, terrain patches, `misc_model`s ( static models ), `reflection_probe`s.
+**2. Draw the map.** Brushes, curve and terrain patches ( the **Brush** and **Patch** menus:
+[Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ), `misc_model`s ( static models ),
+`reflection_probe`s.
 
 * The map has to be **closed** ( no way from an entity to the void ) or stand in a sky box; the build reports a
   leak with its position.
@@ -179,6 +181,90 @@ folders of File > Settings when none is given ), `map_install game=<folder> [scr
 [list]`, `map_install window`, `map_uninstall [map]`, `map_list [game folder]`.
 The radiant plugin ( `iw3r.dll` inside CoD4 radiant ) described below still builds, but the standalone editor is
 where the work goes.
+
+### Brushes and patches: the Brush and Patch menus
+
+What CoD4 radiant's **Brush** and **Patch** menus do, written for the editor's own document ( `codol_edit`,
+`patch_ops.hpp` ); nothing of it calls into CoD4 radiant. Every item is one undo step, is greyed with a tooltip
+that says why when it does not apply, and has a console command - so a whole map can be scripted
+( `CODOL_STARTUP_CMDS` ).
+
+**What a new shape fills.** The box of the selected brushes; with no brush selected, the last box that was
+selected or drawn in a 2D view; in a command, `at x1 y1 z1 x2 y2 z2`. A brush primitive *replaces* the selected
+brushes ( the first keeps its id, entity, layer, contents and the material of its first face ). A patch made from
+a selected brush deletes it ( "Delete Original Selection", `keep` in a command ) and takes its material.
+
+**Brush**
+
+| Menu | Command | |
+|---|---|---|
+| Arbitrary Sided Cylinder .. | `brush_cylinder [sides] [x\|y\|z]`, `brush_sided ..` | 3 - 64 sides around an axis; the faces touch the box, as radiant's do ( 4 sides are the box itself ) |
+| N Sided > 3 .. 9 | `brush_sided <n>` | |
+| Cone .. | `brush_cone [sides] [x\|y\|z]` | the same base, a point at the far end of the axis |
+| Sphere .. | `brush_sphere [sides] [x\|y\|z]` | 4 - 16 slices, half as many bands; inside the box |
+| Box, Cylinder, Wedge | `brush_box`, `brush_cylinder 8`, `brush_wedge [x\|y]` | |
+| From Points .. | `brush_points x y z x y z ..` | the convex hull of four or more points |
+| ( the dialog ) | `brush_dialog [box\|wedge\|cylinder\|cone\|sphere]` | |
+
+**Patch.** A patch is a grid of control points, *columns x rows*. A **curve** ( odd numbers of both ) is a
+quadratic bezier surface: every second control point lies on it. A **terrain** patch ( `mesh` in the file ) is
+the grid itself, two triangles per cell.
+
+| Menu | Command | |
+|---|---|---|
+| Simple Curve Patch .. ( Shift+P ) | `patch_curve [columns rows] [x\|y\|z] [keep]` | flat, on the far side of the box across its thinnest axis |
+| Simple Terrain Patch .. | `patch_terrain [columns rows] [x\|y\|z] [keep]` | 2 - 16 each way |
+| Curve To Terrain | `patch_curve_to_terrain` | the vertices the curve is drawn with become a terrain mesh |
+| Faces To Terrain | `patch_faces_to_terrain [delete]` | one 2 x 2 terrain patch per selected face ( or per face of the selected brushes ) with 3 or 4 corners; keeps the texture alignment |
+| Primitives > Bevel, Square Bevel, End Cap, Square End Cap, Cylinder, Dense Cylinder, Very Dense Cylinder, Square Cylinder, Cone | `patch_prim <bevel\|square_bevel\|endcap\|square_endcap\|cylinder\|dense_cylinder\|very_dense_cylinder\|square_cylinder\|cone> [x\|y\|z] [keep]` | 3x3, 5x3, 5x3, 7x3, 9x3, 9x5, 9x9, 9x3, 9x3; the axis is chosen in the submenu |
+| Vert Edit Dialog | `patch_dialog vertex`, `patch_color r g b [a]`, `patch_noise x y z [seed]` | vertex colour and noise for the selected vertices, else the whole patch |
+| Advanced Edit Dialog ( Shift+S ) | `patch_dialog advanced`, `patch_vsel <none\|all\|row N\|column N\|i j ..> [add]`, `patch_move dx dy dz` | the control points as a table: click a cell, a row or a column header; position, texture and lightmap coordinates of a vertex; subdivision; lock |
+| Insert > Insert 2 Columns / Rows | `patch_insert <columns\|rows> [index]` | at the start, or in the segment of the selected vertices. A curve keeps its shape exactly ( the segment is split ) |
+| Insert > Add 2 Columns / Rows ( Ctrl+Shift+Num + / Ctrl+Num + ) | `patch_add <columns\|rows>` | at the end |
+| Insert > Add Terrain Row / Column | `patch_terrain_add [column\|row] [after]` | one line after the row / column of the selected vertices |
+| Insert > Extrude Terrain Row | `patch_extrude [column\|row] [start\|end]` | one more line beyond the edge |
+| Delete > First / Last 2 Columns / Rows ( Ctrl+Shift+Num - / Ctrl+Num - ) | `patch_delete <first\|last> <columns\|rows>` | |
+| Delete > Remove Terrain Row / Column | `patch_terrain_remove [column\|row] [index]` | |
+| Matrix > Transpose ( Ctrl+Shift+M ) | `patch_transpose` | |
+| Matrix > Re-disperse Vertices / Columns / Rows | `patch_redisperse <vertices\|columns\|rows>` | vertices: even spacing along the lines the control points form; columns / rows: evenly on the straight line between the first and the last |
+| Weld > Connect Selection / Weld | `patch_weld [tolerance]` | vertices of the selected patches closer than 0.1 units ( Tolerant Weld: one grid step ) become one place |
+| Weld > Weld to Brush Vertices | `patch_weld_brushes [tolerance]` | onto brush corners |
+| Weld > Tolerant Weld, Weld Equal Patch Points During Moves | `patch_tolerant [0\|1]`, `patch_weld_moves [0\|1]` | the second: a vertex dragged in a 2D view takes along every vertex of the selected patches in the same place ( the seam of a cylinder ) |
+| Inc / Dec Subdivision | `patch_subdiv <+n\|-n>` | curves: 1 - 16 quads per segment, in the views and in the compiled map |
+| Split | `patch_split [column\|row] [index]` | two patches, at the line of the selected vertices or in the middle |
+| Invert ( Ctrl+I ) | `patch_invert` | faces the other way; a terrain keeps its triangles |
+| Thicken .. ( Ctrl+T ) | `patch_thicken <units> [seams 0\|1]` | a second surface behind the patch, facing away, and strips that close the edges |
+| Cap .. ( Shift+C ) | `patch_cap [auto\|bevel\|endcap\|inverted_bevel\|inverted_endcap\|cylinder] [first\|last\|both]` | closes the open ends ( first / last row ) of a curve; the caps face away from it and get a flat texture |
+| Turn Terrain Edges | `patch_turn_edges`, `patch_turn_edge <column> <row>` | the diagonal of the quads the selected vertices start, else of every quad |
+| Lock / Unlock Vertices | `patch_lock`, `patch_unlock [all]` | locked vertices ( red in the 2D views ) do not move when vertices are dragged |
+| Cycle Cap Texture ( Ctrl+Shift+P ), Cap Texture | `patch_cycle_cap`, `patch_cap_texture [x\|y\|z]` | flat projection along a world axis |
+| Natural Texture, Fit Texture | `patch_natural [units per texel]`, `patch_fit [x y]` | |
+| Show Patches As Wireframe | `patch_show [0\|1]` | |
+| Drill Down Vertices | `patch_drill [0\|1]` | off: a grab in a 2D view takes only the vertex nearest to the viewer |
+| Cycle Terrain Edge Mode | `patch_edge_mode [0\|1]` | a click on a terrain quad in the 3D view turns its diagonal |
+| | `patch_info` | the selected patches: size, subdivision, bounds, turned edges |
+
+**Patch vertices.** In *vertex mode* ( V ) of a 2D view a patch shows its control points; grabbing one selects it
+( yellow; Shift adds ) together with the ones behind it, and dragging moves them. The Advanced Edit dialog selects
+by row and column. The vertex selection is what "the selected vertices" above means.
+
+**In the file** a curve is a `curve` block and a terrain a `mesh` block, as CoD4 radiant writes them: material,
+`lightmap_gray`, an optional `smoothing` line, `columns rows 16 8` and per vertex `v x y z [c r g b a] t s t ls lt
+[f 1]` ( texture coordinates in texels, lightmap coordinates, `f 1` = turned edge of the quad the vertex starts ).
+Unedited patches are written back byte for byte. **The fourth number of the size line is read as the subdivision
+of a curve** ( 8 = 4 quads per segment ) - an assumption of this editor: CoD4 radiant always writes 8 and its own
+meaning of the number was not verified.
+
+**In the built map** ( File > Build map ) every patch - curves at their subdivision, terrain as it is - becomes
+drawn triangles with a lightmap and collision triangles of the clip map's terrain. Triangles without area ( the
+fan of a cap around its centre ) are dropped. Patches of a brush entity are not compiled ( the build says so ).
+`codol_bsp_patch_tests` compiles a room with every patch kind and brush primitive.
+
+**Not there:** Weld to Model / Prefab Vertices ( greyed: models are not read for snapping, prefabs are not
+expanded ); `physics_box` / `physics_cylinder` blocks ( what CoD4 radiant's Brush > Box / Cylinder make for
+physics presets ) - here Box and Cylinder make brushes; a third "show patches as" mode; selecting patch vertices
+in the 3D view; patches in **File > Compile map** ( an edited shipped map: `codol_mapc` reports patches and leaves
+them out - build the map from scratch ).
 
 ### Your own assets
 
@@ -448,6 +534,10 @@ Be aware of these before planning work around this branch:
   without the list.
 - **The 3D view of a map of your own is not the light bake.** It shows the sun, sky and ambient light of the
   worldspawn on brushes and models; light entities are shown as shapes, their light is in the built map.
+- **Patches**: no welding to model or prefab vertices, no `physics_box` / `physics_cylinder` blocks, patch vertices
+  are selected in the 2D views and the Advanced Edit dialog only, the subdivision number of a curve is this editor's
+  reading of the file ( [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus) ). File > Compile map
+  ( an edited shipped map ) leaves patches out.
 - **Assets**: no deleting or renaming from the editor, no editing of a material in a window, no streamed images,
   the shipped animtrees are not extended ( the list under [In the built map](#in-the-built-map) ).
 - **Entity overrides are mp only.** The server applies `<map>.d3dbsp.ents` in mp matches; co-op and
@@ -589,6 +679,8 @@ The rcon packet is `\xff\xff\xff\xffrcon "<password>" <command>` to `127.0.0.1:<
 | `codol_import_ents <file> [map]` | import map entities |
 | `codol_export_ents [noreload]` | save + export the override |
 | `codol_attach`, `codol_detach` | dock / release the game window |
+
+The standalone editor's `brush_*` and `patch_*` commands: [Brushes and patches](#brushes-and-patches-the-brush-and-patch-menus).
 
 Other dvars: `codol_reload_on_save`, `codol_rcon_log`, `codol_rcon_password` (not saved).
 

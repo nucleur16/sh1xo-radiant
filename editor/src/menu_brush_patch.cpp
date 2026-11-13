@@ -662,6 +662,7 @@ namespace editor::ui
 			{
 				g.patches_as = clamped;
 				get_scene().refresh_assets();		// the meshes of the patches are made again ( or dropped )
+				get_scene().statics_serial++;		// and the 3D view builds its lines again
 			}
 
 			game::printf_to_console("patches are shown %s\n", g.patches_as ? "as wireframes" : "textured");
@@ -1017,6 +1018,7 @@ namespace editor::ui
 			}
 
 			ImGui::SetNextWindowSize(ImVec2(330.0f, 0.0f), ImGuiCond_FirstUseEver);
+			ImGui::SetNextWindowPos(ImVec2(460.0f, 120.0f), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Brush primitive##window", &g.show_brush, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
 			{
 				ImGui::Combo("Shape", &g.brush_shape_index, SHAPE_NAMES, static_cast<int>(std::size(SHAPE_NAMES)));
@@ -1061,6 +1063,7 @@ namespace editor::ui
 			}
 
 			ImGui::SetNextWindowSize(ImVec2(360.0f, 300.0f), ImGuiCond_FirstUseEver);
+			ImGui::SetNextWindowPos(ImVec2(460.0f, 330.0f), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Brush from points##window", &g.show_points, ImGuiWindowFlags_NoCollapse))
 			{
 				ImGui::TextDisabled("x y z of four or more points, in any order:");
@@ -1084,6 +1087,7 @@ namespace editor::ui
 				return;
 			}
 
+			ImGui::SetNextWindowPos(ImVec2(480.0f, 140.0f), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Simple patch##window", &g.show_simple, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
 			{
 				int kind = g.simple_terrain ? 1 : 0;
@@ -1136,6 +1140,7 @@ namespace editor::ui
 				return;
 			}
 
+			ImGui::SetNextWindowPos(ImVec2(820.0f, 140.0f), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Thicken patch##window", &g.show_thicken, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
 			{
 				ImGui::SetNextItemWidth(140.0f);
@@ -1166,6 +1171,7 @@ namespace editor::ui
 				return;
 			}
 
+			ImGui::SetNextWindowPos(ImVec2(820.0f, 300.0f), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Cap patch##window", &g.show_cap, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
 			{
 				for (int i = 0; i < static_cast<int>(std::size(CAP_LABELS)); i++)
@@ -1200,6 +1206,7 @@ namespace editor::ui
 				return;
 			}
 
+			ImGui::SetNextWindowPos(ImVec2(1080.0f, 140.0f), ImGuiCond_FirstUseEver);
 			if (ImGui::Begin("Patch vertices##window", &g.show_vertex, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
 			{
 				const object_id id = active_patch();
@@ -1260,6 +1267,7 @@ namespace editor::ui
 			}
 
 			ImGui::SetNextWindowSize(ImVec2(520.0f, 560.0f), ImGuiCond_FirstUseEver);
+			ImGui::SetNextWindowPos(ImVec2(440.0f, 360.0f), ImGuiCond_FirstUseEver);
 			if (!ImGui::Begin("Patch: advanced edit##window", &g.show_advanced, ImGuiWindowFlags_NoCollapse))
 			{
 				ImGui::End();

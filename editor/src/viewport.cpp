@@ -436,7 +436,9 @@ namespace ggui
 			// where the drag began. )
 			const bool edited_model = object.compiled && !object.imported;
 
-			if (!(object.imported || object.compiled) || !(all || edited_model))
+			const bool wire_patch = object.patch && editor::ui::patches_as_wire();		// Patch menu: patches as wireframes
+
+			if (!wire_patch && (!(object.imported || object.compiled) || !(all || edited_model)))
 			{
 				continue;
 			}
