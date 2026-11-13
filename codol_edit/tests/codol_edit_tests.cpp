@@ -18,6 +18,9 @@
 
 using namespace codol::edit;
 
+// texture_tools_tests.cpp: texture layers, flips, find / replace, rope, noise; returns the failed checks
+int test_texture_tools(int& checks);
+
 static int g_failed = 0;
 static int g_checks = 0;
 static int g_skipped = 0;
@@ -1998,6 +2001,7 @@ int main(const int argc, char** argv)
 	test_saved_import("mp_killhouse_sh");
 	test_import("mp_rust");
 	test_import("mp_killhouse_sh");
+	g_failed += test_texture_tools(g_checks);		// texture_tools_tests.cpp
 
 	std::printf("\ncodol_edit_tests: %d checks, %d failed, %d skipped ( missing test data )\n", g_checks, g_failed, g_skipped);
 	return g_failed == 0 ? 0 : 1;

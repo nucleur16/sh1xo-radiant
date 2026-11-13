@@ -82,7 +82,9 @@ namespace codol::edit
 		std::uint64_t visibility_counter = 1;
 
 		// ---- settings
-		bool texture_lock = true;
+		bool texture_lock = true;				// moves
+		bool texture_lock_rotations = true;		// rotations, scales, flips
+		int edit_layer = 0;						// which layer the texture operations change: 0 material, 1 lightmap
 		std::string default_material = "caulk";
 		texture_size_fn texture_size;
 		std::function<bool(const entity&, bounds&)> entity_box;

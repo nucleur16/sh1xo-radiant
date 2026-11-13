@@ -680,6 +680,8 @@ namespace codol::edit
 	void document::impl::carry_over(const impl& old, impl& fresh)
 	{
 		fresh.texture_lock = old.texture_lock;
+		fresh.texture_lock_rotations = old.texture_lock_rotations;
+		fresh.edit_layer = old.edit_layer;
 		fresh.default_material = old.default_material;
 		fresh.texture_size = old.texture_size;
 		fresh.entity_box = old.entity_box;
@@ -1429,8 +1431,8 @@ namespace codol::edit
 	void document::set_undo_limit(const std::size_t steps) { d->undo_limit = steps; }
 	const std::string& document::last_error() const { return d->last_error; }
 
-	void document::set_texture_lock(const bool on) { d->texture_lock = on; }
-	bool document::texture_lock() const { return d->texture_lock; }
+	void document::set_texture_lock(const bool on) { d->texture_lock = d->texture_lock_rotations = on; }
+	bool document::texture_lock() const { return d->texture_lock || d->texture_lock_rotations; }
 	void document::set_default_material(const std::string_view material) { d->default_material = std::string(material); }
 	std::string_view document::default_material() const { return d->default_material; }
 }
