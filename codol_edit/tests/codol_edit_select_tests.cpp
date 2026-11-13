@@ -497,7 +497,16 @@ namespace
 		only([](view_filter& f) { f.detail = true; });
 		CHECK(!visible(detail) && visible(wall) && visible(clip));
 		only([](view_filter& f) { f.structural = true; });
-		CHECK(!visible(wall) && visible(detail) && visible(clip) && visible(caulk) && visible(trig_brush));
+		// structural: what is not detail and no tool volume - a caulk or sky brush is, a clip brush is not
+		CHECK(!visible(wall) && visible(detail) && visible(clip) && !visible(caulk) && !visible(sky) && visible(trig_brush));
+		// a wall with a caulked face is still a wall
+		doc.select_face({ wall, 0 });
+		doc.set_material("caulk");
+		doc.deselect_all();
+		CHECK(!visible(wall));
+		only([](view_filter& f) { f.caulk = true; });
+		CHECK(visible(wall) && !visible(caulk));
+		CHECK(doc.undo());
 		only([](view_filter& f) { f.clip = true; f.caulk = true; f.sky = true; });
 		CHECK(!visible(clip) && !visible(caulk) && !visible(sky) && visible(wall));
 		only([](view_filter& f) { f.triggers = true; });

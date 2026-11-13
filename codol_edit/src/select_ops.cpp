@@ -56,7 +56,8 @@ namespace codol::edit
 
 		struct brush_traits
 		{
-			bool clip = false, weapon_clip = false, caulk = false, trigger = false, portal = false, hint = false, sky = false, tool = false;
+			bool clip = false, weapon_clip = false, caulk = false, trigger = false, portal = false, hint = false, sky = false;
+			bool volume = false;	// a tool volume: clip, trigger, portal, hint, nodraw .. - not caulk ( a hidden face of a wall ), not sky
 		};
 
 		brush_traits traits_of(const brush& b)
@@ -73,7 +74,8 @@ namespace codol::edit
 				t.portal |= c == material_class::portal;
 				t.hint |= c == material_class::hint;
 				t.sky |= c == material_class::sky;
-				t.tool |= c != material_class::normal;
+				t.volume |= c == material_class::clip || c == material_class::trigger || c == material_class::portal || c == material_class::hint
+					|| c == material_class::nodraw;
 				all_caulk &= c == material_class::caulk;
 			}
 
@@ -88,7 +90,7 @@ namespace codol::edit
 
 			return (f.clip && t.clip) || (f.weapon_clip && t.weapon_clip) || (f.caulk && t.caulk) || (f.triggers && t.trigger) || (f.portals && t.portal)
 				|| (f.hints && t.hint) || (f.sky && t.sky) || (f.detail && b.is_detail()) || (f.non_colliding && b.has_content("nonColliding"))
-				|| (f.structural && in_world && !b.is_detail() && !t.tool);
+				|| (f.structural && in_world && !b.is_detail() && !t.volume);
 		}
 
 		bool entity_filtered(const entity& e, const view_filter& f)
