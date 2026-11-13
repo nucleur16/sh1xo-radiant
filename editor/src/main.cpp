@@ -8,6 +8,7 @@
 #include "ui.hpp"
 #include "assets.hpp"
 #include "preview.hpp"
+#include "ext.hpp"
 #include "png_wic.hpp"
 
 // CoDOL Radiant: the standalone host. A plain Win32 window with a Direct3D 9 device and a docking ImGui on it.
@@ -327,6 +328,7 @@ namespace editor
 			{
 				ui::draw_file_menu_items();
 				ImGui::Separator();
+				prefs::draw_recent_menu();
 				ImGui::MenuItem("Settings ..", nullptr, &g_show_settings);
 				ImGui::Separator();
 
@@ -341,6 +343,8 @@ namespace editor
 			if (ImGui::BeginMenu("Edit"))
 			{
 				ui::draw_edit_menu();
+				ImGui::Separator();
+				ext::draw_edit_menu_items();		// Edit Colors / Edit Toolbar / Edit Hotkeys / Preferences
 				ImGui::EndMenu();
 			}
 
@@ -374,6 +378,8 @@ namespace editor
 				ImGui::EndMenu();
 			}
 
+			ext::draw_menus();		// Textures, Renderer, Effects, Tools
+
 			if (ImGui::BeginMenu("Game"))
 			{
 				if (ImGui::MenuItem("Reload scripts in the game"))
@@ -391,90 +397,14 @@ namespace editor
 
 			if (ImGui::BeginMenu("Help"))
 			{
+				ext::draw_help_menu_items();
+				ImGui::Separator();
 				ImGui::MenuItem("About", nullptr, &g_show_about);
 				ImGui::MenuItem("ImGui demo", nullptr, &g_show_demo);
 				ImGui::EndMenu();
 			}
 
 			ImGui::EndMainMenuBar();
-		}
-
-		// every saved setting, generically
-		void draw_settings()
-		{
-			if (!g_show_settings)
-			{
-				return;
-			}
-
-			ImGui::SetNextWindowSize(ImVec2(820.0f, 0.0f), ImGuiCond_Appearing);
-
-			if (ImGui::Begin("Settings##window", &g_show_settings, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking))
-			{
-				ImGui::TextDisabled("Saved to codol_editor.cfg next to the editor. Hover a name for its meaning.");
-				ImGui::Separator();
-
-				for (auto* dvar : dvars::all())
-				{
-					// the asset tool is only used by the radiant plugin's history; nothing here converts assets
-					if (!(dvar->flags & game::dvar_flags::saved) || std::string_view(dvar->name) == "codol_asset_tool")
-					{
-						continue;
-					}
-
-					ImGui::PushID(dvar->name);
-					ImGui::AlignTextToFramePadding();
-					ImGui::TextUnformatted(dvar->name);
-
-					if (ImGui::IsItemHovered() && dvar->description && *dvar->description)
-					{
-						ImGui::SetTooltip("%s", dvar->description);
-					}
-
-					ImGui::SameLine(260.0f);
-					ImGui::SetNextItemWidth(-1.0f);
-
-					switch (dvar->type)
-					{
-					case game::dvar_type::boolean:
-					{
-						bool value = dvar->current.enabled;
-						if (ImGui::Checkbox("##value", &value))
-						{
-							dvars::set_bool(dvar, value);
-						}
-
-						break;
-					}
-
-					case game::dvar_type::integer:
-					{
-						int value = dvar->current.integer;
-						if (ImGui::InputInt("##value", &value, 0))
-						{
-							dvars::set_int(dvar, value);
-						}
-
-						break;
-					}
-
-					default:
-					{
-						std::string value = dvar->current.string ? dvar->current.string : "";
-						if (ImGui::InputText("##value", &value))
-						{
-							dvars::set_string(dvar, value.c_str());
-						}
-
-						break;
-					}
-					}
-
-					ImGui::PopID();
-				}
-			}
-
-			ImGui::End();
 		}
 
 		void draw_about()
@@ -565,6 +495,7 @@ namespace editor
 
 			ui::process_shortcuts();
 			draw_menu();
+			toolbar::draw();		// under the menu bar, before the dock space takes the rest
 
 			const ImGuiID dockspace = ImGui::DockSpaceOverViewport(ImGui::GetMainViewport());
 			first_layout(dockspace);
@@ -606,8 +537,9 @@ namespace editor
 			}
 
 			draw_console();
-			draw_settings();
+			prefs::draw_window(&g_show_settings);
 			draw_about();
+			ext::frame();			// preferences, hotkeys, colours, toolbar, textures, renderer, effects, tools
 
 			if (g_show_demo)
 			{
@@ -843,6 +775,7 @@ int WINAPI wWinMain(const HINSTANCE instance, HINSTANCE, PWSTR, int)
 
 	// settings, then the game bridge ( rcon, reload, console commands )
 	components::codol_game::register_dvars();
+	ext::init();			// settings, actions and commands of ext.hpp, before the settings are read
 	dvars::load_config();
 
 	{

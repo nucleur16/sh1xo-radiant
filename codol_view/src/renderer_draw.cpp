@@ -367,8 +367,21 @@ namespace codol::view
 		{
 			const world_surface& s = surfaces[i];
 			surface_visible[i] = !s.brush_model && !s.hidden && (!cells || i >= cells->size() || (*cells)[i])
-				&& (s.radius <= 0.0f || sphere_visible(frustum, s.center - cam.origin, s.radius));
+				&& (s.radius <= 0.0f || sphere_visible(frustum, s.center - cam.origin, s.radius))
+				&& !beyond_far_clip(s.center - cam.origin, s.radius);
 		}
+	}
+
+	bool map_renderer::impl::beyond_far_clip(const float3& center_from_camera, const float radius) const
+	{
+		const float reach = frame ? frame->far_clip : 0.0f;
+		return reach > 0.0f && (std::fabs(center_from_camera.x) - radius > reach || std::fabs(center_from_camera.y) - radius > reach
+			|| std::fabs(center_from_camera.z) - radius > reach);
+	}
+
+	bool map_renderer::impl::water_hidden(const material_draw& material) const
+	{
+		return frame && !frame->draw_water && material.set().name.find("water") != std::string::npos;
 	}
 
 	const model_lod_draw& map_renderer::impl::choose_lod(const static_model_instance& instance, const camera& cam) const
@@ -434,7 +447,7 @@ namespace codol::view
 			frame_stat.culled_models++;
 			return;
 		}
-		if (!sphere_visible(frustum, instance.center - cam.origin, instance.radius)
+		if (!sphere_visible(frustum, instance.center - cam.origin, instance.radius) || beyond_far_clip(instance.center - cam.origin, instance.radius)
 			|| (instance.cull_distance > 0 && length(instance.center - cam.origin) - instance.radius > instance.cull_distance))
 		{
 			frame_stat.culled_models++;
@@ -481,7 +494,8 @@ namespace codol::view
 		for (brush_model_instance& instance : brush_models)
 		{
 			instance.drawn = false;
-			if (instance.hidden || (instance.special_ops && !frame->draw_special_ops_brush_models) || !sphere_visible(frustum, instance.center - cam.origin, instance.radius))
+			if (instance.hidden || (instance.special_ops && !frame->draw_special_ops_brush_models) || !sphere_visible(frustum, instance.center - cam.origin, instance.radius)
+				|| beyond_far_clip(instance.center - cam.origin, instance.radius))
 			{
 				continue;
 			}
@@ -524,7 +538,7 @@ namespace codol::view
 			frame_stat.skipped_no_technique++;
 			return false;
 		}
-		if (material->not_drawn())
+		if (material->not_drawn() || water_hidden(*material))
 		{
 			frame_stat.skipped_hidden++;
 			return false;
@@ -971,7 +985,22 @@ namespace codol::view
 				{
 					warn(material.asset().name + ": no texture for sampler " + render::hex32(arg.name_hash()));
 				}
-				bind_sampler(arg.dest, texture ? *texture : white, def ? def->sampler_state : render::DEFAULT_MATERIAL_SAMPLER_STATE);
+					// editor: without specular / normal maps the stand-ins of the game are read instead
+				if (frame && def && (!frame->specular_maps || !frame->normal_maps))
+				{
+					static const std::uint32_t specular[] = { render::hash_sampler_name("specularMap"), render::hash_sampler_name("specularMap0"), render::hash_sampler_name("specularMap1") };
+					static const std::uint32_t normal[] = { render::hash_sampler_name("normalMap"), render::hash_sampler_name("normalMap0"), render::hash_sampler_name("normalMap1"),
+						render::hash_sampler_name("detailNormalMap") };
+					if (!frame->specular_maps && std::find(std::begin(specular), std::end(specular), def->name_hash) != std::end(specular))
+					{
+						texture = &black;
+					}
+					else if (!frame->normal_maps && std::find(std::begin(normal), std::end(normal), def->name_hash) != std::end(normal))
+					{
+						texture = &flat_normal;
+					}
+				}
+				bind_sampler(arg.dest, texture ? *texture : white, def ? def->sampler_state : render::DEFAULT_MATERIAL_SAMPLER_STATE, true);
 				break;
 			}
 			case type::code_pixel_sampler:
@@ -1040,7 +1069,7 @@ namespace codol::view
 		}
 	}
 
-	void map_renderer::impl::bind_sampler(const int sampler, const gpu_texture& texture, const std::uint8_t sampler_state)
+	void map_renderer::impl::bind_sampler(const int sampler, const gpu_texture& texture, const std::uint8_t sampler_state, const bool material_texture)
 	{
 		// GameMapRenderer.cs:1740-1771. sRGB reads only happen in the post effects, which are not ported.
 		frame_stat.texture_binds++;
@@ -1048,11 +1077,11 @@ namespace codol::view
 		if (cached)
 		{
 			applied_sampler& applied = applied_samplers[static_cast<std::size_t>(sampler)];
-			if (applied.valid && applied.texture == texture.handle.get() && applied.state == sampler_state)
+			if (applied.valid && applied.texture == texture.handle.get() && applied.state == sampler_state && applied.material == material_texture)
 			{
 				return;
 			}
-			applied = { texture.handle.get(), sampler_state, true };
+			applied = { texture.handle.get(), sampler_state, true, material_texture };
 		}
 		device->SetTexture(static_cast<DWORD>(sampler), texture.handle.get());
 		auto it = sampler_states.find(sampler_state);
@@ -1065,6 +1094,26 @@ namespace codol::view
 		for (const auto& pair : it->second.states())
 		{
 			device->SetSamplerState(static_cast<DWORD>(sampler), static_cast<D3DSAMPLERSTATETYPE>(pair.state), pair.value);
+		}
+		// editor: the filter and the resolution of the material textures. Only while one of the two is asked for;
+		// the bias is then set for every texture ( 0 for a code texture ): a sampler that showed a material texture
+		// before must not keep it.
+		if (frame && (frame->mip_bias != 0.0f || frame->texture_filter > 0))
+		{
+			const float bias = material_texture ? frame->mip_bias : 0.0f;
+			device->SetSamplerState(static_cast<DWORD>(sampler), D3DSAMP_MIPMAPLODBIAS, *reinterpret_cast<const DWORD*>(&bias));
+			if (material_texture && frame->texture_filter > 0)
+			{
+				const int mode = frame->texture_filter;
+				const bool anisotropic = mode == 4 && (caps.TextureFilterCaps & D3DPTFILTERCAPS_MINFANISOTROPIC) != 0;
+				device->SetSamplerState(static_cast<DWORD>(sampler), D3DSAMP_MINFILTER, mode == 1 ? D3DTEXF_POINT : anisotropic ? D3DTEXF_ANISOTROPIC : D3DTEXF_LINEAR);
+				device->SetSamplerState(static_cast<DWORD>(sampler), D3DSAMP_MAGFILTER, mode == 1 ? D3DTEXF_POINT : D3DTEXF_LINEAR);
+				device->SetSamplerState(static_cast<DWORD>(sampler), D3DSAMP_MIPFILTER, mode <= 2 ? D3DTEXF_NONE : D3DTEXF_LINEAR);
+				if (anisotropic)
+				{
+					device->SetSamplerState(static_cast<DWORD>(sampler), D3DSAMP_MAXANISOTROPY, std::min<DWORD>(caps.MaxAnisotropy, 16));
+				}
+			}
 		}
 	}
 }

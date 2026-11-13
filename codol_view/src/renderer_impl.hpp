@@ -485,7 +485,7 @@ namespace codol::view
 		struct bound_register { std::int64_t key = 0; int version = 0; };
 		std::array<bound_register, 256> bound_vertex{};
 		std::array<bound_register, 224> bound_pixel{};
-		struct applied_sampler { IDirect3DBaseTexture9* texture = nullptr; std::uint8_t state = 0; bool valid = false; };
+		struct applied_sampler { IDirect3DBaseTexture9* texture = nullptr; std::uint8_t state = 0; bool valid = false; bool material = false; };
 		std::array<applied_sampler, 16> applied_samplers{};
 		std::map<std::pair<std::uint32_t, std::uint32_t>, std::vector<render::render_state_value>> state_bits;
 		const std::vector<render::render_state_value>* applied_state_bits = nullptr;
@@ -607,7 +607,12 @@ namespace codol::view
 		void apply_state_bits(const material_draw& material, int technique_type, int pass);
 		void bind_arguments(const render::render_pass& pass, pass_plan& plan, material_draw& material);
 		void bind_custom_samplers(const render::render_pass& pass, int reflection_probe, const lightmap_pair* lightmap);
-		void bind_sampler(int sampler, const gpu_texture& texture, std::uint8_t sampler_state);
+		// material_texture: a texture of a material ( the editor's filter and mip bias count for these only )
+		void bind_sampler(int sampler, const gpu_texture& texture, std::uint8_t sampler_state, bool material_texture = false);
+		// editor: the cube of frame_options::far_clip around the camera does not touch the sphere
+		bool beyond_far_clip(const float3& center_from_camera, float radius) const;
+		// editor: frame_options::draw_water is off and the material is one of water
+		bool water_hidden(const material_draw& material) const;
 		void set_constants(const render::shader_argument& arg, const float* values, int rows, std::int64_t key = 0, int version = 0);
 		bool already_bound(bool vertex, int reg, int rows, std::int64_t key, int version) const;
 		const model_lod_draw& choose_lod(const static_model_instance& instance, const camera& cam) const;

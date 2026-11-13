@@ -425,7 +425,8 @@ namespace codol::view
 		{
 			dynamic_mesh& mesh = *entry.second;
 			mesh.drawn = false;
-			if (mesh.hidden || !mesh.vertex_buffer || !mesh.index_buffer || !sphere_visible(frustum, mesh.center - cam.origin, mesh.radius))
+			if (mesh.hidden || !mesh.vertex_buffer || !mesh.index_buffer || !sphere_visible(frustum, mesh.center - cam.origin, mesh.radius)
+				|| beyond_far_clip(mesh.center - cam.origin, mesh.radius))
 			{
 				continue;
 			}

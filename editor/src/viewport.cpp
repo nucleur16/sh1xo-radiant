@@ -8,6 +8,7 @@
 #include "assets.hpp"
 #include "preview.hpp"
 #include "ui.hpp"
+#include "ext.hpp"
 
 #include <ImGuizmo.h>
 
@@ -195,7 +196,6 @@ namespace ggui
 		bool draw_gizmo(ImDrawList* dl, const ImVec2& origin, int width, int height);
 		void draw_selection_window();
 		void draw_models_window();
-		void draw_materials_window();
 	};
 
 	struct codol_viewport_dialog::impl : viewport_state
@@ -247,6 +247,7 @@ namespace ggui
 	void codol_viewport_dialog::on_device_lost()
 	{
 		editor::preview::device_lost();
+		editor::render_modes::device_lost();
 
 		if (auto& s = editor::get_scene(); s.renderer.initialised())
 		{
@@ -393,6 +394,17 @@ namespace editor::ui
 		pick_ray(origin, direction, toggle, face);
 	}
 
+	// what the camera actions ask of the view: "next_spawn", "overview", "focus" ( done when the view draws next )
+	void viewport_request(const std::string_view what)
+	{
+		if (ggui::g_impl)
+		{
+			if (what == "next_spawn") { ggui::g_impl->next_spawn = true; }
+			else if (what == "overview") { ggui::g_impl->overview = true; }
+			else if (what == "focus") { ggui::g_impl->focus = true; }
+		}
+	}
+
 	void set_material_filter(const std::string& text, const int group)
 	{
 		if (ggui::g_impl)
@@ -480,7 +492,7 @@ namespace ggui
 		{
 			for (const auto& e : s.statics.entities)
 			{
-				if (!e.has_model && !doc.is_selected(e.id))
+				if ((!e.has_model || editor::render_modes::entity_boxes_always()) && !doc.is_selected(e.id))
 				{
 					add_box(entity_boxes, e.mins, e.maxs, editor::to_d3d_color(e.color));
 				}
@@ -678,6 +690,7 @@ namespace ggui
 
 		draw(entity_boxes);
 		draw(link_lines);
+		editor::render_modes::draw_overlay(ctx);
 
 		if (show_outline)
 		{
@@ -1268,242 +1281,6 @@ namespace ggui
 		ImGui::End();
 	}
 
-	// ---- Materials -------------------------------------------------------------------------------------------
-
-	void viewport_state::draw_materials_window()
-	{
-		auto& st = ui::get();
-		if (!st.show_materials)
-		{
-			return;
-		}
-
-		auto& s = editor::get_scene();
-		auto& doc = s.doc;
-
-		ImGui::SetNextWindowSize(ImVec2(560.0f, 600.0f), ImGuiCond_FirstUseEver);
-
-		if (!ImGui::Begin("Materials##window", &st.show_materials, ImGuiWindowFlags_NoCollapse))
-		{
-			ImGui::End();
-			return;
-		}
-
-		if (!s.renderer.loaded())
-		{
-			ImGui::PushTextWrapPos(0.0f);
-			ImGui::TextDisabled("Open a map first: the materials of its zones and of the shared zones are listed here.");
-			ImGui::PopTextWrapPos();
-			ImGui::End();
-			return;
-		}
-
-		const auto& names = s.renderer.material_names();
-
-		static const char* groups[] = { "World ( wc/ )", "Models ( mc/ )", "Everything" };
-		ImGui::SetNextItemWidth(150.0f);
-		ImGui::Combo("##material_group", &material_group, groups, 3);
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(-1.0f);
-		ImGui::InputTextWithHint("##material_filter", "filter", &material_filter);
-
-		static std::vector<int> filtered;
-		static std::string filtered_for = "\x01";
-		static int filtered_group = -1;
-		static std::size_t filtered_count = 0;
-		static const void* filtered_list = nullptr;
-
-		if (filtered_for != material_filter || filtered_group != material_group || filtered_count != names.size() || filtered_list != names.data())
-		{
-			filtered_for = material_filter;
-			filtered_group = material_group;
-			filtered_count = names.size();
-			filtered_list = names.data();
-			filtered.clear();
-
-			const auto needle = codol::script::to_lower(material_filter);
-			const char* prefix = material_group == 0 ? "wc/" : material_group == 1 ? "mc/" : "";
-
-			for (std::size_t i = 0; i < names.size(); i++)
-			{
-				if (names[i].rfind(prefix, 0) == 0 && (needle.empty() || names[i].find(needle) != std::string::npos))
-				{
-					filtered.push_back(static_cast<int>(i));
-				}
-			}
-		}
-
-		// the material of new brushes is the document's default material
-		const std::string current(doc.default_material());
-		const bool can_apply = !doc.selection().empty() || !doc.selected_faces().empty();
-
-		ImGui::TextDisabled("%d materials   new brushes:", static_cast<int>(filtered.size()));
-		ImGui::SameLine();
-		ImGui::TextUnformatted(current.c_str());
-
-		if (!can_apply)
-		{
-			ImGui::BeginDisabled();
-		}
-
-		if (ImGui::Button("Apply to the selection"))
-		{
-			ui::report(doc.set_material(current), "Set material");
-		}
-
-		if (!can_apply)
-		{
-			ImGui::EndDisabled();
-		}
-
-		ImGui::SameLine();
-		ImGui::Checkbox("Surface inspector", &st.show_surface);
-		ImGui::SameLine();
-		ImGui::TextDisabled("( ? )");
-
-		if (ImGui::IsItemHovered())
-		{
-			ImGui::SetTooltip("Click: the material of new brushes. Double click: also apply it to the selection.\nRight click: the Preview window ( its picture, a cube drawn with it ).\n"
-				"W: a world material ( its technique set reads lightmaps: made for brushes and terrain ).");
-		}
-
-		// materials of the map's own project ( assets.hpp ); a row of their own: the window is often narrow
-		if (ImGui::Button("New material .."))
-		{
-			editor::assets::open_material_dialog();
-		}
-
-		if (ImGui::IsItemHovered())
-		{
-			ImGui::SetTooltip("A material of your own from a colour map ( + normal / specular map ): it is built into the project's zone and listed here.\nImage files can also be dropped on the window.");
-		}
-
-		ImGui::SameLine();
-		if (ImGui::Button("GDT .."))
-		{
-			editor::assets::open_gdt_dialog();
-		}
-
-		if (ImGui::IsItemHovered())
-		{
-			ImGui::SetTooltip("Materials of a CoD4 .gdt: list its material entries and convert the ones you pick.");
-		}
-
-		ImGui::SameLine();
-		if (ImGui::Button("Assets"))
-		{
-			st.show_assets = true;
-			ImGui::SetWindowFocus("Assets##window");
-		}
-
-		if (ImGui::BeginChild("##material_grid", ImVec2(0.0f, 0.0f), true))
-		{
-			constexpr float cell = 104.0f, image = 96.0f;
-			const int columns = std::max(1, static_cast<int>(ImGui::GetContentRegionAvail().x / cell));
-			const int rows = (static_cast<int>(filtered.size()) + columns - 1) / columns;
-
-			ImGuiListClipper clipper;
-			clipper.Begin(rows, cell + ImGui::GetTextLineHeightWithSpacing());
-
-			while (clipper.Step())
-			{
-				for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
-				{
-					for (int col = 0; col < columns; col++)
-					{
-						const int index = row * columns + col;
-						if (index >= static_cast<int>(filtered.size()))
-						{
-							break;
-						}
-
-						const auto& name = names[static_cast<std::size_t>(filtered[static_cast<std::size_t>(index)])];
-
-						if (col > 0)
-						{
-							ImGui::SameLine(static_cast<float>(col) * cell);
-						}
-
-						ImGui::PushID(index);
-						ImGui::BeginGroup();
-
-						const ImVec2 pos = ImGui::GetCursorScreenPos();
-						const bool chosen = name == current;
-
-						if (auto* thumb = s.renderer.material_thumbnail(name, 96))
-						{
-							ImGui::Image(thumb, ImVec2(image, image), ImVec2(0, 0), ImVec2(1, 1), ImVec4(1, 1, 1, 1),
-								chosen ? ImVec4(1.0f, 0.72f, 0.25f, 1.0f) : ImVec4(0.25f, 0.26f, 0.28f, 1.0f));
-						}
-						else
-						{
-							ImGui::Dummy(ImVec2(image, image));
-							ImGui::GetWindowDrawList()->AddRect(pos, ImVec2(pos.x + image, pos.y + image), chosen ? IM_COL32(255, 184, 64, 255) : IM_COL32(70, 72, 76, 255));
-						}
-
-						if (ImGui::IsItemClicked())
-						{
-							doc.set_default_material(name);
-
-							// the Preview window follows while it is open
-							if (st.show_preview)
-							{
-								editor::preview::show_material(name);
-							}
-						}
-
-						if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
-						{
-							editor::preview::show_material(name);
-						}
-
-						if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-						{
-							doc.set_default_material(name);
-							ui::report(doc.set_material(name), "Set material");
-						}
-
-						// only for what is on screen: the details read the image header the first time
-						view::material_info info;
-						const bool has_info = s.renderer.material_details(name, info);
-
-						if (has_info && info.world_material)
-						{
-							ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(pos.x + 2.0f, pos.y + 2.0f), ImVec2(pos.x + 20.0f, pos.y + 20.0f), IM_COL32(0, 0, 0, 170), 2.0f);
-							ImGui::GetWindowDrawList()->AddText(ImVec2(pos.x + 5.0f, pos.y + 1.0f), IM_COL32(120, 230, 150, 255), "W");
-						}
-
-						if (ImGui::IsItemHovered())
-						{
-							if (has_info)
-							{
-								ImGui::SetTooltip("%s\n%s\n%d x %d\n%s%s", name.c_str(), info.technique_set.c_str(), info.width, info.height, info.zone.c_str(),
-									info.world_material ? "\nworld material" : "");
-							}
-							else
-							{
-								ImGui::SetTooltip("%s", name.c_str());
-							}
-						}
-
-						// the part after the last '/' fits under the image
-						const auto slash = name.find_last_of('/');
-						const char* label = name.c_str() + (slash == std::string::npos ? 0 : slash + 1);
-						ImGui::PushClipRect(pos, ImVec2(pos.x + image - 2.0f, pos.y + cell + ImGui::GetTextLineHeightWithSpacing()), true);
-						ImGui::TextUnformatted(label);
-						ImGui::PopClipRect();
-
-						ImGui::EndGroup();
-						ImGui::PopID();
-					}
-				}
-			}
-		}
-
-		ImGui::EndChild();
-		ImGui::End();
-	}
-
 	// ---- the view --------------------------------------------------------------------------------------------
 
 	bool codol_viewport_dialog::gui()
@@ -1519,7 +1296,7 @@ namespace ggui
 		{
 			m->draw_selection_window();
 			m->draw_models_window();
-			m->draw_materials_window();
+			editor::textures::draw_materials_window(m->material_filter, m->material_group);
 		};
 
 		ImGui::SetNextWindowSizeConstraints(ImVec2(480.0f, 320.0f), ImVec2(FLT_MAX, FLT_MAX));
@@ -1713,6 +1490,7 @@ namespace ggui
 		m->view_height = height;
 
 		// ---- camera requests
+		editor::prefs::sync_camera(m->fov, m->fly_speed, m->wire_distance);
 		cam.fov_x = m->fov;
 
 		if (m->next_spawn)
@@ -1808,7 +1586,21 @@ namespace ggui
 		frame.clear_color = 0xFF202020;
 		frame.overlay = [this](const view::overlay_context& ctx) { m->draw_overlay(ctx); };
 
+		// the render modes of the Renderer menu ( they own wireframe, sun shadows and the outline of the selection )
+		{
+			auto& modes = editor::render_modes::get();
+			static bool seen_wire = m->wireframe, seen_shadows = m->sun_shadows, seen_outline = m->show_outline;
+			if (m->wireframe != seen_wire) { modes.wireframe = m->wireframe; }
+			if (m->sun_shadows != seen_shadows) { modes.sun_shadows = m->sun_shadows; }
+			if (m->show_outline != seen_outline) { modes.outline_selected = m->show_outline; }
+			seen_wire = m->wireframe = modes.wireframe;
+			seen_shadows = m->sun_shadows = modes.sun_shadows;
+			seen_outline = m->show_outline = modes.outline_selected;
+			editor::render_modes::apply(frame);
+		}
+
 		IDirect3DTexture9* texture = s.renderer.render(cam, width, height, frame);
+		texture = editor::render_modes::post_process(texture, width, height);
 		const ImVec2 image_pos = ImGui::GetCursorScreenPos();
 		auto* dl = ImGui::GetWindowDrawList();
 
@@ -1833,8 +1625,12 @@ namespace ggui
 		}
 
 		dl->PushClipRect(image_pos, ImVec2(image_pos.x + static_cast<float>(width), image_pos.y + static_cast<float>(height)), true);
+		editor::fx::draw_in_view(dl, image_pos, width, height);
 		m->draw_labels(dl, image_pos, width, height);
 		dl->PopClipRect();
+
+		// a tool that paints takes the left button before the view does ( tools.cpp )
+		editor::map_tools::viewport_input(image_pos, width, height);
 
 		// ---- input area
 		// ImGuizmo only takes a click while no item is hovered or active. So while the mouse is on the gizmo the
@@ -1911,7 +1707,7 @@ namespace ggui
 			else if (rmb && !m->right_press_valid)
 			{
 				cam.yaw -= dx * 0.15f;
-				cam.pitch = std::clamp(cam.pitch + dy * 0.15f, -89.0f, 89.0f);
+				cam.pitch = std::clamp(cam.pitch + dy * 0.15f * editor::prefs::look_sign_y(), -89.0f, 89.0f);
 
 				const float step = m->fly_speed * boost * io.DeltaTime;
 
@@ -1943,16 +1739,7 @@ namespace ggui
 					move(axes.forward, io.MouseWheel * m->fly_speed * boost * 0.25f);
 				}
 
-				// keys of this view; the editing shortcuts are global ( ui::process_shortcuts )
-				if (!io.WantTextInput && !io.KeyCtrl)
-				{
-					if (ImGui::IsKeyPressed(ImGuiKey_N, false)) { m->next_spawn = true; }
-					if (ImGui::IsKeyPressed(ImGuiKey_Home, false)) { m->overview = true; }
-					if (ImGui::IsKeyPressed(ImGuiKey_F, false)) { m->focus = true; }
-					if (ImGui::IsKeyPressed(ImGuiKey_W, false)) { st.gizmo = ui::gizmo_tool::move; }
-					if (ImGui::IsKeyPressed(ImGuiKey_E, false)) { st.gizmo = ui::gizmo_tool::rotate; }
-					if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { st.gizmo = ui::gizmo_tool::scale; }
-				}
+				// the keys of this view ( N, Home, F, W E R ) are actions: hotkeys.cpp, camera.* and gizmo.*
 			}
 
 			// a click ( press and release without dragging ) selects

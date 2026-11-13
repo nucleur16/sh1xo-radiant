@@ -6,6 +6,7 @@
 
 #include "host.hpp"
 #include "ui.hpp"
+#include "ext.hpp"
 
 // The 2D views: the classic orthographic XY / XZ / YZ grid view of Radiant, drawn with ImGui draw lists from
 // the line caches of the scene. Mouse handling is split in press / drag / release on world coordinates so that
@@ -589,7 +590,9 @@ namespace editor::ui
 			}
 
 			const double major = step * 8.0;
-			const ImU32 minor_color = IM_COL32(46, 48, 52, 255), major_color = IM_COL32(68, 71, 77, 255), axis_color = IM_COL32(112, 116, 128, 255);
+			const ImU32 minor_color = colors::get(colors::grid_minor), major_color = colors::get(colors::grid_major), axis_color = colors::get(colors::grid_axis);
+						// no coordinates: a colour that draws nothing
+						const ImU32 text_color = render_modes::get().grid_coordinates ? colors::get(colors::grid_text) : 0;
 			auto* font = ImGui::GetIO().Fonts->Fonts.Size > 2 ? ImGui::GetIO().Fonts->Fonts[2] : ImGui::GetFont();
 			char text[32];
 
@@ -609,7 +612,7 @@ namespace editor::ui
 					if (is_major)
 					{
 						std::snprintf(text, sizeof(text), "%g", x);
-						dl->AddText(font, font->FontSize, ImVec2(px + 3.0f, canvas_pos.y + 2.0f), IM_COL32(150, 154, 162, 255), text);
+						dl->AddText(font, font->FontSize, ImVec2(px + 3.0f, canvas_pos.y + 2.0f), text_color, text);
 					}
 				}
 
@@ -627,7 +630,7 @@ namespace editor::ui
 					if (is_major)
 					{
 						std::snprintf(text, sizeof(text), "%g", y);
-						dl->AddText(font, font->FontSize, ImVec2(canvas_pos.x + 3.0f, py + 1.0f), IM_COL32(150, 154, 162, 255), text);
+						dl->AddText(font, font->FontSize, ImVec2(canvas_pos.x + 3.0f, py + 1.0f), text_color, text);
 					}
 				}
 			}
@@ -641,7 +644,7 @@ namespace editor::ui
 			to_world(canvas_pos, wh0, wv1);
 			to_world(ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y), wh1, wv0);
 
-			const ImU32 selected_color = IM_COL32(255, 58, 32, 255);
+			const ImU32 selected_color = colors::get(colors::selection);
 
 			const auto& doc = get_scene().doc;
 
@@ -744,7 +747,7 @@ namespace editor::ui
 						dl->AddLine(c, ImVec2(c.x + std::cos(yaw) * reach, c.y - std::sin(yaw) * reach), color);
 					}
 
-					if ((extent >= 28.0f || is_selection) && label_budget > 0)
+					if ((extent >= 28.0f || is_selection) && label_budget > 0 && render_modes::get().grid_names)
 					{
 						label_budget--;
 						dl->AddText(font, font->FontSize, ImVec2(a.x, a.y - font->FontSize - 1.0f), color, e.classname.c_str());
@@ -948,13 +951,26 @@ namespace editor::ui
 			const ImVec2 corner(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y);
 
 			dl->PushClipRect(canvas_pos, corner, true);
-			dl->AddRectFilled(canvas_pos, corner, IM_COL32(26, 27, 30, 255));
+			dl->AddRectFilled(canvas_pos, corner, colors::get(colors::grid_background));
 
 			// thousands of one pixel lines: no anti aliasing ( four vertices per line instead of many more )
 			const ImDrawListFlags old_flags = dl->Flags;
 			dl->Flags &= ~(ImDrawListFlags_AntiAliasedLines | ImDrawListFlags_AntiAliasedLinesUseTex | ImDrawListFlags_AntiAliasedFill);
 
 			draw_grid(dl);
+
+			// blocks, their coordinates, the cross under the mouse ( Renderer > Grid Window )
+			{
+				render_modes::grid_context extras;
+				extras.dl = dl;
+				extras.pos = canvas_pos;
+				extras.size = canvas_size;
+				extras.axis = axis;
+				to_world(ImVec2(canvas_pos.x + canvas_size.x * 0.5f, canvas_pos.y + canvas_size.y * 0.5f), extras.center[0], extras.center[1]);
+				extras.scale = zoom;
+				extras.hovered = hovered;
+				render_modes::draw_grid_extras(extras);
+			}
 
 			int label_budget = 220;
 			draw_cache(dl, s.statics, false, label_budget);
@@ -964,15 +980,15 @@ namespace editor::ui
 				for (const auto& c : s.connections)
 				{
 					const ImVec2 a = to_screen((&c.from.x)[h()], (&c.from.x)[v()]), b = to_screen((&c.to.x)[h()], (&c.to.x)[v()]);
-					dl->AddLine(a, b, IM_COL32(255, 64, 255, 255));
+					dl->AddLine(a, b, colors::get(colors::connection));
 
 					// arrow head at the target
 					const float dx = b.x - a.x, dy = b.y - a.y, len = std::sqrt(dx * dx + dy * dy);
 					if (len > 24.0f)
 					{
 						const float ux = dx / len, uy = dy / len;
-						dl->AddLine(b, ImVec2(b.x - ux * 9.0f - uy * 4.0f, b.y - uy * 9.0f + ux * 4.0f), IM_COL32(255, 64, 255, 255));
-						dl->AddLine(b, ImVec2(b.x - ux * 9.0f + uy * 4.0f, b.y - uy * 9.0f - ux * 4.0f), IM_COL32(255, 64, 255, 255));
+						dl->AddLine(b, ImVec2(b.x - ux * 9.0f - uy * 4.0f, b.y - uy * 9.0f + ux * 4.0f), colors::get(colors::connection));
+						dl->AddLine(b, ImVec2(b.x - ux * 9.0f + uy * 4.0f, b.y - uy * 9.0f - ux * 4.0f), colors::get(colors::connection));
 					}
 				}
 			}
@@ -999,7 +1015,7 @@ namespace editor::ui
 					fy = -1.0f;
 				}
 
-				const ImU32 color = act == action::camera ? IM_COL32(255, 255, 255, 255) : IM_COL32(90, 170, 255, 255);
+				const ImU32 color = act == action::camera ? IM_COL32(255, 255, 255, 255) : colors::get(colors::camera_icon);
 				const ImVec2 tip(c.x + fx * 22.0f, c.y + fy * 22.0f);
 				dl->AddQuadFilled(ImVec2(c.x - 7.0f, c.y), ImVec2(c.x, c.y - 7.0f), ImVec2(c.x + 7.0f, c.y), ImVec2(c.x, c.y + 7.0f), color);
 				dl->AddLine(c, tip, color, 2.0f);

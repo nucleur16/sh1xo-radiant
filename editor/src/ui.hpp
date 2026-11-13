@@ -191,4 +191,6 @@ namespace editor::ui
 	void pick_ray(const float3& origin, const float3& direction, bool toggle, bool face);
 	void viewport_click(float px, float py, bool toggle, bool face);
 	void set_material_filter(const std::string& text, int group);
+	// "next_spawn", "overview", "focus": the camera actions of the 3D view
+	void viewport_request(std::string_view what);
 }
