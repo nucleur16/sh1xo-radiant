@@ -385,6 +385,24 @@ namespace
 		CHECK(doc.auto_caulk(true) == 2);
 		CHECK(count_faces_with(doc, wall, "caulk") == 0);
 
+		// "the whole map" leaves brush entities alone: a door may move away from what it covers
+		document door;
+		door.create_box({ 0, 0, -16 }, { 256, 256, 0 }, "me_floor");
+		const object_id leaf = door.create_box({ 100, 100, 0 }, { 116, 164, 96 }, "me_door");
+		door.create_brush_entity("script_brushmodel");
+		CHECK(door.auto_caulk(false) == 0);
+		CHECK(count_faces_with(door, leaf, "caulk") == 0);
+		door.select(leaf);
+		CHECK(door.auto_caulk(true) == 1);
+
+		// noselect: "select all" leaves out what is not to be picked
+		select_filter no_brushes;
+		no_brushes.brushes = true;
+		door.set_select_filter(no_brushes);
+		door.select_all();
+		CHECK(door.selection().size() == 1 && door.is_selected(leaf));
+		door.set_select_filter({});
+
 		// a face covered by two brushes together
 		document two;
 		const object_id top = two.create_box({ 0, 0, 0 }, { 128, 64, 64 }, "me_wall");

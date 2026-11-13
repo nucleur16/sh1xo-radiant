@@ -335,6 +335,11 @@ namespace editor::ui
 		{
 			target = s.object_of(drawn.object);
 
+			if (target != edit::no_object && !doc.is_selectable(target))
+			{
+				return; // shown, but not to be picked ( Filter window: "don't select .." )
+			}
+
 			if (target == edit::no_object)
 			{
 				// a surface of the world: something to look at, nothing the document owns
@@ -678,6 +683,7 @@ namespace ggui
 
 		draw(entity_boxes);
 		draw(link_lines);
+		draw(ui::extra_view_lines(false));		// contents of prefabs, the region, the leak line
 
 		if (show_outline)
 		{

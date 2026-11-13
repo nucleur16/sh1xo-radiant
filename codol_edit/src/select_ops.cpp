@@ -1300,14 +1300,12 @@ namespace codol::edit
 		}
 		else
 		{
-			for (const object_id ent : d->order)
+			// the world only: a brush entity may be a door or a lift, and what it covers now can be seen later
+			for (const object_id id : world->children)
 			{
-				for (const object_id id : d->get_entity(ent)->children)
+				if (const brush* b = d->get_brush(id); b && !b->opaque)
 				{
-					if (const brush* b = d->get_brush(id); b && !b->opaque)
-					{
-						targets.push_back(id);
-					}
+					targets.push_back(id);
 				}
 			}
 		}

@@ -1025,7 +1025,7 @@ namespace codol::edit
 
 			if (e->children.empty())
 			{
-				if (ent != d->world() && d->is_visible(ent))
+				if (ent != d->world() && d->is_visible(ent) && !d->is_unselectable(ent))
 				{
 					ids.push_back(ent);
 				}
@@ -1035,7 +1035,7 @@ namespace codol::edit
 
 			for (const object_id child : e->children)
 			{
-				if (d->is_visible(child))
+				if (d->is_visible(child) && !d->is_unselectable(child))
 				{
 					ids.push_back(child);
 				}

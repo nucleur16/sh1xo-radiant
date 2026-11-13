@@ -950,7 +950,7 @@ namespace editor::ui
 			}
 		}
 
-		const auto map_file = s.map_file;
+		const auto map_file = build_source_file(s.map_file);
 		const std::string name = to_utf8(map_file.stem());
 		const auto out_dir = base_dir / "compiled";
 		std::filesystem::create_directories(out_dir / "cache", ec);
@@ -2067,6 +2067,7 @@ namespace editor::ui
 		// ---- the project's assets: asset_new_material, asset_import_model, asset_gdt, asset_build, asset_list ..
 		assets::register_commands();
 		preview::register_commands();
+		register_extra_commands();
 
 		command::register_command("help", [](args_t)
 		{

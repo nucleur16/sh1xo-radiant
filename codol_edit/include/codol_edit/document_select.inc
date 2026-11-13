@@ -40,7 +40,8 @@
 		// the plane points and textures they had.
 		bool csg_merge();
 		// Faces that no one can see - covered completely by other opaque world brushes - get `material`. Looked at:
-		// the selected brushes, or with `selected_only` false every brush of the map. `opaque`: says whether a
+		// the selected brushes, or with `selected_only` false every brush of the worldspawn ( a brush entity may
+		// move and show what it covers: its brushes are only caulked when they are selected ). `opaque`: says whether a
 		// material hides what is behind it ( default: every material that is no tool material, plus caulk and sky ).
 		// Returns the number of faces changed, -1 when there was nothing to look at.
 		int auto_caulk(bool selected_only, std::string_view material = "caulk",
