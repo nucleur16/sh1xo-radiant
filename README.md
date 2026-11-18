@@ -1,3 +1,22 @@
+<h2 align="center">sh1xo-radiant - fork of xoxor4d's iw3xo radiant // radiant for sh1 / Call of Duty Online 1.1.1.13</h1>
+
+<div align="center" markdown="1">
+
+This project aims to fix existing bugs, extend functionalities across the board and to replace   
+the dated MFC/Windows UI with a more modern and flexible UI powered by Dear ImGui.
+</div>
+
+
+<br>
+
+If you want to buy xoxor4d a coffee:
+
+[![ko-fi](https://xoxor4d.github.io/assets/img/social/kofi.png)](https://ko-fi.com/xoxor4d)
+
+</div>
+
+<br>
+
 > **This is the `codol-1.1.1.13` branch: iw3xo-radiant for Call of Duty Online 1.1.1.13.**
 > It adds a CoDOL menu with a script workbench (GSC, animtrees, `playeranim.script`, scripted-animation tables,
 > animation validation), map entity import / export for shipped maps, hot reload through rcon and a docked game window.
@@ -55,27 +74,6 @@ The server starts when a match starts. Its files are:
 way, and neither has the tools' rcon reload against the in-process server. The commands and packet format are the
 same, so both are expected to work.
 
-
-
-
-<h2 align="center">sh1xo-radiant - fork of xoxor4d's iw3xo radiant // radiant for sh1 / Call of Duty Online 1.1.1.13</h1>
-
-<div align="center" markdown="1">
-
-This project aims to fix existing bugs, extend functionalities across the board and to replace   
-the dated MFC/Windows UI with a more modern and flexible UI powered by Dear ImGui.
-</div>
-
-
-<br>
-
-If you want to buy xoxor4d a coffee:
-
-[![ko-fi](https://xoxor4d.github.io/assets/img/social/kofi.png)](https://ko-fi.com/xoxor4d)
-
-</div>
-
-<br>
 
 ### Build / Compile
 
