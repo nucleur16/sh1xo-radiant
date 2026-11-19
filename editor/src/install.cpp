@@ -5,7 +5,9 @@
 #undef max
 
 #include "host.hpp"
+#include "codol/packed_scripts.hpp"
 #include "ui.hpp"
+#include "codol/path_picker.hpp"
 
 #include <codol_zone/zone_editor.hpp>
 #include <codol_zone/assets.hpp>
@@ -972,7 +974,11 @@ namespace editor::ui
 
 		const fs::path game = fs::u8path(request.game);
 		const fs::path zone_dir = !request.zone_dir.empty() ? fs::u8path(request.zone_dir) : request.game.empty() ? fs::path() : game / "usermaps" / name;
-		const fs::path script_dir = fs::u8path(request.script_dir);
+		// no script folder named: the game's ( <game>\main\sh1x_rawfiles, the overlay of sh1x_svr_scripts.iwd ), else the one of the settings
+		std::error_code dir_ec;
+		const fs::path script_dir = !request.script_dir.empty() ? fs::u8path(request.script_dir)
+			: !request.game.empty() && fs::is_directory(game / "main", dir_ec) ? game / "main" / "sh1x_rawfiles"
+			: codol::packed_scripts::script_root();
 
 		if (zone_dir.empty())
 		{
@@ -1290,9 +1296,9 @@ namespace editor::ui
 			request.game = components::codol_game::install_path();
 		}
 
-		if (scripts_to.empty() && dvars::codol_script_root && dvars::codol_script_root->current.string)
+		if (scripts_to.empty())
 		{
-			request.script_dir = dvars::codol_script_root->current.string;
+			request.script_dir = to_utf8(codol::packed_scripts::script_root());
 		}
 
 		install_map(request);
@@ -1319,7 +1325,7 @@ namespace editor::ui
 		if (!w.open)
 		{
 			w.game = components::codol_game::install_path();
-			w.scripts = dvars::codol_script_root && dvars::codol_script_root->current.string ? dvars::codol_script_root->current.string : "";
+			w.scripts = to_utf8(codol::packed_scripts::script_root());
 			w.list = false;
 		}
 
@@ -1351,14 +1357,12 @@ namespace editor::ui
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextUnformatted("Game folder");
 			ImGui::SameLine(130.0f);
-			ImGui::SetNextItemWidth(540.0f);
-			ImGui::InputTextWithHint("##game", "the Call of Duty Online 1.1.1.13 folder", &w.game);
+			codol::ui::path_input("##game", w.game, codol::ui::path_kind::folder, nullptr, "the Call of Duty Online 1.1.1.13 folder", 540.0f);
 
 			ImGui::AlignTextToFramePadding();
 			ImGui::TextUnformatted("Script folder");
 			ImGui::SameLine(130.0f);
-			ImGui::SetNextItemWidth(540.0f);
-			ImGui::InputTextWithHint("##scripts", "the server's script folder ( bin\\home\\codol_rawfiles ); empty: no scripts", &w.scripts);
+			codol::ui::path_input("##scripts", w.scripts, codol::ui::path_kind::folder, nullptr, "the server's script folder ( empty: <game>\\main\\sh1x_rawfiles )", 540.0f);
 
 			ImGui::Checkbox("Add to the create-room list", &w.list);
 
